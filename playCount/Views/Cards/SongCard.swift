@@ -12,18 +12,19 @@ struct SongCard: View {
     let song: Song
     var body: some View {
         HStack {
-            ArtworkView(song: song)
+            ArtworkView(artwork: song.artwork)
                 .padding(.trailing, 15)
             VStack(alignment: .leading) {
                 Text(song.title)
-                    .font(.subheadline)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
                 Text(song.artist)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Text("\(song.playCount) Plays")
-                .font(.footnote)
+                .font(.footnote.weight(.light))
                 .foregroundStyle(.secondary)
         }
         .padding()

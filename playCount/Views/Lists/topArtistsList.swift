@@ -3,7 +3,7 @@ import MediaPlayer
 
 struct topArtistsList: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
-    @State private var searchText = ""
+    @Binding var searchText: String
     var filteredArtists: [MPMediaItemCollection] {
         if searchText.isEmpty {
             return topMusic.topArtists
@@ -15,21 +15,20 @@ struct topArtistsList: View {
         }
     }
     var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                LazyVStack {
-                    ForEach(filteredArtists, id: \.persistentID) { collection in
+        ScrollView(showsIndicators: false) {
+            LazyVStack {
+                ForEach(filteredArtists, id: \.persistentID) { collection in
+                    NavigationLink(destination: ArtistInfoView(artist: Artist(collection: collection))) {
                         ArtistCard(artist: Artist(collection: collection))
                     }
+                    .buttonStyle(.plain)
                 }
             }
-            .navigationTitle("Top Artists")
-            .searchable(text: $searchText, prompt: "Search Artists")
         }
     }
 }
 
 #Preview {
-    topArtistsList()
+    topArtistsList(searchText: .constant(""))
         .environmentObject(MediaPlayerManager())
 }

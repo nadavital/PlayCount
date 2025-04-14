@@ -1,4 +1,3 @@
-// ...existing code...
 import SwiftUI
 import MediaPlayer
 
@@ -20,14 +19,15 @@ struct AlbumCard: View {
             }
             VStack(alignment: .leading) {
                 Text(album.title)
-                    .font(.subheadline)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
                 Text(album.artist)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Text("\(album.playCount) Plays")
-                .font(.footnote)
+                .font(.footnote.weight(.light))
                 .foregroundStyle(.secondary)
         }
         .padding()
@@ -38,4 +38,3 @@ struct AlbumCard: View {
 #Preview {
     AlbumCard(album: Album.preview)
 }
-// ...existing code...

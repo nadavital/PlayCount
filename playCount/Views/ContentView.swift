@@ -11,15 +11,15 @@ struct ContentView: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
     var body: some View {
         TabView {
-            topSongsList()
+            TopSongsView()
                 .tabItem {
                     Label("Songs", systemImage: "music.note")
                 }
-            topAlbumsList()
+            TopAlbumsView()
                 .tabItem {
                     Label("Albums", systemImage: "rectangle.stack")
                 }
-            topArtistsList()
+            TopArtistsView()
                 .tabItem {
                     Label("Artists", systemImage: "person.2")
                 }
