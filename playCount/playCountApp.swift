@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct playCountApp: App {
+    @StateObject private var topMusic = MediaPlayerManager()
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(topMusic)
         }
     }
 }
