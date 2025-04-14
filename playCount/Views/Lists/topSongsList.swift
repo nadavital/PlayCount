@@ -11,13 +11,16 @@ import MediaPlayer
 struct topSongsList: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
     @Binding var searchText: String
+    @State private var displayLimit = 50
+
     var filteredSongs: [MPMediaItem] {
-        if searchText.isEmpty {
-            return topMusic.topSongs
-        } else {
-            return topMusic.topSongs.filter { $0.title?.localizedCaseInsensitiveContains(searchText) == true || $0.artist?.localizedCaseInsensitiveContains(searchText) == true }
+        let baseList = searchText.isEmpty ? topMusic.topSongs : topMusic.topSongs.filter {
+            $0.title?.localizedCaseInsensitiveContains(searchText) == true ||
+            $0.artist?.localizedCaseInsensitiveContains(searchText) == true
         }
+        return Array(baseList.prefix(displayLimit))
     }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
@@ -26,6 +29,14 @@ struct topSongsList: View {
                         SongCard(song: Song(mediaItem: song))
                     }
                     .buttonStyle(.plain)
+                }
+                if filteredSongs.count == displayLimit && filteredSongs.count < topMusic.topSongs.count {
+                    Button("Load More") {
+                        displayLimit += 50
+                    }
+                    .padding()
+                    .font(.subheadline)
+                    .foregroundColor(.accentColor)
                 }
             }
         }

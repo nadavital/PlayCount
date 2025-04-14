@@ -4,17 +4,17 @@ import MediaPlayer
 struct topAlbumsList: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
     @Binding var searchText: String
+    @State private var displayLimit = 50
+
     var filteredAlbums: [MPMediaItemCollection] {
-        if searchText.isEmpty {
-            return topMusic.topAlbums
-        } else {
-            return topMusic.topAlbums.filter { collection in
-                let albumTitle = collection.representativeItem?.albumTitle ?? ""
-                let artist = collection.representativeItem?.artist ?? ""
-                return albumTitle.localizedCaseInsensitiveContains(searchText) || artist.localizedCaseInsensitiveContains(searchText)
-            }
+        let baseList = searchText.isEmpty ? topMusic.topAlbums : topMusic.topAlbums.filter {
+            let albumTitle = $0.representativeItem?.albumTitle ?? ""
+            let artist = $0.representativeItem?.artist ?? ""
+            return albumTitle.localizedCaseInsensitiveContains(searchText) || artist.localizedCaseInsensitiveContains(searchText)
         }
+        return Array(baseList.prefix(displayLimit))
     }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
@@ -23,6 +23,14 @@ struct topAlbumsList: View {
                         AlbumCard(album: Album(collection: collection))
                     }
                     .buttonStyle(.plain)
+                }
+                if filteredAlbums.count == displayLimit && filteredAlbums.count < topMusic.topAlbums.count {
+                    Button("Load More") {
+                        displayLimit += 50
+                    }
+                    .padding()
+                    .font(.subheadline)
+                    .foregroundColor(.accentColor)
                 }
             }
         }

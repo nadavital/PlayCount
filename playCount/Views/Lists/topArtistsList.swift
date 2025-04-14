@@ -4,16 +4,16 @@ import MediaPlayer
 struct topArtistsList: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
     @Binding var searchText: String
+    @State private var displayLimit = 50
+
     var filteredArtists: [MPMediaItemCollection] {
-        if searchText.isEmpty {
-            return topMusic.topArtists
-        } else {
-            return topMusic.topArtists.filter { collection in
-                let artist = collection.representativeItem?.artist ?? ""
-                return artist.localizedCaseInsensitiveContains(searchText)
-            }
+        let baseList = searchText.isEmpty ? topMusic.topArtists : topMusic.topArtists.filter {
+            let artist = $0.representativeItem?.artist ?? ""
+            return artist.localizedCaseInsensitiveContains(searchText)
         }
+        return Array(baseList.prefix(displayLimit))
     }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
@@ -22,6 +22,14 @@ struct topArtistsList: View {
                         ArtistCard(artist: Artist(collection: collection))
                     }
                     .buttonStyle(.plain)
+                }
+                if filteredArtists.count == displayLimit && filteredArtists.count < topMusic.topArtists.count {
+                    Button("Load More") {
+                        displayLimit += 50
+                    }
+                    .padding()
+                    .font(.subheadline)
+                    .foregroundColor(.accentColor)
                 }
             }
         }
