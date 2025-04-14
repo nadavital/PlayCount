@@ -40,12 +40,38 @@ struct ArtistInfoView: View {
                     size: 280,
                     cornerRadius: 32
                 )
-                // Artist Details Card
+                // Artist Details Card with Play Button
                 VStack(spacing: 12) {
-                    Text(artist.name)
-                        .font(.largeTitle).bold()
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 8)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(artist.name)
+                                .font(.largeTitle).bold()
+                                .multilineTextAlignment(.leading)
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    Button(action: {
+                        let artistSongs = artist.items
+                        let isCurrentArtist = topMusic.nowPlayingItem?.artist == artist.name
+                        if isCurrentArtist && topMusic.playbackState == .playing {
+                            topMusic.pause()
+                        } else {
+                            topMusic.play(collection: MPMediaItemCollection(items: artistSongs))
+                        }
+                    }) {
+                        VStack(spacing: 4) {
+                            let isCurrentArtist = topMusic.nowPlayingItem?.artist == artist.name
+                            Image(systemName: (isCurrentArtist && topMusic.playbackState == .playing) ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 44))
+                            Text((isCurrentArtist && topMusic.playbackState == .playing) ? "Pause" : "Play")
+                                .font(.headline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                     Label("\(artist.playCount) plays", systemImage: "play.circle.fill")
                         .font(.title3)
                         .foregroundStyle(.secondary)

@@ -49,26 +49,50 @@ struct AlbumInfoView: View {
                     size: 280,
                     cornerRadius: 32
                 )
-                // Album Details Card
+                // Album Details Card with Play Button
                 VStack(spacing: 12) {
-                    Text(album.title)
-                        .font(.largeTitle).bold()
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 8)
-                    // Artist NavigationLink
-                    if let artist = artistObject {
-                        NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(album.title)
+                            .font(.largeTitle).bold()
+                            .multilineTextAlignment(.leading)
+                        // Artist NavigationLink
+                        if let artist = artistObject {
+                            NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                                Text(album.artist)
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(Color.secondary)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             Text(album.artist)
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(Color.secondary)
-                                .contentShape(Rectangle())
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        Text(album.artist)
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
                     }
+                    .padding(.top, 8)
+                    Button(action: {
+                        if let first = album.items.first {
+                            let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                            if isCurrentAlbum && topMusic.playbackState == .playing {
+                                topMusic.pause()
+                            } else {
+                                topMusic.play(collection: MPMediaItemCollection(items: album.items))
+                            }
+                        }
+                    }) {
+                        VStack(spacing: 4) {
+                            let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                            Image(systemName: (isCurrentAlbum && topMusic.playbackState == .playing) ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 44))
+                            Text((isCurrentAlbum && topMusic.playbackState == .playing) ? "Pause" : "Play")
+                                .font(.headline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                     HStack(spacing: 20) {
                         Label { Text("\(album.playCount)") } icon: { Image(systemName: "play.circle.fill") }
                         Label { Text(genre) } icon: { Image(systemName: "guitars") }

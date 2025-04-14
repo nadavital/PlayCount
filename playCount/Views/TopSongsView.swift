@@ -1,22 +1,34 @@
 import SwiftUI
 
 struct TopSongsView: View {
-    @State private var searchText = ""
+    @EnvironmentObject private var topMusic: MediaPlayerManager
+    @Binding var searchText: String
     var body: some View {
-        NavigationStack {
-            VStack {
+        VStack {
+            if topMusic.topSongs.isEmpty && topMusic.errorMessage == nil {
+                Spacer()
+                ProgressView("Loading songs...")
+                    .progressViewStyle(CircularProgressViewStyle())
+                Spacer()
+            } else if let error = topMusic.errorMessage {
+                Spacer()
+                Text(error)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                Spacer()
+            } else {
                 ScrollView {
                     topSongsList(searchText: $searchText)
                         .padding(.horizontal)
                 }
-                .navigationTitle("Top Songs")
-                .searchable(text: $searchText, prompt: "Search Songs or Artists")
             }
         }
     }
 }
 
 #Preview {
-    TopSongsView()
-        .environmentObject(MediaPlayerManager())
+    NavigationStack {
+        TopSongsView(searchText: .constant(""))
+            .environmentObject(MediaPlayerManager())
+    }
 }
