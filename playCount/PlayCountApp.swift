@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct playCountApp: App {
+struct PlayCountApp: App {
     @StateObject private var topMusic = MediaPlayerManager()
     var body: some Scene {
         WindowGroup {

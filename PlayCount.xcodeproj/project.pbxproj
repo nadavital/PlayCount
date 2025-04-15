@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		50FF36952DA594AB00E9F5CD /* playCount.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = playCount.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		50FF36952DA594AB00E9F5CD /* PlayCount.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlayCount.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,7 +40,7 @@
 		50FF36962DA594AB00E9F5CD /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				50FF36952DA594AB00E9F5CD /* playCount.app */,
+				50FF36952DA594AB00E9F5CD /* PlayCount.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		50FF36942DA594AB00E9F5CD /* playCount */ = {
+		50FF36942DA594AB00E9F5CD /* PlayCount */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 50FF36A02DA594AD00E9F5CD /* Build configuration list for PBXNativeTarget "playCount" */;
+			buildConfigurationList = 50FF36A02DA594AD00E9F5CD /* Build configuration list for PBXNativeTarget "PlayCount" */;
 			buildPhases = (
 				50FF36912DA594AB00E9F5CD /* Sources */,
 				50FF36922DA594AB00E9F5CD /* Frameworks */,
@@ -63,11 +63,11 @@
 			fileSystemSynchronizedGroups = (
 				50FF36972DA594AB00E9F5CD /* playCount */,
 			);
-			name = playCount;
+			name = PlayCount;
 			packageProductDependencies = (
 			);
 			productName = playCount;
-			productReference = 50FF36952DA594AB00E9F5CD /* playCount.app */;
+			productReference = 50FF36952DA594AB00E9F5CD /* PlayCount.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 50FF36902DA594AB00E9F5CD /* Build configuration list for PBXProject "playCount" */;
+			buildConfigurationList = 50FF36902DA594AB00E9F5CD /* Build configuration list for PBXProject "PlayCount" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				50FF36942DA594AB00E9F5CD /* playCount */,
+				50FF36942DA594AB00E9F5CD /* PlayCount */,
 			);
 		};
 /* End PBXProject section */
@@ -309,7 +309,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		50FF36902DA594AB00E9F5CD /* Build configuration list for PBXProject "playCount" */ = {
+		50FF36902DA594AB00E9F5CD /* Build configuration list for PBXProject "PlayCount" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				50FF369E2DA594AD00E9F5CD /* Debug */,
@@ -318,7 +318,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		50FF36A02DA594AD00E9F5CD /* Build configuration list for PBXNativeTarget "playCount" */ = {
+		50FF36A02DA594AD00E9F5CD /* Build configuration list for PBXNativeTarget "PlayCount" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				50FF36A12DA594AD00E9F5CD /* Debug */,
