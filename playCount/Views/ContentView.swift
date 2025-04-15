@@ -11,7 +11,7 @@ struct ContentView: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
     @State private var selectedSection: Section = .songs
     @State private var searchText = ""
-    @State private var showSearchSheet = false
+    @State private var isSearching = false // New state for search mode
     @State private var headerCollapsed = false
     
     enum Section: String, CaseIterable, Identifiable {
@@ -106,35 +106,67 @@ struct ContentView: View {
                                     .contentShape(Rectangle())
                                 }
                                 Spacer()
-                                Button(action: { showSearchSheet = true }) {
-                                    Group {
-                                        if (headerCollapsed) {
-                                            Image(systemName: "magnifyingglass")
-                                                .font(.body)
-                                                .padding(12)
-                                        } else {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "magnifyingglass")
-                                                    .font(.body)
-                                                Text("Search")
-                                                    .font(.body.weight(.semibold))
+                                if isSearching {
+                                    HStack {
+                                        Image(systemName: "magnifyingglass")
+                                            .foregroundColor(.secondary)
+                                        TextField(searchPrompt, text: $searchText, onCommit: {})
+                                            .textFieldStyle(.plain)
+                                            .autocapitalization(.none)
+                                            .disableAutocorrection(true)
+                                            .frame(minWidth: 100)
+                                        Button(action: {
+                                            // Always clear search and exit search mode
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                searchText = ""
+                                                isSearching = false
                                             }
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 8)
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.secondary)
                                         }
                                     }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
                                     .background(Capsule().fill(Color(.systemGray5).opacity(0.7)))
-                                    .animation(.easeInOut(duration: 0.2), value: headerCollapsed)
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                                    .animation(.easeInOut(duration: 0.2), value: isSearching)
+                                } else {
+                                    Button(action: {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            isSearching = true
+                                        }
+                                    }) {
+                                        Group {
+                                            if (headerCollapsed) {
+                                                Image(systemName: "magnifyingglass")
+                                                    .font(.body)
+                                                    .padding(12)
+                                            } else {
+                                                HStack(spacing: 6) {
+                                                    Image(systemName: "magnifyingglass")
+                                                        .font(.body)
+                                                    Text("Search")
+                                                        .font(.body.weight(.semibold))
+                                                }
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 8)
+                                            }
+                                        }
+                                        .background(Capsule().fill(Color(.systemGray5).opacity(0.7)))
+                                        .animation(.easeInOut(duration: 0.2), value: headerCollapsed)
+                                    }
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                                    .animation(.easeInOut(duration: 0.2), value: isSearching)
                                 }
                             }
                             .padding(.horizontal)
-                            .padding(.top, headerCollapsed ? 2 : 18) // Removed safeTop from here
+                            .padding(.top, headerCollapsed ? 2 : 18)
                             .padding(.bottom, headerCollapsed ? 2 : 8)
                         }
                         .frame(height: headerHeight)
-                        // Removed .offset(y: safeTop)
                     }
-                    .frame(height: headerHeight + safeTop + 12) // Reduced extra height
+                    .frame(height: headerHeight + safeTop + 12)
                 }
                 .frame(height: headerHeight + 60)
                 .zIndex(1)
@@ -149,10 +181,6 @@ struct ContentView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.large)
-            // Search sheet
-            .sheet(isPresented: $showSearchSheet) {
-                SearchSheetView(searchText: $searchText, selectedSection: $selectedSection)
-            }
         }
         .background(Color(.systemBackground))
         .ignoresSafeArea(edges: Edge.Set.bottom)
@@ -164,23 +192,6 @@ struct ScrollOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
-    }
-}
-
-struct SearchSheetView: View {
-    @Binding var searchText: String
-    @Binding var selectedSection: ContentView.Section
-    var body: some View {
-        NavigationStack {
-            VStack {
-                TextField("Search...", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .padding()
-                Spacer()
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-        }
     }
 }
 
