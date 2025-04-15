@@ -61,32 +61,57 @@ struct SongInfoView: View {
                     size: 280,
                     cornerRadius: 32
                 )
-                // Song Details Card with Play Button
-                VStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
+                // Top Section: Title + Play Button, then Artist/Album, then Play Count
+                VStack(spacing: 8) {
+                    // Title and Play Button in HStack
+                    HStack(alignment: .center, spacing: 12) {
                         Text(song.title)
                             .font(.largeTitle).bold()
-                            .multilineTextAlignment(.leading)
-                        // Artist NavigationLink
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                        Button(action: {
+                            if let item = song.mediaItem {
+                                if topMusic.nowPlayingItem?.persistentID == item.persistentID && topMusic.playbackState == .playing {
+                                    topMusic.pause()
+                                } else {
+                                    topMusic.play(item: item)
+                                }
+                            }
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .frame(width: 48, height: 48)
+                                Image(systemName: (topMusic.nowPlayingItem?.persistentID == song.mediaItem?.persistentID && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(Color.black)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    // Artist and Album below
+                    VStack(spacing: 2) {
                         if let artist = artistObject {
                             NavigationLink(destination: ArtistInfoView(artist: artist)) {
                                 Text(song.artist)
                                     .font(.title3.weight(.semibold))
-                                    .foregroundStyle(Color.secondary)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         } else {
                             Text(song.artist)
                                 .font(.title3.weight(.semibold))
-                                .foregroundStyle(Color.secondary)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
-                        // Album NavigationLink
                         if let album = albumObject {
                             NavigationLink(destination: AlbumInfoView(album: album)) {
                                 Text(song.albumTitle)
                                     .font(.headline)
                                     .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -94,42 +119,31 @@ struct SongInfoView: View {
                             Text(song.albumTitle)
                                 .font(.headline)
                                 .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
                     }
-                    .padding(.top, 8)
-                    Button(action: {
-                        if let item = song.mediaItem {
-                            if topMusic.nowPlayingItem?.persistentID == item.persistentID && topMusic.playbackState == .playing {
-                                topMusic.pause()
-                            } else {
-                                topMusic.play(item: item)
-                            }
-                        }
-                    }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: (topMusic.nowPlayingItem?.persistentID == song.mediaItem?.persistentID && topMusic.playbackState == .playing) ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 44))
-                            Text((topMusic.nowPlayingItem?.persistentID == song.mediaItem?.persistentID && topMusic.playbackState == .playing) ? "Pause" : "Play")
-                                .font(.headline)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // Play Count below artist/album
+                    VStack(spacing: 2) {
+                        Text("\(song.playCount)")
+                            .font(.title.bold())
+                            .foregroundStyle(.primary)
+                        Text("Plays")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    HStack(spacing: 20) {
-                        Label { Text("\(song.playCount)") } icon: { Image(systemName: "play.circle.fill") }
-                        Label { Text(genre) } icon: { Image(systemName: "guitars") }
-                        Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
-                        Label { Text(duration) } icon: { Image(systemName: "clock") }
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
                 }
                 .padding()
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+                // Other Info
+                HStack(spacing: 20) {
+                    Label { Text(genre) } icon: { Image(systemName: "guitars") }
+                    Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
+                    Label { Text(duration) } icon: { Image(systemName: "clock") }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
             }
             .frame(maxWidth: .infinity)
             .padding()

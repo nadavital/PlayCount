@@ -49,62 +49,72 @@ struct AlbumInfoView: View {
                     size: 280,
                     cornerRadius: 32
                 )
-                // Album Details Card with Play Button
-                VStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
+                // Top Section: Title + Play Button, then Artist, then Play Count
+                VStack(spacing: 8) {
+                    HStack(alignment: .center, spacing: 12) {
                         Text(album.title)
                             .font(.largeTitle).bold()
-                            .multilineTextAlignment(.leading)
-                        // Artist NavigationLink
-                        if let artist = artistObject {
-                            NavigationLink(destination: ArtistInfoView(artist: artist)) {
-                                Text(album.artist)
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundStyle(Color.secondary)
-                                    .contentShape(Rectangle())
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                        Button(action: {
+                            if let first = album.items.first {
+                                let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                                if (isCurrentAlbum && topMusic.playbackState == .playing) {
+                                    topMusic.pause()
+                                } else {
+                                    topMusic.play(collection: MPMediaItemCollection(items: album.items))
+                                }
                             }
-                            .buttonStyle(.plain)
-                        } else {
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .frame(width: 48, height: 48)
+                                let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                                Image(systemName: (isCurrentAlbum && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(Color.black)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    // Artist below
+                    if let artist = artistObject {
+                        NavigationLink(destination: ArtistInfoView(artist: artist)) {
                             Text(album.artist)
-                                .font(.title3)
+                                .font(.title3.weight(.semibold))
                                 .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(album.artist)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                    .padding(.top, 8)
-                    Button(action: {
-                        if let first = album.items.first {
-                            let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
-                            if isCurrentAlbum && topMusic.playbackState == .playing {
-                                topMusic.pause()
-                            } else {
-                                topMusic.play(collection: MPMediaItemCollection(items: album.items))
-                            }
-                        }
-                    }) {
-                        VStack(spacing: 4) {
-                            let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
-                            Image(systemName: (isCurrentAlbum && topMusic.playbackState == .playing) ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 44))
-                            Text((isCurrentAlbum && topMusic.playbackState == .playing) ? "Pause" : "Play")
-                                .font(.headline)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // Play Count below artist
+                    VStack(spacing: 2) {
+                        Text("\(album.playCount)")
+                            .font(.title.bold())
+                            .foregroundStyle(.primary)
+                        Text("Plays")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    HStack(spacing: 20) {
-                        Label { Text("\(album.playCount)") } icon: { Image(systemName: "play.circle.fill") }
-                        Label { Text(genre) } icon: { Image(systemName: "guitars") }
-                        Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
                 }
                 .padding()
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+                // Other Info
+                HStack(spacing: 20) {
+                    Label { Text(genre) } icon: { Image(systemName: "guitars") }
+                    Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
                 // Tracks List
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Tracks")

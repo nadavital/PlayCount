@@ -40,41 +40,43 @@ struct ArtistInfoView: View {
                     size: 280,
                     cornerRadius: 32
                 )
-                // Artist Details Card with Play Button
-                VStack(spacing: 12) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(artist.name)
-                                .font(.largeTitle).bold()
-                                .multilineTextAlignment(.leading)
-                        }
-                        Spacer()
-                    }
-                    .padding(.top, 8)
-                    Button(action: {
-                        let artistSongs = artist.items
-                        let isCurrentArtist = topMusic.nowPlayingItem?.artist == artist.name
-                        if isCurrentArtist && topMusic.playbackState == .playing {
-                            topMusic.pause()
-                        } else {
-                            topMusic.play(collection: MPMediaItemCollection(items: artistSongs))
-                        }
-                    }) {
-                        VStack(spacing: 4) {
+                // Top Section: Title + Play Button, then Play Count
+                VStack(spacing: 8) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Text(artist.name)
+                            .font(.largeTitle).bold()
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                        Button(action: {
+                            let artistSongs = artist.items
                             let isCurrentArtist = topMusic.nowPlayingItem?.artist == artist.name
-                            Image(systemName: (isCurrentArtist && topMusic.playbackState == .playing) ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 44))
-                            Text((isCurrentArtist && topMusic.playbackState == .playing) ? "Pause" : "Play")
-                                .font(.headline)
+                            if isCurrentArtist && topMusic.playbackState == .playing {
+                                topMusic.pause()
+                            } else {
+                                topMusic.play(collection: MPMediaItemCollection(items: artistSongs))
+                            }
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .frame(width: 48, height: 48)
+                                let isCurrentArtist = topMusic.nowPlayingItem?.artist == artist.name
+                                Image(systemName: (isCurrentArtist && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(Color.black)
+                            }
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    Label("\(artist.playCount) plays", systemImage: "play.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                    // Play Count below title
+                    VStack(spacing: 2) {
+                        Text("\(artist.playCount)")
+                            .font(.title.bold())
+                            .foregroundStyle(.primary)
+                        Text("Plays")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding()
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
