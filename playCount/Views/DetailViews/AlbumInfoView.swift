@@ -4,6 +4,7 @@ import MediaPlayer
 struct AlbumInfoView: View {
     let album: Album
     @EnvironmentObject private var topMusic: MediaPlayerManager
+    @Environment(\.dismiss) private var dismiss
     
     var genre: String {
         album.items.first?.genre ?? "Unknown Genre"
@@ -41,103 +42,119 @@ struct AlbumInfoView: View {
                     startPoint: .top, endPoint: .bottom)
             }
         }()
-        ScrollView {
-            VStack(spacing: 24) {
-                ArtworkView(
-                    artwork: album.artwork,
-                    fallbackSystemImage: "rectangle.stack.fill",
-                    size: 280,
-                    cornerRadius: 32
-                )
-                // Top Section: Title + Play Button, then Artist, then Play Count
-                VStack(spacing: 8) {
-                    HStack(alignment: .center, spacing: 12) {
-                        Text(album.title)
-                            .font(.largeTitle).bold()
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                        Button(action: {
-                            if let first = album.items.first {
-                                let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
-                                if (isCurrentAlbum && topMusic.playbackState == .playing) {
-                                    topMusic.pause()
-                                } else {
-                                    topMusic.play(collection: MPMediaItemCollection(items: album.items))
+        ZStack(alignment: .topLeading) {
+            ScrollView {
+                VStack(spacing: 24) {
+                    ArtworkView(
+                        artwork: album.artwork,
+                        fallbackSystemImage: "rectangle.stack.fill",
+                        size: 280,
+                        cornerRadius: 32
+                    )
+                    // Top Section: Title + Play Button, then Artist, then Play Count
+                    VStack(spacing: 8) {
+                        HStack(alignment: .center, spacing: 12) {
+                            Text(album.title)
+                                .font(.largeTitle).bold()
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity)
+                            Button(action: {
+                                if let first = album.items.first {
+                                    let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                                    if (isCurrentAlbum && topMusic.playbackState == .playing) {
+                                        topMusic.pause()
+                                    } else {
+                                        topMusic.play(collection: MPMediaItemCollection(items: album.items))
+                                    }
+                                }
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(.ultraThinMaterial)
+                                        .frame(width: 48, height: 48)
+                                    let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
+                                    Image(systemName: (isCurrentAlbum && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
+                                        .font(.system(size: 24, weight: .bold))
+                                        .foregroundStyle(Color.black)
                                 }
                             }
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(.ultraThinMaterial)
-                                    .frame(width: 48, height: 48)
-                                let isCurrentAlbum = topMusic.nowPlayingItem?.albumTitle == album.title && topMusic.nowPlayingItem?.artist == album.artist
-                                Image(systemName: (isCurrentAlbum && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 24, weight: .bold))
-                                    .foregroundStyle(Color.black)
-                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    // Artist below
-                    if let artist = artistObject {
-                        NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                        // Artist below
+                        if let artist = artistObject {
+                            NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                                Text(album.artist)
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             Text(album.artist)
-                                .font(.title3.weight(.semibold))
+                                .font(.title3)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                                .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        Text(album.artist)
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+                        // Play Count below artist
+                        VStack(spacing: 2) {
+                            Text("\(album.playCount)")
+                                .font(.title.bold())
+                                .foregroundStyle(.primary)
+                            Text("Plays")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    // Play Count below artist
-                    VStack(spacing: 2) {
-                        Text("\(album.playCount)")
-                            .font(.title.bold())
-                            .foregroundStyle(.primary)
-                        Text("Plays")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    .padding()
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+                    // Other Info
+                    HStack(spacing: 20) {
+                        Label { Text(genre) } icon: { Image(systemName: "guitars") }
+                        Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
                     }
-                }
-                .padding()
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
-                // Other Info
-                HStack(spacing: 20) {
-                    Label { Text(genre) } icon: { Image(systemName: "guitars") }
-                    Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
-                // Tracks List
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Tracks")
-                        .font(.title2).bold()
-                        .padding(.bottom, 8)
-                    VStack(spacing: 0) {
-                        ForEach(album.items.indices, id: \.self) { idx in
-                            let track = album.items[idx]
-                            AlbumTrackRow(song: Song(mediaItem: track), index: idx)
-                            if idx < album.items.count - 1 {
-                                Divider()
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                    // Tracks List
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Tracks")
+                            .font(.title2).bold()
+                            .padding(.bottom, 8)
+                        VStack(spacing: 0) {
+                            ForEach(album.items.indices, id: \.self) { idx in
+                                let track = album.items[idx]
+                                AlbumTrackRow(song: Song(mediaItem: track), index: idx)
+                                if idx < album.items.count - 1 {
+                                    Divider()
+                                }
                             }
                         }
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .padding(.bottom, 4)
                     }
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.bottom, 4)
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
+                .padding()
             }
-            .padding()
+            .background(gradient.ignoresSafeArea())
+            Button(action: { dismiss() }) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 16)
+            .padding(.leading, 16)
         }
-        .background(gradient.ignoresSafeArea())
+        .navigationBarHidden(true)
     }
 }
 

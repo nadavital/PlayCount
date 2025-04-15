@@ -3,6 +3,7 @@ import SwiftUI
 struct SongInfoView: View {
     let song: Song
     @EnvironmentObject private var topMusic: MediaPlayerManager
+    @Environment(\.dismiss) private var dismiss
     
     // Helper to get the full Artist object
     var artistObject: Artist? {
@@ -53,102 +54,118 @@ struct SongInfoView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                ArtworkView(
-                    artwork: song.artwork,
-                    fallbackSystemImage: "music.note",
-                    size: 280,
-                    cornerRadius: 32
-                )
-                // Top Section: Title + Play Button, then Artist/Album, then Play Count
-                VStack(spacing: 8) {
-                    // Title and Play Button in HStack
-                    HStack(alignment: .center, spacing: 12) {
-                        Text(song.title)
-                            .font(.largeTitle).bold()
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                        Button(action: {
-                            if let item = song.mediaItem {
-                                if topMusic.nowPlayingItem?.persistentID == item.persistentID && topMusic.playbackState == .playing {
-                                    topMusic.pause()
-                                } else {
-                                    topMusic.play(item: item)
+        ZStack(alignment: .topLeading) {
+            ScrollView {
+                VStack(spacing: 24) {
+                    ArtworkView(
+                        artwork: song.artwork,
+                        fallbackSystemImage: "music.note",
+                        size: 280,
+                        cornerRadius: 32
+                    )
+                    // Top Section: Title + Play Button, then Artist/Album, then Play Count
+                    VStack(spacing: 8) {
+                        // Title and Play Button in HStack
+                        HStack(alignment: .center, spacing: 12) {
+                            Text(song.title)
+                                .font(.largeTitle).bold()
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity)
+                            Button(action: {
+                                if let item = song.mediaItem {
+                                    if topMusic.nowPlayingItem?.persistentID == item.persistentID && topMusic.playbackState == .playing {
+                                        topMusic.pause()
+                                    } else {
+                                        topMusic.play(item: item)
+                                    }
+                                }
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(.ultraThinMaterial)
+                                        .frame(width: 48, height: 48)
+                                    Image(systemName: (topMusic.nowPlayingItem?.persistentID == song.mediaItem?.persistentID && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
+                                        .font(.system(size: 24, weight: .bold))
+                                        .foregroundStyle(Color.black)
                                 }
                             }
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(.ultraThinMaterial)
-                                    .frame(width: 48, height: 48)
-                                Image(systemName: (topMusic.nowPlayingItem?.persistentID == song.mediaItem?.persistentID && topMusic.playbackState == .playing) ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 24, weight: .bold))
-                                    .foregroundStyle(Color.black)
-                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    // Artist and Album below
-                    VStack(spacing: 2) {
-                        if let artist = artistObject {
-                            NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                        // Artist and Album below
+                        VStack(spacing: 2) {
+                            if let artist = artistObject {
+                                NavigationLink(destination: ArtistInfoView(artist: artist)) {
+                                    Text(song.artist)
+                                        .font(.title3.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            } else {
                                 Text(song.artist)
                                     .font(.title3.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.center)
-                                    .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                            Text(song.artist)
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        if let album = albumObject {
-                            NavigationLink(destination: AlbumInfoView(album: album)) {
+                            if let album = albumObject {
+                                NavigationLink(destination: AlbumInfoView(album: album)) {
+                                    Text(song.albumTitle)
+                                        .font(.headline)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            } else {
                                 Text(song.albumTitle)
                                     .font(.headline)
                                     .foregroundStyle(.secondary)
                                     .multilineTextAlignment(.center)
-                                    .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
-                        } else {
-                            Text(song.albumTitle)
-                                .font(.headline)
+                        }
+                        // Play Count below artist/album
+                        VStack(spacing: 2) {
+                            Text("\(song.playCount)")
+                                .font(.title.bold())
+                                .foregroundStyle(.primary)
+                            Text("Plays")
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
                         }
                     }
-                    // Play Count below artist/album
-                    VStack(spacing: 2) {
-                        Text("\(song.playCount)")
-                            .font(.title.bold())
-                            .foregroundStyle(.primary)
-                        Text("Plays")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    .padding()
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
+                    // Other Info
+                    HStack(spacing: 20) {
+                        Label { Text(genre) } icon: { Image(systemName: "guitars") }
+                        Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
+                        Label { Text(duration) } icon: { Image(systemName: "clock") }
                     }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
                 }
+                .frame(maxWidth: .infinity)
                 .padding()
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
-                // Other Info
-                HStack(spacing: 20) {
-                    Label { Text(genre) } icon: { Image(systemName: "guitars") }
-                    Label { Text(releaseDate) } icon: { Image(systemName: "calendar") }
-                    Label { Text(duration) } icon: { Image(systemName: "clock") }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
             }
-            .frame(maxWidth: .infinity)
-            .padding()
+            .background(gradient.ignoresSafeArea())
+            Button(action: { dismiss() }) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 16)
+            .padding(.leading, 16)
         }
-        .background(gradient.ignoresSafeArea())
+        .navigationBarHidden(true)
     }
 }
 
