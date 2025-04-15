@@ -29,10 +29,14 @@ struct NowPlayingBar: View {
                             }
                         }) {
                             Image(systemName: topMusic.playbackState == .playing ? "pause.fill" : "play.fill")
+                                .foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
                         Button(action: { topMusic.next() }) {
                             Image(systemName: "forward.fill")
+                                .foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
                     }
                     .font(.title2)
                 }
