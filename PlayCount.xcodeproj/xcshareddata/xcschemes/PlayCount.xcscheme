@@ -18,7 +18,7 @@
                BlueprintIdentifier = "50FF36942DA594AB00E9F5CD"
                BuildableName = "PlayCount.app"
                BlueprintName = "PlayCount"
-               ReferencedContainer = "container:playCount.xcodeproj">
+               ReferencedContainer = "container:PlayCount.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -47,7 +47,7 @@
             BlueprintIdentifier = "50FF36942DA594AB00E9F5CD"
             BuildableName = "PlayCount.app"
             BlueprintName = "PlayCount"
-            ReferencedContainer = "container:playCount.xcodeproj">
+            ReferencedContainer = "container:PlayCount.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -64,7 +64,7 @@
             BlueprintIdentifier = "50FF36942DA594AB00E9F5CD"
             BuildableName = "PlayCount.app"
             BlueprintName = "PlayCount"
-            ReferencedContainer = "container:playCount.xcodeproj">
+            ReferencedContainer = "container:PlayCount.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
