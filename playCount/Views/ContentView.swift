@@ -19,6 +19,16 @@ struct ContentView: View {
         case albums = "Top Albums"
         case artists = "Top Artists"
         var id: String { rawValue }
+        var iconName: String {
+            switch self {
+            case .songs:
+                return "music.note"
+            case .albums:
+                return "square.stack"
+            case .artists:
+                return "music.microphone"
+            }
+        }
     }
     
     var searchPrompt: String {
@@ -88,7 +98,10 @@ struct ContentView: View {
                                 Menu {
                                     ForEach(Section.allCases) { section in
                                         Button(action: { selectedSection = section }) {
-                                            Text(section.rawValue)
+                                            HStack(spacing: 6) {
+                                                Image(systemName: section.iconName)
+                                                Text(section.rawValue)
+                                            }
                                         }
                                     }
                                 } label: {
