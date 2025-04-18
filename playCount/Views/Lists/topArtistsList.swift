@@ -17,9 +17,9 @@ struct topArtistsList: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
-                ForEach(filteredArtists, id: \.persistentID) { collection in
+                ForEach(Array(filteredArtists.enumerated()), id: \.element.persistentID) { index, collection in
                     NavigationLink(destination: ArtistInfoView(artist: Artist(collection: collection))) {
-                        ArtistCard(artist: Artist(collection: collection))
+                        ArtistCard(artist: Artist(collection: collection), rank: index + 1)
                     }
                     .buttonStyle(.plain)
                 }
@@ -27,11 +27,15 @@ struct topArtistsList: View {
                     Button("Load More") {
                         displayLimit += 50
                     }
-                    .padding()
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 20)
+                    .background(.ultraThinMaterial, in: Capsule())
                     .font(.subheadline)
-                    .foregroundColor(.accentColor)
+                    .foregroundStyle(.primary)
+                    .buttonStyle(.plain)
                 }
             }
+            .padding(.bottom, 20)
         }
     }
 }

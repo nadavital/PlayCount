@@ -10,8 +10,20 @@ import MediaPlayer
 
 struct SongCard: View {
     let song: Song
+    let rank: Int
     var body: some View {
         HStack {
+            // display ranking with special badge
+            ZStack {
+                if rank <= 3 {
+                    Circle()
+                        .fill(rank == 1 ? Color.yellow : rank == 2 ? Color.gray : Color(red:205/255, green:127/255, blue:50/255))
+                }
+                Text("\(rank)")
+                    .font(.subheadline.bold())
+                    .foregroundColor(rank <= 3 ? Color.white : Color.secondary)
+            }
+            .frame(width: 30, height: 30)
             ArtworkView(artwork: song.artwork)
                 .padding(.trailing, 15)
             VStack(alignment: .leading) {
@@ -33,5 +45,5 @@ struct SongCard: View {
 }
 
 #Preview {
-    SongCard(song: Song.preview)
+    SongCard(song: Song.preview, rank: 1)
 }

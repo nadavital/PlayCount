@@ -18,9 +18,9 @@ struct topAlbumsList: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
-                ForEach(filteredAlbums, id: \.persistentID) { collection in
+                ForEach(Array(filteredAlbums.enumerated()), id: \.element.persistentID) { index, collection in
                     NavigationLink(destination: AlbumInfoView(album: Album(collection: collection))) {
-                        AlbumCard(album: Album(collection: collection))
+                        AlbumCard(album: Album(collection: collection), rank: index + 1)
                     }
                     .buttonStyle(.plain)
                 }
@@ -28,11 +28,15 @@ struct topAlbumsList: View {
                     Button("Load More") {
                         displayLimit += 50
                     }
-                    .padding()
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 20)
+                    .background(.ultraThinMaterial, in: Capsule())
                     .font(.subheadline)
-                    .foregroundColor(.accentColor)
+                    .foregroundStyle(.primary)
+                    .buttonStyle(.plain)
                 }
             }
+            .padding(.bottom, 20)
         }
     }
 }

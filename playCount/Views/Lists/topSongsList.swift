@@ -24,9 +24,9 @@ struct topSongsList: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
-                ForEach(filteredSongs, id: \.persistentID) { song in
+                ForEach(Array(filteredSongs.enumerated()), id: \.element.persistentID) { index, song in
                     NavigationLink(destination: SongInfoView(song: Song(mediaItem: song))) {
-                        SongCard(song: Song(mediaItem: song))
+                        SongCard(song: Song(mediaItem: song), rank: index + 1)
                     }
                     .buttonStyle(.plain)
                 }
@@ -34,11 +34,15 @@ struct topSongsList: View {
                     Button("Load More") {
                         displayLimit += 50
                     }
-                    .padding()
-                    .font(.subheadline)
-                    .foregroundColor(.accentColor)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 28)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
                 }
             }
+            .padding(.bottom, 100)
         }
     }
 }
