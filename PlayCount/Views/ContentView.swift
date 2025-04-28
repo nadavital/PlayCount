@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import MediaPlayer
 
 struct ContentView: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
@@ -195,5 +196,5 @@ struct ScrollOffsetKey: PreferenceKey {
 
 #Preview {
     ContentView()
-        .environmentObject(MediaPlayerManager())
+        .environmentObject(MediaPlayerManager.previewManager)
 }

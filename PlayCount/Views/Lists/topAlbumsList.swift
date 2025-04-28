@@ -18,7 +18,7 @@ struct topAlbumsList: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
-                ForEach(Array(filteredAlbums.enumerated()), id: \.element.persistentID) { index, collection in
+                ForEach(Array(filteredAlbums.enumerated()), id: \.offset) { index, collection in
                     NavigationLink(destination: AlbumInfoView(album: Album(collection: collection))) {
                         AlbumCard(album: Album(collection: collection), rank: index + 1)
                     }
@@ -42,6 +42,13 @@ struct topAlbumsList: View {
 }
 
 #Preview {
-    topAlbumsList(searchText: .constant(""))
-        .environmentObject(MediaPlayerManager())
+    TopAlbumsListPreview.previews
+}
+
+@MainActor
+private struct TopAlbumsListPreview {
+    static var previews: some View {
+        topAlbumsList(searchText: .constant(""))
+            .environmentObject(MediaPlayerManager.previewManager)
+    }
 }

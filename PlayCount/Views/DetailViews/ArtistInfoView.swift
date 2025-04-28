@@ -147,6 +147,18 @@ struct ArtistInfoView: View {
 }
 
 #Preview {
-    ArtistInfoView(artist: Artist.preview)
-        .environmentObject(MediaPlayerManager())
+    ArtistInfoView_Preview.previews
+}
+
+@MainActor
+private struct ArtistInfoView_Preview {
+    static var previews: some View {
+        let manager = MediaPlayerManager.previewManager
+        let collection = manager.topArtists.first!
+        let artist = Artist(collection: collection)
+        return NavigationStack {
+            ArtistInfoView(artist: artist)
+                .environmentObject(manager)
+        }
+    }
 }

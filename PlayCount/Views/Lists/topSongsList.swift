@@ -48,6 +48,13 @@ struct topSongsList: View {
 }
 
 #Preview {
-    topSongsList(searchText: .constant(""))
-        .environmentObject(MediaPlayerManager())
+    TopSongsListPreview.previews
+}
+
+@MainActor
+private struct TopSongsListPreview {
+    static var previews: some View {
+        topSongsList(searchText: .constant(""))
+            .environmentObject(MediaPlayerManager.previewManager)
+    }
 }

@@ -17,7 +17,7 @@ struct topArtistsList: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             LazyVStack {
-                ForEach(Array(filteredArtists.enumerated()), id: \.element.persistentID) { index, collection in
+                ForEach(Array(filteredArtists.enumerated()), id: \.offset) { index, collection in
                     NavigationLink(destination: ArtistInfoView(artist: Artist(collection: collection))) {
                         ArtistCard(artist: Artist(collection: collection), rank: index + 1)
                     }
@@ -41,6 +41,13 @@ struct topArtistsList: View {
 }
 
 #Preview {
-    topArtistsList(searchText: .constant(""))
-        .environmentObject(MediaPlayerManager())
+    TopArtistsListPreview.previews
+}
+
+@MainActor
+private struct TopArtistsListPreview {
+    static var previews: some View {
+        topArtistsList(searchText: .constant(""))
+            .environmentObject(MediaPlayerManager.previewManager)
+    }
 }

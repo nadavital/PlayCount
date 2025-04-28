@@ -70,5 +70,8 @@ extension UIImage {
         ArtworkView(artwork: Song.preview.artwork, fallbackSystemImage: "music.note", size: 50, cornerRadius: 4)
         ArtworkView(artwork: Album.preview.artwork, fallbackSystemImage: "rectangle.stack.fill", size: 120, cornerRadius: 16)
         ArtworkView(artwork: Artist.preview.artwork, fallbackSystemImage: "person.crop.square", size: 120, cornerRadius: 16)
+        // Additional sample generic artwork
+        ArtworkView(artwork: nil, fallbackSystemImage: "star.fill", size: 80, cornerRadius: 12)
+        ArtworkView(artwork: nil, fallbackSystemImage: "bolt.fill", size: 80, cornerRadius: 12)
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaPlayer
 
 struct TopArtistsView: View {
     @EnvironmentObject private var topMusic: MediaPlayerManager
@@ -29,6 +30,6 @@ struct TopArtistsView: View {
 #Preview {
     NavigationStack {
         TopArtistsView(searchText: .constant(""))
-            .environmentObject(MediaPlayerManager())
+            .environmentObject(MediaPlayerManager.previewManager)
     }
 }

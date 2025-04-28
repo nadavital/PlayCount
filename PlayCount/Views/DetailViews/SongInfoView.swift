@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaPlayer
 
 struct SongInfoView: View {
     let song: Song
@@ -170,5 +171,18 @@ struct SongInfoView: View {
 }
 
 #Preview {
-    SongInfoView(song: Song.preview)
+    SongInfoViewPreview.previews
+}
+
+@MainActor
+private struct SongInfoViewPreview {
+    static var previews: some View {
+        let manager = MediaPlayerManager.previewManager
+        let item = manager.topSongs.first!
+        let song = Song(mediaItem: item)
+        return NavigationStack {
+            SongInfoView(song: song)
+                .environmentObject(manager)
+        }
+    }
 }

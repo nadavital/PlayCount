@@ -159,6 +159,15 @@ struct AlbumInfoView: View {
 }
 
 #Preview {
-    AlbumInfoView(album: Album.preview)
-        .environmentObject(MediaPlayerManager())
+    AlbumInfoViewPreview.previews
+}
+
+@MainActor
+private struct AlbumInfoViewPreview {
+    static var previews: some View {
+        let manager = MediaPlayerManager.previewManager
+        let collection = manager.topAlbums.first!
+        return AlbumInfoView(album: Album(collection: collection))
+            .environmentObject(manager)
+    }
 }
