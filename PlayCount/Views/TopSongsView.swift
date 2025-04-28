@@ -27,9 +27,11 @@ struct TopSongsView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     NavigationStack {
         TopSongsView(searchText: .constant(""))
             .environmentObject(MediaPlayerManager.previewManager)
     }
 }
+#endif

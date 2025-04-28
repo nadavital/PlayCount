@@ -194,7 +194,9 @@ struct ScrollOffsetKey: PreferenceKey {
     }
 }
 
+#if DEBUG
 #Preview {
     ContentView()
         .environmentObject(MediaPlayerManager.previewManager)
 }
+#endif

@@ -158,6 +158,7 @@ struct AlbumInfoView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     AlbumInfoViewPreview.previews
 }
@@ -171,3 +172,5 @@ private struct AlbumInfoViewPreview {
             .environmentObject(manager)
     }
 }
+#endif
+

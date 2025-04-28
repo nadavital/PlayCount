@@ -47,6 +47,7 @@ struct topSongsList: View {
     }
 }
 
+#if DEBUG
 #Preview {
     TopSongsListPreview.previews
 }
@@ -58,3 +59,4 @@ private struct TopSongsListPreview {
             .environmentObject(MediaPlayerManager.previewManager)
     }
 }
+#endif

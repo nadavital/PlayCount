@@ -146,6 +146,7 @@ struct ArtistInfoView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     ArtistInfoView_Preview.previews
 }
@@ -162,3 +163,4 @@ private struct ArtistInfoView_Preview {
         }
     }
 }
+#endif

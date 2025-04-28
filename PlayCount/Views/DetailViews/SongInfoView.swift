@@ -170,6 +170,7 @@ struct SongInfoView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     SongInfoViewPreview.previews
 }
@@ -186,3 +187,5 @@ private struct SongInfoViewPreview {
         }
     }
 }
+#endif
+
