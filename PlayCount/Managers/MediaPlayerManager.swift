@@ -24,14 +24,37 @@ class MediaPlayerManager: ObservableObject {
     private let logger = Logger(subsystem: "com.Nadav.playCount", category: "MediaPlayerManager")
     
     init() {
-        fetchTopSongs()
-        fetchTopAlbums()
-        fetchTopArtists()
-        if topSongs.isEmpty && topAlbums.isEmpty && topArtists.isEmpty {
-            errorMessage = "Library might be empty."
-        } else {
-            setupNowPlayingObservers()
-            updateNowPlayingInfo()
+        // Check media library authorization
+        let status = MPMediaLibrary.authorizationStatus()
+        switch status {
+        case .notDetermined:
+            // Request access then fetch data when granted
+            MPMediaLibrary.requestAuthorization { [weak self] newStatus in
+                DispatchQueue.main.async {
+                    if newStatus == .authorized {
+                        self?.refreshMediaData()
+                        self?.errorMessage = nil
+                        self?.setupNowPlayingObservers()
+                        self?.updateNowPlayingInfo()
+                    } else {
+                        self?.errorMessage = "Media Library access denied."
+                    }
+                }
+            }
+        case .authorized:
+            // Already have permission, fetch data
+            fetchTopSongs()
+            fetchTopAlbums()
+            fetchTopArtists()
+            if topSongs.isEmpty && topAlbums.isEmpty && topArtists.isEmpty {
+                errorMessage = "Library might be empty."
+            } else {
+                setupNowPlayingObservers()
+                updateNowPlayingInfo()
+            }
+        default:
+            // Denied or restricted
+            errorMessage = "Media Library access denied."
         }
     }
     
