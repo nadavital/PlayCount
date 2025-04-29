@@ -35,9 +35,14 @@ class MediaPlayerManager: ObservableObject {
                     if newStatus == .authorized {
                         self?.authorizationDenied = false
                         self?.refreshMediaData()
-                        self?.errorMessage = nil
-                        self?.setupNowPlayingObservers()
-                        self?.updateNowPlayingInfo()
+                        // If no data loaded, set empty-library error
+                        if let manager = self, manager.topSongs.isEmpty && manager.topAlbums.isEmpty && manager.topArtists.isEmpty {
+                            manager.errorMessage = "Library might be empty."
+                        } else {
+                            self?.errorMessage = nil
+                            self?.setupNowPlayingObservers()
+                            self?.updateNowPlayingInfo()
+                        }
                     } else {
                         self?.authorizationDenied = true
                     }
@@ -194,9 +199,14 @@ class MediaPlayerManager: ObservableObject {
                     if newStatus == .authorized {
                         self?.authorizationDenied = false
                         self?.refreshMediaData()
-                        self?.errorMessage = nil
-                        self?.setupNowPlayingObservers()
-                        self?.updateNowPlayingInfo()
+                        // If no data loaded, set empty-library error
+                        if let manager = self, manager.topSongs.isEmpty && manager.topAlbums.isEmpty && manager.topArtists.isEmpty {
+                            manager.errorMessage = "Library might be empty."
+                        } else {
+                            self?.errorMessage = nil
+                            self?.setupNowPlayingObservers()
+                            self?.updateNowPlayingInfo()
+                        }
                     } else {
                         self?.authorizationDenied = true
                     }
