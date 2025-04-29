@@ -19,6 +19,7 @@ class MediaPlayerManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var nowPlayingItem: MPMediaItem?
     @Published var playbackState: MPMusicPlaybackState = .stopped
+    @Published var authorizationDenied: Bool = false
     
     private let player = MPMusicPlayerController.systemMusicPlayer
     private let logger = Logger(subsystem: "com.Nadav.playCount", category: "MediaPlayerManager")
@@ -32,17 +33,19 @@ class MediaPlayerManager: ObservableObject {
             MPMediaLibrary.requestAuthorization { [weak self] newStatus in
                 DispatchQueue.main.async {
                     if newStatus == .authorized {
+                        self?.authorizationDenied = false
                         self?.refreshMediaData()
                         self?.errorMessage = nil
                         self?.setupNowPlayingObservers()
                         self?.updateNowPlayingInfo()
                     } else {
-                        self?.errorMessage = "Media Library access denied."
+                        self?.authorizationDenied = true
                     }
                 }
             }
         case .authorized:
             // Already have permission, fetch data
+            authorizationDenied = false
             fetchTopSongs()
             fetchTopAlbums()
             fetchTopArtists()
@@ -54,10 +57,10 @@ class MediaPlayerManager: ObservableObject {
             }
         default:
             // Denied or restricted
-            errorMessage = "Media Library access denied."
+            authorizationDenied = true
         }
     }
-    
+
     func refreshMediaData() {
         fetchTopSongs()
         fetchTopAlbums()
@@ -177,6 +180,36 @@ class MediaPlayerManager: ObservableObject {
         player.setQueue(with: collection)
         player.play()
         updateNowPlayingInfo()
+    }
+    
+    @MainActor
+    func requestAuthorization() {
+        let status = MPMediaLibrary.authorizationStatus()
+        switch status {
+        case .notDetermined:
+            authorizationDenied = false
+            errorMessage = nil
+            MPMediaLibrary.requestAuthorization { [weak self] newStatus in
+                DispatchQueue.main.async {
+                    if newStatus == .authorized {
+                        self?.authorizationDenied = false
+                        self?.refreshMediaData()
+                        self?.errorMessage = nil
+                        self?.setupNowPlayingObservers()
+                        self?.updateNowPlayingInfo()
+                    } else {
+                        self?.authorizationDenied = true
+                    }
+                }
+            }
+        case .denied, .restricted:
+            // Opening Settings to allow user to grant access
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        default:
+            break
+        }
     }
 }
 
