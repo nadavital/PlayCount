@@ -1,6 +1,7 @@
 import Foundation
 import Combine
-import MediaPlayer
+@preconcurrency import MediaPlayer
+import AppIntents
 
 struct TopSong: Identifiable {
     let id: UInt64
@@ -34,7 +35,10 @@ struct TopArtist: Identifiable {
     let artwork: MPMediaItemArtwork?
 }
 
-final class MediaLibraryManager: ObservableObject {
+final class MediaLibraryManager: ObservableObject, Sendable {
+    
+    static let shared = MediaLibraryManager()
+    
     enum SortMetric: String, CaseIterable, Identifiable {
         case playCount
         case listenTime
@@ -377,6 +381,7 @@ final class MediaLibraryManager: ObservableObject {
         }
 
         let duration = item.playbackDuration.isFinite ? max(item.playbackDuration, 0) : 0
+        let playCount = item.playCount
 
         let state = NowPlayingState(
             title: title ?? "Unknown Title",
@@ -384,7 +389,8 @@ final class MediaLibraryManager: ObservableObject {
             artwork: item.artwork,
             duration: duration,
             currentTime: currentTime,
-            isPlaying: playbackState == .playing
+            isPlaying: playbackState == .playing,
+            playCount: playCount
         )
 
         DispatchQueue.main.async {
@@ -534,6 +540,7 @@ extension MediaLibraryManager {
         let duration: TimeInterval
         let currentTime: TimeInterval
         let isPlaying: Bool
+        let playCount: Int
 
         var progress: Double {
             guard duration > 0 else { return 0 }
@@ -623,7 +630,8 @@ extension MediaLibraryManager {
             artwork: generatedArtwork(title: "MC", subtitle: "M83"),
             duration: 240,
             currentTime: 87,
-            isPlaying: true
+            isPlaying: true,
+            playCount: 42
         )
         return manager
     }
@@ -636,7 +644,8 @@ extension MediaLibraryManager {
             artwork: generatedArtwork(title: "H", subtitle: "BI"),
             duration: 302,
             currentTime: 0,
-            isPlaying: false
+            isPlaying: false,
+            playCount: 17
         )
         return manager
     }
