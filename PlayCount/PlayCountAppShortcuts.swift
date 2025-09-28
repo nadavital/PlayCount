@@ -30,6 +30,20 @@ struct PlayCountAppShortcuts: AppShortcutsProvider {
                     shortTitle: "Current Song Play Count",
                     systemImageName: "music.quarternote.3"
         )
+        
+        AppShortcut(
+            intent: SearchPlayCountIntent(),
+            phrases: [
+                "Find me a \(.applicationName)",
+                "Get me a \(.applicationName)",
+                "Find a \(.applicationName)",
+                "Get a \(.applicationName)",
+                "Look up a \(.applicationName)",
+                "Look up a \(.applicationName) for me"
+            ],
+            shortTitle: "Search PlayCount",
+            systemImageName: "magnifyingglass"
+        )
     }
     
 }

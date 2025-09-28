@@ -55,6 +55,29 @@ struct CurrentSongPlayCountIntent: AppIntent {
     private var manager: MediaLibraryManager
 }
 
+struct SearchPlayCountIntent: AppIntent {
+    
+    static var title: LocalizedStringResource = "Find the Play Count of any Song"
+    
+    static var description = IntentDescription("Shows how many times you have listened to any requested song")
+    
+    @Parameter(title: "Song", description: "The song to get the PlayCount for")
+    var songTitle: String
+    @Dependency var manager: MediaLibraryManager
+    
+    func perform() async throws -> some IntentResult & ReturnsValue<String?> & ProvidesDialog & ShowsSnippetView {
+        let song = manager.librarySongs.filter {
+            $0.title.localizedCaseInsensitiveContains(songTitle) || $0.artist.localizedCaseInsensitiveContains(songTitle)
+        }.first
+                
+        let snippet = PlainSongRow(song: song)
+        
+        let dialog = IntentDialog(full: "You have listened to \(song?.title ?? "Unknown Song") \(song?.playCount ?? 0) times.", supporting: "\(song?.playCount ?? 0) times.")
+        
+        return .result(value: song?.title, dialog: dialog, view: snippet)
+    }
+}
+
 struct SingleSongPlayCountView: View {
     let song: MediaLibraryManager.NowPlayingState?
     
@@ -78,17 +101,17 @@ struct SingleSongPlayCountView: View {
 }
 
 struct PlainSongRow: View {
-    let song: TopSong
+    let song: TopSong?
     
     var body: some View {
         HStack(spacing: 8) {
-            ArtworkView(artwork: song.artwork)
+            ArtworkView(artwork: song?.artwork)
             
             VStack(alignment: .leading) {
-                Text(song.title)
+                Text(song?.title ?? "Unknown Title")
                     .font(.subheadline)
                     .lineLimit(1)
-                Text(song.artist)
+                Text(song?.artist ?? "Unknown Artist")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -96,7 +119,7 @@ struct PlainSongRow: View {
             
             Spacer(minLength: 12)
             
-            Text(String(song.playCount))
+            Text(String(song?.playCount ?? 0))
                 .font(.footnote.weight(.semibold))
                 .monospacedDigit()
                 .padding(.horizontal, 5)
