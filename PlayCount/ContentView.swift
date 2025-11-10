@@ -26,6 +26,7 @@ struct ContentView: View {
 private struct AuthorizedLibraryView: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.colorScheme) var colorScheme
+    @State private var presentedNowPlayingSong: TopSong?
 
     var body: some View {
         TabView {
@@ -70,8 +71,29 @@ private struct AuthorizedLibraryView: View {
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory{
 
-            NowPlayingBarView(manager: manager)
+            NowPlayingBarView(manager: manager) { state in
+                if let song = state.song {
+                    presentedNowPlayingSong = song
+                }
+            }
                 .environment(\.colorScheme, colorScheme)
+        }
+        .sheet(item: $presentedNowPlayingSong) { song in
+            NavigationStack {
+                SongInfoView(song: song)
+            }
+        }
+        .onChange(of: manager.nowPlayingState) { state in
+            guard let state else {
+                presentedNowPlayingSong = nil
+                return
+            }
+
+            if let song = state.song, presentedNowPlayingSong?.id == song.id {
+                presentedNowPlayingSong = song
+            } else if presentedNowPlayingSong != nil {
+                presentedNowPlayingSong = state.song
+            }
         }
     }
 

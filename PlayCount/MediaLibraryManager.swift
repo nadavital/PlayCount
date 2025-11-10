@@ -364,7 +364,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             return
         }
 
-        let title = item.title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyFallback("Unknown Title")
+        let rawTitle = item.title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let artist = item.artist?.trimmingCharacters(in: .whitespacesAndNewlines)
         let album = item.albumTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -382,15 +382,35 @@ final class MediaLibraryManager: ObservableObject, Sendable {
 
         let duration = item.playbackDuration.isFinite ? max(item.playbackDuration, 0) : 0
         let playCount = item.playCount
+        let totalPlayDuration = Double(playCount) * duration
+
+        let resolvedTitle = rawTitle.nonEmptyFallback("Unknown Title")
+        let resolvedArtist = artist?.nonEmptyFallback("Unknown Artist") ?? "Unknown Artist"
+        let resolvedAlbum = album?.nonEmptyFallback("Unknown Album") ?? "Unknown Album"
+
+        let topSong = TopSong(
+            id: item.persistentID,
+            title: resolvedTitle,
+            artist: resolvedArtist,
+            albumTitle: resolvedAlbum,
+            playCount: playCount,
+            totalPlayDuration: totalPlayDuration,
+            lastPlayedDate: item.lastPlayedDate,
+            artwork: item.artwork,
+            albumPersistentID: item.albumPersistentID,
+            artistPersistentID: item.artistPersistentID,
+            trackNumber: item.albumTrackNumber
+        )
 
         let state = NowPlayingState(
-            title: title ?? "Unknown Title",
+            title: resolvedTitle,
             subtitle: subtitle,
             artwork: item.artwork,
             duration: duration,
             currentTime: currentTime,
             isPlaying: playbackState == .playing,
-            playCount: playCount
+            playCount: playCount,
+            song: topSong
         )
 
         DispatchQueue.main.async {
@@ -541,6 +561,7 @@ extension MediaLibraryManager {
         let currentTime: TimeInterval
         let isPlaying: Bool
         let playCount: Int
+        let song: TopSong?
 
         var progress: Double {
             guard duration > 0 else { return 0 }
@@ -554,6 +575,27 @@ extension MediaLibraryManager {
 
         var formattedElapsed: String {
             currentTime.formattedPlayback
+        }
+
+        static func == (lhs: NowPlayingState, rhs: NowPlayingState) -> Bool {
+            let artworksEqual: Bool
+            switch (lhs.artwork, rhs.artwork) {
+            case (nil, nil):
+                artworksEqual = true
+            case let (left?, right?):
+                artworksEqual = left === right
+            default:
+                artworksEqual = false
+            }
+
+            return lhs.title == rhs.title &&
+                lhs.subtitle == rhs.subtitle &&
+                artworksEqual &&
+                lhs.duration == rhs.duration &&
+                lhs.currentTime == rhs.currentTime &&
+                lhs.isPlaying == rhs.isPlaying &&
+                lhs.playCount == rhs.playCount &&
+                lhs.song?.id == rhs.song?.id
         }
     }
 }
@@ -624,28 +666,58 @@ extension MediaLibraryManager {
 
     static var previewPlaying: MediaLibraryManager {
         let manager = MediaLibraryManager(fetchLimit: 0)
-        manager.nowPlayingState = NowPlayingState(
+        let sampleSong = TopSong(
+            id: 1,
             title: "Midnight City",
-            subtitle: "M83 — Hurry Up, We're Dreaming",
+            artist: "M83",
+            albumTitle: "Hurry Up, We're Dreaming",
+            playCount: 42,
+            totalPlayDuration: TimeInterval(240 * 42),
+            lastPlayedDate: nil,
             artwork: generatedArtwork(title: "MC", subtitle: "M83"),
+            albumPersistentID: 1,
+            artistPersistentID: 1,
+            trackNumber: 1
+        )
+
+        manager.nowPlayingState = NowPlayingState(
+            title: sampleSong.title,
+            subtitle: "\(sampleSong.artist) — \(sampleSong.albumTitle)",
+            artwork: sampleSong.artwork,
             duration: 240,
             currentTime: 87,
             isPlaying: true,
-            playCount: 42
+            playCount: sampleSong.playCount,
+            song: sampleSong
         )
         return manager
     }
 
     static var previewPaused: MediaLibraryManager {
         let manager = MediaLibraryManager(fetchLimit: 0)
-        manager.nowPlayingState = NowPlayingState(
+        let sampleSong = TopSong(
+            id: 2,
             title: "Holocene",
-            subtitle: "Bon Iver — Bon Iver",
+            artist: "Bon Iver",
+            albumTitle: "Bon Iver",
+            playCount: 17,
+            totalPlayDuration: TimeInterval(302 * 17),
+            lastPlayedDate: nil,
             artwork: generatedArtwork(title: "H", subtitle: "BI"),
+            albumPersistentID: 2,
+            artistPersistentID: 2,
+            trackNumber: 2
+        )
+
+        manager.nowPlayingState = NowPlayingState(
+            title: sampleSong.title,
+            subtitle: "\(sampleSong.artist) — \(sampleSong.albumTitle)",
+            artwork: sampleSong.artwork,
             duration: 302,
             currentTime: 0,
             isPlaying: false,
-            playCount: 17
+            playCount: sampleSong.playCount,
+            song: sampleSong
         )
         return manager
     }
