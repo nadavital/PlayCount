@@ -28,10 +28,16 @@ struct EmptyLibrarySection: View {
 struct ArtworkView: View {
     let artwork: MPMediaItemArtwork?
     private let size: CGSize
+    private let cornerRadius: CGFloat
 
-    init(artwork: MPMediaItemArtwork?, size: CGSize = CGSize(width: 56, height: 56)) {
+    init(
+        artwork: MPMediaItemArtwork?,
+        size: CGSize = CGSize(width: 56, height: 56),
+        cornerRadius: CGFloat = 8
+    ) {
         self.artwork = artwork
         self.size = size
+        self.cornerRadius = cornerRadius
     }
 
     var body: some View {
@@ -51,9 +57,9 @@ struct ArtworkView: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.05))
         }
     }

@@ -32,7 +32,12 @@ private struct AuthorizedLibraryView: View {
         TabView {
             Tab("Songs", systemImage: "music.note.list") {
                 NavigationStack {
-                    TopSongsView(songs: manager.topSongs, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot)
+                    TopSongsView(
+                        songs: manager.topSongs,
+                        sortMetric: manager.sortMetric,
+                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                        manager: manager
+                    )
                         .navigationTitle("Top Songs")
                         .navigationBarTitleDisplayMode(.inline)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
@@ -80,7 +85,7 @@ private struct AuthorizedLibraryView: View {
         }
         .sheet(item: $presentedNowPlayingSong) { song in
             NavigationStack {
-                SongInfoView(song: song)
+                SongInfoView(song: song, manager: manager)
             }
         }
         .onChange(of: manager.nowPlayingState) { state in

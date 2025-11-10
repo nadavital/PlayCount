@@ -260,6 +260,22 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         return sorted
     }
 
+    func album(withPersistentID id: UInt64) -> TopAlbum? {
+        if let match = topAlbums.first(where: { $0.id == id }) {
+            return match
+        }
+
+        return libraryAlbums.first(where: { $0.id == id })
+    }
+
+    func artist(withPersistentID id: UInt64) -> TopArtist? {
+        if let match = topArtists.first(where: { $0.id == id }) {
+            return match
+        }
+
+        return libraryArtists.first(where: { $0.id == id })
+    }
+
     func togglePlayback() {
         switch musicPlayer.playbackState {
         case .playing:
