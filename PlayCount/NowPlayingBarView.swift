@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NowPlayingBarView: View {
     @ObservedObject var manager: MediaLibraryManager
+    var onTap: ((MediaLibraryManager.NowPlayingState) -> Void)? = nil
 
     var body: some View {
         Group {
@@ -30,6 +31,12 @@ struct NowPlayingBarView: View {
                 }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 20)
+                .contentShape(Rectangle())
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("Opens the current song details"))
+                .onTapGesture {
+                    onTap?(state)
+                }
             }
         }
     }
