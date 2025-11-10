@@ -86,7 +86,7 @@ struct AlbumInfoView: View {
 
                                 if song.id != albumSongs.last?.id {
                                     Divider()
-                                        .overlay(Color.white.opacity(0.1))
+                                        .overlay(Color.primary.opacity(0.1))
                                 }
                             }
                         }
@@ -97,7 +97,17 @@ struct AlbumInfoView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.08))
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.2),
+                                            Color.white.opacity(0.05)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
                         )
                     }
                 }
@@ -140,7 +150,7 @@ struct ArtistInfoView: View {
                             } label: {
                                 Text("See All")
                                     .font(.callout.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
                         }
@@ -150,6 +160,7 @@ struct ArtistInfoView: View {
                         Text("No individual songs tracked for this artist yet.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                            .padding(.vertical, 12)
                     } else {
                         LazyVStack(spacing: 12) {
                             ForEach(topSongs) { song in
@@ -161,6 +172,26 @@ struct ArtistInfoView: View {
                                 .buttonStyle(.plain)
                             }
                         }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.2),
+                                            Color.white.opacity(0.05)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
                     }
                 }
 
@@ -175,7 +206,7 @@ struct ArtistInfoView: View {
                             } label: {
                                 Text("See All")
                                     .font(.callout.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
                         }
@@ -185,6 +216,7 @@ struct ArtistInfoView: View {
                         Text("No album play data for this artist yet.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                            .padding(.vertical, 12)
                     } else {
                         LazyVStack(spacing: 12) {
                             ForEach(topAlbums) { album in
@@ -196,6 +228,26 @@ struct ArtistInfoView: View {
                                 .buttonStyle(.plain)
                             }
                         }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.2),
+                                            Color.white.opacity(0.05)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
                     }
                 }
             }
@@ -238,38 +290,77 @@ private struct SongDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
+            // Hero Artwork
             ArtworkView(
                 artwork: song.artwork,
-                size: CGSize(width: 300, height: 300),
-                cornerRadius: 28
+                size: CGSize(width: 320, height: 320),
+                cornerRadius: 24
             )
-            .shadow(color: Color.black.opacity(0.2), radius: 28, x: 0, y: 16)
 
-            VStack(spacing: 8) {
-                Text(song.title)
-                    .font(.system(size: 36, weight: .bold))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.primary)
+            // Title, Artist Info, and Playback in Glass Card
+            VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    Text(song.title)
+                        .font(.system(size: 28, weight: .bold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
 
-                VStack(spacing: 4) {
-                    albumLink
-                    artistLink
+                    VStack(spacing: 8) {
+                        albumLink
+                        artistLink
+                    }
                 }
-            }
 
-            HStack(spacing: 16) {
-                MediaDetailMetric(title: "Plays", value: song.playCount.detailFormatted)
-                MediaDetailMetric(title: "Time Listened", value: song.totalPlayDuration.formattedListenTime)
+                // Glass Play Button
+                Button(action: handlePlayTapped) {
+                    HStack(spacing: 10) {
+                        Image(systemName: playButtonIcon)
+                            .font(.body.weight(.semibold))
+                        Text(playButtonTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 14)
+                }
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
-
-            MediaDetailPlaybackControls(
-                primaryTitle: playButtonTitle,
-                primarySystemImage: playButtonIcon,
-                primaryAction: handlePlayTapped,
-                showsSkipForward: manager.nowPlayingState != nil,
-                skipForwardAction: manager.skipForward
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.2),
+                                Color.white.opacity(0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+
+            // Play Count Metrics - Prominent Display
+            HStack(spacing: 12) {
+                MediaDetailMetric(
+                    title: "Plays",
+                    value: song.playCount.detailFormatted,
+                    subtitle: manager.playCountRank(of: song).map { "Ranked #\($0)" }
+                )
+                MediaDetailMetric(
+                    title: "Time Listened",
+                    value: song.totalPlayDuration.formattedListenTime,
+                    subtitle: manager.listenTimeRank(of: song).map { "Ranked #\($0)" }
+                )
+            }
         }
     }
 
@@ -280,16 +371,19 @@ private struct SongDetailHeader: View {
                 AlbumInfoView(album: album, manager: manager)
             } label: {
                 Text(album.title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
         } else if !song.albumTitle.isEmpty {
             Text(song.albumTitle)
-                .font(.title3.weight(.semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(2)
         }
     }
 
@@ -300,16 +394,19 @@ private struct SongDetailHeader: View {
                 ArtistInfoView(artist: artist, manager: manager)
             } label: {
                 Text(artist.name)
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
         } else if !song.artist.isEmpty {
             Text(song.artist)
-                .font(.headline)
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(1)
         }
     }
 
@@ -354,35 +451,74 @@ private struct AlbumDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
+            // Hero Artwork
             ArtworkView(
                 artwork: album.artwork,
-                size: CGSize(width: 300, height: 300),
-                cornerRadius: 28
+                size: CGSize(width: 320, height: 320),
+                cornerRadius: 24
             )
-            .shadow(color: Color.black.opacity(0.2), radius: 28, x: 0, y: 16)
 
-            VStack(spacing: 8) {
-                Text(album.title)
-                    .font(.system(size: 36, weight: .bold))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.primary)
+            // Title, Artist Info, and Playback in Glass Card
+            VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    Text(album.title)
+                        .font(.system(size: 28, weight: .bold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
 
-                artistLink
+                    artistLink
+                }
+
+                // Glass Play Button
+                Button(action: handlePlayTapped) {
+                    HStack(spacing: 10) {
+                        Image(systemName: playButtonIcon)
+                            .font(.body.weight(.semibold))
+                        Text(playButtonTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 14)
+                }
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
-
-            HStack(spacing: 16) {
-                MediaDetailMetric(title: "Plays", value: album.playCount.detailFormatted)
-                MediaDetailMetric(title: "Time Listened", value: album.totalPlayDuration.formattedListenTime)
-            }
-
-            MediaDetailPlaybackControls(
-                primaryTitle: playButtonTitle,
-                primarySystemImage: playButtonIcon,
-                primaryAction: handlePlayTapped,
-                showsSkipForward: manager.nowPlayingState != nil,
-                skipForwardAction: manager.skipForward
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.2),
+                                Color.white.opacity(0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+
+            // Play Count Metrics - Prominent Display
+            HStack(spacing: 12) {
+                MediaDetailMetric(
+                    title: "Plays",
+                    value: album.playCount.detailFormatted,
+                    subtitle: manager.playCountRank(of: album).map { "Ranked #\($0)" }
+                )
+                MediaDetailMetric(
+                    title: "Time Listened",
+                    value: album.totalPlayDuration.formattedListenTime,
+                    subtitle: manager.listenTimeRank(of: album).map { "Ranked #\($0)" }
+                )
+            }
         }
     }
 
@@ -393,16 +529,18 @@ private struct AlbumDetailHeader: View {
                 ArtistInfoView(artist: artist, manager: manager)
             } label: {
                 Text(artist.name)
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .lineLimit(1)
             }
             .buttonStyle(.plain)
         } else if !album.artist.isEmpty {
             Text(album.artist)
-                .font(.headline)
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(1)
         }
     }
 
@@ -446,30 +584,70 @@ private struct ArtistDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 28) {
+            // Hero Artist Artwork (Circular)
             ArtistArtworkView(
                 artwork: artist.artwork,
                 name: artist.name,
-                diameter: 300
+                diameter: 320
             )
-            .shadow(color: Color.black.opacity(0.2), radius: 28, x: 0, y: 16)
 
-            Text(artist.name)
-                .font(.system(size: 36, weight: .bold))
-                .multilineTextAlignment(.center)
+            // Artist Name and Playback in Glass Card
+            VStack(spacing: 16) {
+                Text(artist.name)
+                    .font(.system(size: 28, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
 
-            HStack(spacing: 16) {
-                MediaDetailMetric(title: "Plays", value: artist.playCount.detailFormatted)
-                MediaDetailMetric(title: "Time Listened", value: artist.totalPlayDuration.formattedListenTime)
+                // Glass Play Button
+                Button(action: handlePlayTapped) {
+                    HStack(spacing: 10) {
+                        Image(systemName: playButtonIcon)
+                            .font(.body.weight(.semibold))
+                        Text(playButtonTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 14)
+                }
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
-
-            MediaDetailPlaybackControls(
-                primaryTitle: playButtonTitle,
-                primarySystemImage: playButtonIcon,
-                primaryAction: handlePlayTapped,
-                showsSkipForward: manager.nowPlayingState != nil,
-                skipForwardAction: manager.skipForward
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 24)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.2),
+                                Color.white.opacity(0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+
+            // Play Count Metrics - Prominent Display
+            HStack(spacing: 12) {
+                MediaDetailMetric(
+                    title: "Plays",
+                    value: artist.playCount.detailFormatted,
+                    subtitle: manager.playCountRank(of: artist).map { "Ranked #\($0)" }
+                )
+                MediaDetailMetric(
+                    title: "Time Listened",
+                    value: artist.totalPlayDuration.formattedListenTime,
+                    subtitle: manager.listenTimeRank(of: artist).map { "Ranked #\($0)" }
+                )
+            }
         }
     }
 
@@ -482,78 +660,59 @@ private struct ArtistDetailHeader: View {
     }
 }
 
-private struct MediaDetailPlaybackControls: View {
-    let primaryTitle: String
-    let primarySystemImage: String
-    let primaryAction: () -> Void
-    let showsSkipForward: Bool
-    let skipForwardAction: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: primaryAction) {
-                Label(primaryTitle, systemImage: primarySystemImage)
-                    .labelStyle(.titleAndIcon)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(MediaDetailPrimaryButtonStyle())
-
-            if showsSkipForward {
-                Button(action: skipForwardAction) {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                }
-                .buttonStyle(MediaDetailSecondaryButtonStyle())
-            }
-        }
-    }
-}
-
-private struct MediaDetailPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline.weight(.semibold))
-            .padding(.vertical, 14)
-            .foregroundStyle(Color.white)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.85 : 1))
-            )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-    }
-}
-
-private struct MediaDetailSecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(Color.accentColor)
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.25 : 0.18))
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-    }
-}
-
 private struct MediaDetailMetric: View {
     let title: String
     let value: String
+    let subtitle: String?
+
+    init(title: String, value: String, subtitle: String? = nil) {
+        self.title = title
+        self.value = value
+        self.subtitle = subtitle
+    }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(.system(size: 32, weight: .bold, design: .rounded))
                 .monospacedDigit()
-            Text(title.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            VStack(spacing: 2) {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.5)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.2),
+                            Color.white.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
         )
     }
 }
@@ -581,7 +740,7 @@ private struct AlbumTrackRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(2)
 
-                Text("\(song.playCount.detailFormatted) plays • \(song.totalPlayDuration.formattedListenTime)")
+                Text("\(song.playCount.detailFormatted) plays • \(song.totalPlayDuration.formattedListenTime) listened")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

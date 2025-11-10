@@ -39,7 +39,7 @@ private struct AuthorizedLibraryView: View {
                         manager: manager
                     )
                         .navigationTitle("Top Songs")
-                        .navigationBarTitleDisplayMode(.inline)
+                        .navigationBarTitleDisplayMode(.large)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
@@ -49,7 +49,7 @@ private struct AuthorizedLibraryView: View {
                 NavigationStack {
                     TopAlbumsView(albums: manager.topAlbums, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Albums")
-                        .navigationBarTitleDisplayMode(.inline)
+                        .navigationBarTitleDisplayMode(.large)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
@@ -59,7 +59,7 @@ private struct AuthorizedLibraryView: View {
                 NavigationStack {
                     TopArtistsView(artists: manager.topArtists, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Artists")
-                        .navigationBarTitleDisplayMode(.inline)
+                        .navigationBarTitleDisplayMode(.large)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
