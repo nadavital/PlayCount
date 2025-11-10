@@ -4,6 +4,7 @@ struct TopSongsView: View {
     let songs: [TopSong]
     let sortMetric: MediaLibraryManager.SortMetric
     let hasLoadedInitialSnapshot: Bool
+    @ObservedObject var manager: MediaLibraryManager
 
     var body: some View {
         List {
@@ -20,7 +21,7 @@ struct TopSongsView: View {
             } else {
                 ForEach(songs) { song in
                     NavigationLink {
-                        SongInfoView(song: song)
+                        SongInfoView(song: song, manager: manager)
                     } label: {
                         SongRow(song: song, sortMetric: sortMetric)
                     }

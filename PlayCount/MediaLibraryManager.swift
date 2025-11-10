@@ -260,6 +260,22 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         return sorted
     }
 
+    func album(withPersistentID id: UInt64) -> TopAlbum? {
+        if let match = topAlbums.first(where: { $0.id == id }) {
+            return match
+        }
+
+        return libraryAlbums.first(where: { $0.id == id })
+    }
+
+    func artist(withPersistentID id: UInt64) -> TopArtist? {
+        if let match = topArtists.first(where: { $0.id == id }) {
+            return match
+        }
+
+        return libraryArtists.first(where: { $0.id == id })
+    }
+
     func togglePlayback() {
         switch musicPlayer.playbackState {
         case .playing:
@@ -271,6 +287,85 @@ final class MediaLibraryManager: ObservableObject, Sendable {
 
     func skipForward() {
         musicPlayer.skipToNextItem()
+        updateNowPlayingState()
+    }
+
+    func play(song: TopSong) {
+        let predicate = MPMediaPropertyPredicate(
+            value: NSNumber(value: song.id),
+            forProperty: MPMediaItemPropertyPersistentID
+        )
+
+        let query = MPMediaQuery.songs()
+        query.addFilterPredicate(predicate)
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let collection = MPMediaItemCollection(items: items)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = items.first
+        musicPlayer.play()
+        updateNowPlayingState()
+    }
+
+    func play(album: TopAlbum) {
+        let predicate = MPMediaPropertyPredicate(
+            value: NSNumber(value: album.id),
+            forProperty: MPMediaItemPropertyAlbumPersistentID
+        )
+
+        let query = MPMediaQuery.songs()
+        query.addFilterPredicate(predicate)
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let sortedItems = items.sorted { lhs, rhs in
+            if lhs.discNumber != rhs.discNumber {
+                return lhs.discNumber < rhs.discNumber
+            }
+            if lhs.albumTrackNumber != rhs.albumTrackNumber {
+                return lhs.albumTrackNumber < rhs.albumTrackNumber
+            }
+            return (lhs.title ?? "").localizedCaseInsensitiveCompare(rhs.title ?? "") == .orderedAscending
+        }
+
+        let collection = MPMediaItemCollection(items: sortedItems)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = sortedItems.first
+        musicPlayer.play()
+        updateNowPlayingState()
+    }
+
+    func play(artist: TopArtist) {
+        let query = MPMediaQuery.songs()
+
+        if artist.id != 0 {
+            let predicate = MPMediaPropertyPredicate(
+                value: NSNumber(value: artist.id),
+                forProperty: MPMediaItemPropertyArtistPersistentID
+            )
+            query.addFilterPredicate(predicate)
+        } else {
+            let predicate = MPMediaPropertyPredicate(
+                value: artist.name,
+                forProperty: MPMediaItemPropertyArtist,
+                comparisonType: .equalTo
+            )
+            query.addFilterPredicate(predicate)
+        }
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let collection = MPMediaItemCollection(items: items)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = items.first
+        musicPlayer.play()
         updateNowPlayingState()
     }
 
