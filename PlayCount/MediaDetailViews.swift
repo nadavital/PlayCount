@@ -1,12 +1,22 @@
 import SwiftUI
 import MediaPlayer
+import CoreImage.CIFilterBuiltins
 
 struct SongInfoView: View {
     let song: TopSong
+    @ObservedObject var manager: MediaLibraryManager
 
     private var averageListenLength: TimeInterval? {
         guard song.playCount > 0 else { return nil }
         return song.totalPlayDuration / Double(song.playCount)
+    }
+
+    private var album: TopAlbum? {
+        manager.album(withPersistentID: song.albumPersistentID)
+    }
+
+    private var artist: TopArtist? {
+        manager.artist(withPersistentID: song.artistPersistentID)
     }
 
     private var playbackStats: [MediaDetailStat] {
@@ -40,8 +50,8 @@ struct SongInfoView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                SongDetailHeader(song: song)
+            VStack(spacing: 32) {
+                SongDetailHeader(song: song, album: album, artist: artist, manager: manager)
 
                 MediaDetailSection(title: "Playback Stats") {
                     MediaDetailStatsGrid(stats: playbackStats)
@@ -49,9 +59,10 @@ struct SongInfoView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
-            .padding(.vertical, 28)
+            .padding(.vertical, 32)
         }
         .background(Color(.systemGroupedBackground))
+        .background(MediaDetailBackground(artwork: song.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(song.title)
     }
@@ -78,6 +89,10 @@ struct AlbumInfoView: View {
 
     private var trackedSongCount: Int {
         manager.songs(for: album).count
+    }
+
+    private var artist: TopArtist? {
+        manager.artist(withPersistentID: album.artistPersistentID)
     }
 
     private var playbackStats: [MediaDetailStat] {
@@ -112,8 +127,8 @@ struct AlbumInfoView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                AlbumDetailHeader(album: album)
+            VStack(spacing: 32) {
+                AlbumDetailHeader(album: album, artist: artist, manager: manager)
 
                 MediaDetailSection(title: "Playback Stats") {
                     MediaDetailStatsGrid(stats: playbackStats)
@@ -128,7 +143,7 @@ struct AlbumInfoView: View {
                         LazyVStack(spacing: 12) {
                             ForEach(albumSongs) { song in
                                 NavigationLink {
-                                    SongInfoView(song: song)
+                                    SongInfoView(song: song, manager: manager)
                                 } label: {
                                     SongRow(song: song, sortMetric: manager.sortMetric)
                                         .padding(.vertical, 4)
@@ -148,9 +163,10 @@ struct AlbumInfoView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
-            .padding(.vertical, 28)
+            .padding(.vertical, 32)
         }
         .background(Color(.systemGroupedBackground))
+        .background(MediaDetailBackground(artwork: album.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(album.title)
     }
@@ -234,7 +250,7 @@ struct ArtistInfoView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
+            VStack(spacing: 32) {
                 ArtistDetailHeader(artist: artist)
 
                 MediaDetailSection(title: "Playback Stats") {
@@ -250,7 +266,7 @@ struct ArtistInfoView: View {
                         LazyVStack(spacing: 12) {
                             ForEach(artistSongs) { song in
                                 NavigationLink {
-                                    SongInfoView(song: song)
+                                    SongInfoView(song: song, manager: manager)
                                 } label: {
                                     SongRow(song: song, sortMetric: manager.sortMetric)
                                         .padding(.vertical, 4)
@@ -297,9 +313,10 @@ struct ArtistInfoView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
-            .padding(.vertical, 28)
+            .padding(.vertical, 32)
         }
         .background(Color(.systemGroupedBackground))
+        .background(MediaDetailBackground(artwork: artist.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(artist.name)
     }
@@ -307,70 +324,57 @@ struct ArtistInfoView: View {
 
 private struct SongDetailHeader: View {
     let song: TopSong
+    let album: TopAlbum?
+    let artist: TopArtist?
+    @ObservedObject var manager: MediaLibraryManager
 
     var body: some View {
-        MediaDetailHero(artwork: song.artwork) {
-            VStack(alignment: .leading, spacing: 24) {
-                ViewThatFits(in: .horizontal) {
-                    heroContent
-                    heroContentVertical
-                }
-
-                HStack(spacing: 12) {
-                    HeroMetricBadge(text: "\(song.playCount.detailFormatted) plays")
-                    HeroMetricBadge(text: song.totalPlayDuration.formattedPlayback)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var heroContent: some View {
-        HStack(alignment: .bottom, spacing: 20) {
+        MediaDetailHeaderLayout {
             ArtworkView(
                 artwork: song.artwork,
-                size: CGSize(width: 170, height: 170),
-                cornerRadius: 28
+                size: CGSize(width: 220, height: 220),
+                cornerRadius: 26
             )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(song.title)
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(song.artist)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                    Text(song.albumTitle)
-                        .font(.subheadline)
-                        .foregroundStyle(Color.white.opacity(0.72))
-                }
-            }
-        }
-    }
-
-    private var heroContentVertical: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ArtworkView(
-                artwork: song.artwork,
-                size: CGSize(width: 150, height: 150),
-                cornerRadius: 28
-            )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            VStack(alignment: .leading, spacing: 8) {
+            .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 12)
+        } content: {
+            VStack(alignment: .leading, spacing: 20) {
                 Text(song.title)
                     .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
                     .lineLimit(3)
-                Text(song.artist)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.85))
-                Text(song.albumTitle)
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.72))
+
+                relatedDestinations
+
+                HStack(spacing: 12) {
+                    HeaderMetricBadge(text: "\(song.playCount.detailFormatted) plays")
+                    HeaderMetricBadge(text: song.totalPlayDuration.formattedPlayback)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var relatedDestinations: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let album {
+                NavigationLink {
+                    AlbumInfoView(album: album, manager: manager)
+                } label: {
+                    DetailDestinationRow(icon: "rectangle.stack.fill", title: album.title, caption: "Album")
+                }
+                .buttonStyle(.plain)
+            } else if !song.albumTitle.isEmpty {
+                DetailInfoPlaceholder(icon: "rectangle.stack.fill", title: song.albumTitle, caption: "Album")
+            }
+
+            if let artist {
+                NavigationLink {
+                    ArtistInfoView(artist: artist, manager: manager)
+                } label: {
+                    DetailDestinationRow(icon: "person.crop.circle", title: artist.name, caption: "Artist")
+                }
+                .buttonStyle(.plain)
+            } else if !song.artist.isEmpty {
+                DetailInfoPlaceholder(icon: "person.crop.circle", title: song.artist, caption: "Artist")
             }
         }
     }
@@ -378,62 +382,38 @@ private struct SongDetailHeader: View {
 
 private struct AlbumDetailHeader: View {
     let album: TopAlbum
+    let artist: TopArtist?
+    @ObservedObject var manager: MediaLibraryManager
 
     var body: some View {
-        MediaDetailHero(artwork: album.artwork) {
-            VStack(alignment: .leading, spacing: 24) {
-                ViewThatFits(in: .horizontal) {
-                    heroContent
-                    heroContentVertical
+        MediaDetailHeaderLayout {
+            ArtworkView(
+                artwork: album.artwork,
+                size: CGSize(width: 220, height: 220),
+                cornerRadius: 26
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 12)
+        } content: {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(album.title)
+                    .font(.system(size: 32, weight: .bold))
+                    .lineLimit(3)
+
+                if let artist {
+                    NavigationLink {
+                        ArtistInfoView(artist: artist, manager: manager)
+                    } label: {
+                        DetailDestinationRow(icon: "person.crop.circle", title: artist.name, caption: "Artist")
+                    }
+                    .buttonStyle(.plain)
+                } else if !album.artist.isEmpty {
+                    DetailInfoPlaceholder(icon: "person.crop.circle", title: album.artist, caption: "Artist")
                 }
 
                 HStack(spacing: 12) {
-                    HeroMetricBadge(text: "\(album.playCount.detailFormatted) plays")
-                    HeroMetricBadge(text: album.totalPlayDuration.formattedPlayback)
+                    HeaderMetricBadge(text: "\(album.playCount.detailFormatted) plays")
+                    HeaderMetricBadge(text: album.totalPlayDuration.formattedPlayback)
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var heroContent: some View {
-        HStack(alignment: .bottom, spacing: 20) {
-            ArtworkView(
-                artwork: album.artwork,
-                size: CGSize(width: 170, height: 170),
-                cornerRadius: 28
-            )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(album.title)
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                Text(album.artist)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.85))
-            }
-        }
-    }
-
-    private var heroContentVertical: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ArtworkView(
-                artwork: album.artwork,
-                size: CGSize(width: 150, height: 150),
-                cornerRadius: 28
-            )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(album.title)
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                Text(album.artist)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.85))
             }
         }
     }
@@ -443,53 +423,24 @@ private struct ArtistDetailHeader: View {
     let artist: TopArtist
 
     var body: some View {
-        MediaDetailHero(artwork: artist.artwork) {
-            VStack(alignment: .leading, spacing: 24) {
-                ViewThatFits(in: .horizontal) {
-                    heroContent
-                    heroContentVertical
-                }
+        MediaDetailHeaderLayout {
+            ArtistArtworkView(
+                artwork: artist.artwork,
+                name: artist.name,
+                diameter: 220
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 12)
+        } content: {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(artist.name)
+                    .font(.system(size: 32, weight: .bold))
+                    .lineLimit(3)
 
                 HStack(spacing: 12) {
-                    HeroMetricBadge(text: "\(artist.playCount.detailFormatted) plays")
-                    HeroMetricBadge(text: artist.totalPlayDuration.formattedPlayback)
+                    HeaderMetricBadge(text: "\(artist.playCount.detailFormatted) plays")
+                    HeaderMetricBadge(text: artist.totalPlayDuration.formattedPlayback)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var heroContent: some View {
-        HStack(alignment: .center, spacing: 20) {
-            ArtistArtworkView(
-                artwork: artist.artwork,
-                name: artist.name,
-                diameter: 160
-            )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(artist.name)
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-            }
-        }
-    }
-
-    private var heroContentVertical: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ArtistArtworkView(
-                artwork: artist.artwork,
-                name: artist.name,
-                diameter: 140
-            )
-            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
-
-            Text(artist.name)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(3)
         }
     }
 }
@@ -515,81 +466,158 @@ private struct MediaDetailSection<Content: View>: View {
     }
 }
 
-private struct MediaDetailHero<Content: View>: View {
-    let artwork: MPMediaItemArtwork?
-    let content: Content
+private struct MediaDetailHeaderLayout<Artwork: View, Content: View>: View {
+    private let artwork: () -> Artwork
+    private let content: () -> Content
 
-    init(artwork: MPMediaItemArtwork?, @ViewBuilder content: () -> Content) {
+    init(@ViewBuilder artwork: @escaping () -> Artwork, @ViewBuilder content: @escaping () -> Content) {
         self.artwork = artwork
-        self.content = content()
+        self.content = content
     }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            MediaDetailHeroBackground(artwork: artwork)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: 28) {
+                artwork()
 
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.55),
-                    Color.black.opacity(0.08)
-                ],
-                startPoint: .bottom,
-                endPoint: .top
-            )
-            .allowsHitTesting(false)
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-            content
-                .padding(24)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 300)
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-    }
-}
-
-private struct MediaDetailHeroBackground: View {
-    let artwork: MPMediaItemArtwork?
-
-    var body: some View {
-        Group {
-            if let artwork, let image = artwork.image(at: CGSize(width: 900, height: 900)) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 70)
-                    .scaleEffect(1.2)
-                    .saturation(1.05)
-                    .brightness(-0.15)
-            } else {
-                LinearGradient(
-                    colors: [
-                        Color.accentColor.opacity(0.9),
-                        Color.accentColor.opacity(0.5)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+            VStack(alignment: .leading, spacing: 24) {
+                artwork()
+                content()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
     }
 }
 
-private struct HeroMetricBadge: View {
+private struct DetailDestinationRow: View {
+    let icon: String
+    let title: String
+    let caption: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.secondarySystemBackground).opacity(0.95))
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct DetailInfoPlaceholder: View {
+    let icon: String
+    let title: String
+    let caption: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(caption.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.08))
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct HeaderMetricBadge: View {
     let text: String
 
     var body: some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
             .monospacedDigit()
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(
-                Capsule()
-                    .fill(Color.white.opacity(0.22))
+                Capsule(style: .continuous)
+                    .fill(Color(.secondarySystemBackground).opacity(0.9))
             )
+    }
+}
+
+private struct MediaDetailBackground: View {
+    let artwork: MPMediaItemArtwork?
+
+    var body: some View {
+        ZStack {
+            Color(.systemGroupedBackground)
+
+            if let gradientColors = gradientColors {
+                LinearGradient(
+                    colors: gradientColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .opacity(0.9)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private var gradientColors: [Color]? {
+        guard let components = artwork?.averageColorComponents() else {
+            return nil
+        }
+
+        let start = lightenColor(components: components, amount: 0.4)
+        let end = lightenColor(components: components, amount: 0.75)
+
+        return [start.opacity(0.8), end.opacity(0.65)]
+    }
+
+    private func lightenColor(components: (Double, Double, Double), amount: Double) -> Color {
+        Color(
+            red: lightenComponent(components.0, amount: amount),
+            green: lightenComponent(components.1, amount: amount),
+            blue: lightenComponent(components.2, amount: amount)
+        )
+    }
+
+    private func lightenComponent(_ component: Double, amount: Double) -> Double {
+        component + (1 - component) * amount
     }
 }
 
@@ -612,40 +640,36 @@ private struct MediaDetailStat: Identifiable {
 private struct MediaDetailStatsGrid: View {
     let stats: [MediaDetailStat]
 
-    private var columns: [GridItem] {
-        stats.count == 1 ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())]
-    }
-
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)], spacing: 12) {
             ForEach(stats) { stat in
-                MediaDetailStatTile(stat: stat)
+                MediaDetailStatCard(stat: stat)
             }
         }
     }
 }
 
-private struct MediaDetailStatTile: View {
+private struct MediaDetailStatCard: View {
     let stat: MediaDetailStat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             Image(systemName: stat.icon)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .padding(12)
+                .padding(10)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color.accentColor.opacity(0.12))
                 )
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(stat.title.uppercased())
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 Text(stat.value)
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
+                Text(stat.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 if let caption = stat.caption {
                     Text(caption)
                         .font(.footnote)
@@ -654,10 +678,53 @@ private struct MediaDetailStatTile: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
+        .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(Color(.secondarySystemBackground).opacity(0.95))
+        )
+    }
+}
+
+private enum MediaDetailColorCalculator {
+    static let context = CIContext(options: [.workingColorSpace: NSNull()])
+}
+
+private extension MPMediaItemArtwork {
+    func averageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
+        let targetSize = CGSize(width: maxDimension, height: maxDimension)
+
+        guard let image = image(at: targetSize),
+              let inputImage = CIImage(image: image) else {
+            return nil
+        }
+
+        let filter = CIFilter.areaAverage()
+        filter.inputImage = inputImage
+        filter.extent = inputImage.extent
+
+        guard let outputImage = filter.outputImage else {
+            return nil
+        }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        MediaDetailColorCalculator.context.render(
+            outputImage,
+            toBitmap: &bitmap,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: nil
+        )
+
+        guard bitmap[3] > 0 else {
+            return nil
+        }
+
+        return (
+            Double(bitmap[0]) / 255,
+            Double(bitmap[1]) / 255,
+            Double(bitmap[2]) / 255
         )
     }
 }
