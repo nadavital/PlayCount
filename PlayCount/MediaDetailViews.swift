@@ -125,14 +125,13 @@ struct AlbumInfoView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
-                        LazyVStack(spacing: 16) {
+                        LazyVStack(spacing: 12) {
                             ForEach(albumSongs) { song in
                                 NavigationLink {
                                     SongInfoView(song: song)
                                 } label: {
-                                    MediaDetailListCard {
-                                        SongRow(song: song, sortMetric: manager.sortMetric)
-                                    }
+                                    SongRow(song: song, sortMetric: manager.sortMetric)
+                                        .padding(.vertical, 4)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -248,14 +247,13 @@ struct ArtistInfoView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
-                        LazyVStack(spacing: 16) {
+                        LazyVStack(spacing: 12) {
                             ForEach(artistSongs) { song in
                                 NavigationLink {
                                     SongInfoView(song: song)
                                 } label: {
-                                    MediaDetailListCard {
-                                        SongRow(song: song, sortMetric: manager.sortMetric)
-                                    }
+                                    SongRow(song: song, sortMetric: manager.sortMetric)
+                                        .padding(.vertical, 4)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -276,14 +274,13 @@ struct ArtistInfoView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
-                        LazyVStack(spacing: 16) {
+                        LazyVStack(spacing: 12) {
                             ForEach(artistAlbums) { album in
                                 NavigationLink {
                                     AlbumInfoView(album: album, manager: manager)
                                 } label: {
-                                    MediaDetailListCard {
-                                        AlbumRow(album: album, sortMetric: manager.sortMetric)
-                                    }
+                                    AlbumRow(album: album, sortMetric: manager.sortMetric)
+                                        .padding(.vertical, 4)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -335,7 +332,7 @@ private struct SongDetailHeader: View {
                 size: CGSize(width: 170, height: 170),
                 cornerRadius: 28
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(song.title)
@@ -361,7 +358,7 @@ private struct SongDetailHeader: View {
                 size: CGSize(width: 150, height: 150),
                 cornerRadius: 28
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(song.title)
@@ -406,7 +403,7 @@ private struct AlbumDetailHeader: View {
                 size: CGSize(width: 170, height: 170),
                 cornerRadius: 28
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(album.title)
@@ -427,7 +424,7 @@ private struct AlbumDetailHeader: View {
                 size: CGSize(width: 150, height: 150),
                 cornerRadius: 28
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(album.title)
@@ -469,7 +466,7 @@ private struct ArtistDetailHeader: View {
                 name: artist.name,
                 diameter: 160
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(artist.name)
@@ -487,7 +484,7 @@ private struct ArtistDetailHeader: View {
                 name: artist.name,
                 diameter: 140
             )
-            .shadow(color: Color.black.opacity(0.35), radius: 26, x: 0, y: 18)
+            .shadow(color: Color.black.opacity(0.25), radius: 22, x: 0, y: 16)
 
             Text(artist.name)
                 .font(.system(size: 32, weight: .bold))
@@ -507,7 +504,7 @@ private struct MediaDetailSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -515,16 +512,6 @@ private struct MediaDetailSection<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.04))
-        )
-        .shadow(color: Color.black.opacity(0.05), radius: 20, x: 0, y: 12)
     }
 }
 
@@ -543,8 +530,7 @@ private struct MediaDetailHero<Content: View>: View {
 
             LinearGradient(
                 colors: [
-                    Color.black.opacity(0.7),
-                    Color.black.opacity(0.35),
+                    Color.black.opacity(0.55),
                     Color.black.opacity(0.08)
                 ],
                 startPoint: .bottom,
@@ -553,15 +539,11 @@ private struct MediaDetailHero<Content: View>: View {
             .allowsHitTesting(false)
 
             content
+                .padding(24)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 320)
-        .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 32, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08))
-        )
-        .shadow(color: Color.black.opacity(0.18), radius: 26, x: 0, y: 18)
+        .frame(height: 300)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 }
 
@@ -574,8 +556,10 @@ private struct MediaDetailHeroBackground: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-                    .saturation(1.15)
-                    .brightness(-0.08)
+                    .blur(radius: 70)
+                    .scaleEffect(1.2)
+                    .saturation(1.05)
+                    .brightness(-0.15)
             } else {
                 LinearGradient(
                     colors: [
@@ -604,30 +588,7 @@ private struct HeroMetricBadge: View {
             .padding(.vertical, 8)
             .background(
                 Capsule()
-                    .fill(Color.white.opacity(0.2))
-            )
-    }
-}
-
-private struct MediaDetailListCard<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(.systemBackground).opacity(0.92))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.04))
+                    .fill(Color.white.opacity(0.22))
             )
     }
 }
@@ -695,12 +656,8 @@ private struct MediaDetailStatTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(.systemBackground).opacity(0.94))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.05))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
         )
     }
 }
