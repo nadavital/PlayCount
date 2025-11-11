@@ -120,7 +120,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
     private var notificationObservers: [NSObjectProtocol] = []
     private var progressTimer: AnyCancellable?
 
-    init(fetchLimit: Int = 20) {
+    init(fetchLimit: Int = 0) {
         self.fetchLimit = fetchLimit
         authorizationStatus = MPMediaLibrary.authorizationStatus()
 
@@ -195,9 +195,16 @@ final class MediaLibraryManager: ObservableObject, Sendable {
     }
 
     private func applySortAndLimit() {
-        topSongs = Array(sortSongs(librarySongs).prefix(fetchLimit))
-        topAlbums = Array(sortAlbums(libraryAlbums).prefix(fetchLimit))
-        topArtists = Array(sortArtists(libraryArtists).prefix(fetchLimit))
+        if fetchLimit > 0 {
+            topSongs = Array(sortSongs(librarySongs).prefix(fetchLimit))
+            topAlbums = Array(sortAlbums(libraryAlbums).prefix(fetchLimit))
+            topArtists = Array(sortArtists(libraryArtists).prefix(fetchLimit))
+        } else {
+            // No limit - show all
+            topSongs = sortSongs(librarySongs)
+            topAlbums = sortAlbums(libraryAlbums)
+            topArtists = sortArtists(libraryArtists)
+        }
     }
 
     func songs(for album: TopAlbum, limit: Int? = nil) -> [TopSong] {
@@ -260,6 +267,48 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         return sorted
     }
 
+    func rank(of song: TopSong) -> Int? {
+        topSongs.firstIndex(where: { $0.id == song.id }).map { $0 + 1 }
+    }
+
+    func rank(of album: TopAlbum) -> Int? {
+        topAlbums.firstIndex(where: { $0.id == album.id }).map { $0 + 1 }
+    }
+
+    func rank(of artist: TopArtist) -> Int? {
+        topArtists.firstIndex(where: { $0.id == artist.id }).map { $0 + 1 }
+    }
+
+    func playCountRank(of song: TopSong) -> Int? {
+        let sorted = librarySongs.sorted { $0.playCount > $1.playCount }
+        return sorted.firstIndex(where: { $0.id == song.id }).map { $0 + 1 }
+    }
+
+    func listenTimeRank(of song: TopSong) -> Int? {
+        let sorted = librarySongs.sorted { $0.totalPlayDuration > $1.totalPlayDuration }
+        return sorted.firstIndex(where: { $0.id == song.id }).map { $0 + 1 }
+    }
+
+    func playCountRank(of album: TopAlbum) -> Int? {
+        let sorted = libraryAlbums.sorted { $0.playCount > $1.playCount }
+        return sorted.firstIndex(where: { $0.id == album.id }).map { $0 + 1 }
+    }
+
+    func listenTimeRank(of album: TopAlbum) -> Int? {
+        let sorted = libraryAlbums.sorted { $0.totalPlayDuration > $1.totalPlayDuration }
+        return sorted.firstIndex(where: { $0.id == album.id }).map { $0 + 1 }
+    }
+
+    func playCountRank(of artist: TopArtist) -> Int? {
+        let sorted = libraryArtists.sorted { $0.playCount > $1.playCount }
+        return sorted.firstIndex(where: { $0.id == artist.id }).map { $0 + 1 }
+    }
+
+    func listenTimeRank(of artist: TopArtist) -> Int? {
+        let sorted = libraryArtists.sorted { $0.totalPlayDuration > $1.totalPlayDuration }
+        return sorted.firstIndex(where: { $0.id == artist.id }).map { $0 + 1 }
+    }
+
     func album(withPersistentID id: UInt64) -> TopAlbum? {
         if let match = topAlbums.first(where: { $0.id == id }) {
             return match
@@ -287,6 +336,87 @@ final class MediaLibraryManager: ObservableObject, Sendable {
 
     func skipForward() {
         musicPlayer.skipToNextItem()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.updateNowPlayingState()
+        }
+    }
+
+    func play(song: TopSong) {
+        let predicate = MPMediaPropertyPredicate(
+            value: NSNumber(value: song.id),
+            forProperty: MPMediaItemPropertyPersistentID
+        )
+
+        let query = MPMediaQuery.songs()
+        query.addFilterPredicate(predicate)
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let collection = MPMediaItemCollection(items: items)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = items.first
+        musicPlayer.play()
+        updateNowPlayingState()
+    }
+
+    func play(album: TopAlbum) {
+        let predicate = MPMediaPropertyPredicate(
+            value: NSNumber(value: album.id),
+            forProperty: MPMediaItemPropertyAlbumPersistentID
+        )
+
+        let query = MPMediaQuery.songs()
+        query.addFilterPredicate(predicate)
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let sortedItems = items.sorted { lhs, rhs in
+            if lhs.discNumber != rhs.discNumber {
+                return lhs.discNumber < rhs.discNumber
+            }
+            if lhs.albumTrackNumber != rhs.albumTrackNumber {
+                return lhs.albumTrackNumber < rhs.albumTrackNumber
+            }
+            return (lhs.title ?? "").localizedCaseInsensitiveCompare(rhs.title ?? "") == .orderedAscending
+        }
+
+        let collection = MPMediaItemCollection(items: sortedItems)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = sortedItems.first
+        musicPlayer.play()
+        updateNowPlayingState()
+    }
+
+    func play(artist: TopArtist) {
+        let query = MPMediaQuery.songs()
+
+        if artist.id != 0 {
+            let predicate = MPMediaPropertyPredicate(
+                value: NSNumber(value: artist.id),
+                forProperty: MPMediaItemPropertyArtistPersistentID
+            )
+            query.addFilterPredicate(predicate)
+        } else {
+            let predicate = MPMediaPropertyPredicate(
+                value: artist.name,
+                forProperty: MPMediaItemPropertyArtist,
+                comparisonType: .equalTo
+            )
+            query.addFilterPredicate(predicate)
+        }
+
+        guard let items = query.items, !items.isEmpty else {
+            return
+        }
+
+        let collection = MPMediaItemCollection(items: items)
+        musicPlayer.setQueue(with: collection)
+        musicPlayer.nowPlayingItem = items.first
+        musicPlayer.play()
         updateNowPlayingState()
     }
 

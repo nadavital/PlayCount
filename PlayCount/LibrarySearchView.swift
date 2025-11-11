@@ -123,7 +123,11 @@ struct LibrarySearchView: View {
             )
         } else {
             ForEach(filteredSongs) { song in
-                SongRow(song: song, sortMetric: manager.sortMetric)
+                NavigationLink {
+                    SongInfoView(song: song, manager: manager)
+                } label: {
+                    SongRow(song: song, sortMetric: manager.sortMetric)
+                }
             }
         }
     }
@@ -138,7 +142,11 @@ struct LibrarySearchView: View {
             )
         } else {
             ForEach(filteredAlbums) { album in
-                AlbumRow(album: album, sortMetric: manager.sortMetric)
+                NavigationLink {
+                    AlbumInfoView(album: album, manager: manager)
+                } label: {
+                    AlbumRow(album: album, sortMetric: manager.sortMetric)
+                }
             }
         }
     }
@@ -153,7 +161,11 @@ struct LibrarySearchView: View {
             )
         } else {
             ForEach(filteredArtists) { artist in
-                ArtistRow(artist: artist, sortMetric: manager.sortMetric)
+                NavigationLink {
+                    ArtistInfoView(artist: artist, manager: manager)
+                } label: {
+                    ArtistRow(artist: artist, sortMetric: manager.sortMetric)
+                }
             }
         }
     }

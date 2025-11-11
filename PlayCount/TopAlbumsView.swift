@@ -19,11 +19,11 @@ struct TopAlbumsView: View {
                     )
                 }
             } else {
-                ForEach(albums) { album in
+                ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
                     NavigationLink {
                         AlbumInfoView(album: album, manager: manager)
                     } label: {
-                        AlbumRow(album: album, sortMetric: sortMetric)
+                        AlbumRow(album: album, sortMetric: sortMetric, rank: index + 1)
                     }
                 }
             }
@@ -36,9 +36,30 @@ struct TopAlbumsView: View {
 struct AlbumRow: View {
     let album: TopAlbum
     let sortMetric: MediaLibraryManager.SortMetric
+    let rank: Int?
+
+    init(album: TopAlbum, sortMetric: MediaLibraryManager.SortMetric, rank: Int? = nil) {
+        self.album = album
+        self.sortMetric = sortMetric
+        self.rank = rank
+    }
 
     var body: some View {
         HStack(spacing: 12) {
+            if let rank = rank {
+                if rank <= 3 {
+                    Text(medalForRank(rank))
+                        .font(.system(size: 20))
+                        .frame(minWidth: 24, alignment: .trailing)
+                } else {
+                    Text("\(rank)")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 24, alignment: .trailing)
+                        .monospacedDigit()
+                }
+            }
+
             ArtworkView(artwork: album.artwork)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -59,5 +80,14 @@ struct AlbumRow: View {
             MetricBadge(text: sortMetric.badgeText(playCount: album.playCount, duration: album.totalPlayDuration))
         }
         .padding(.vertical, 4)
+    }
+
+    private func medalForRank(_ rank: Int) -> String {
+        switch rank {
+        case 1: return "🥇"
+        case 2: return "🥈"
+        case 3: return "🥉"
+        default: return "\(rank)"
+        }
     }
 }
