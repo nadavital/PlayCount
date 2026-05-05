@@ -290,7 +290,8 @@ private struct SongDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 28) {
+        MediaDetailGlassGroup {
+            VStack(spacing: 28) {
             // Hero Artwork
             ArtworkView(
                 artwork: song.artwork,
@@ -329,24 +330,7 @@ private struct SongDetailHeader: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.2),
-                                Color.white.opacity(0.05)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
+            .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0.1)
 
             // Play Count Metrics - Prominent Display
             HStack(spacing: 12) {
@@ -361,6 +345,7 @@ private struct SongDetailHeader: View {
                     subtitle: manager.listenTimeRank(of: song).map { "Ranked #\($0)" }
                 )
             }
+        }
         }
     }
 
@@ -451,7 +436,8 @@ private struct AlbumDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 28) {
+        MediaDetailGlassGroup {
+            VStack(spacing: 28) {
             // Hero Artwork
             ArtworkView(
                 artwork: album.artwork,
@@ -487,24 +473,7 @@ private struct AlbumDetailHeader: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.2),
-                                Color.white.opacity(0.05)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
+            .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0.1)
 
             // Play Count Metrics - Prominent Display
             HStack(spacing: 12) {
@@ -519,6 +488,7 @@ private struct AlbumDetailHeader: View {
                     subtitle: manager.listenTimeRank(of: album).map { "Ranked #\($0)" }
                 )
             }
+        }
         }
     }
 
@@ -584,7 +554,8 @@ private struct ArtistDetailHeader: View {
     }
 
     var body: some View {
-        VStack(spacing: 28) {
+        MediaDetailGlassGroup {
+            VStack(spacing: 28) {
             // Hero Artist Artwork (Circular)
             ArtistArtworkView(
                 artwork: artist.artwork,
@@ -616,24 +587,7 @@ private struct ArtistDetailHeader: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.2),
-                                Color.white.opacity(0.05)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
+            .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0.1)
 
             // Play Count Metrics - Prominent Display
             HStack(spacing: 12) {
@@ -648,6 +602,7 @@ private struct ArtistDetailHeader: View {
                     subtitle: manager.listenTimeRank(of: artist).map { "Ranked #\($0)" }
                 )
             }
+        }
         }
     }
 
@@ -696,24 +651,21 @@ private struct MediaDetailMetric: View {
         .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.2),
-                            Color.white.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-        )
+        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0.08)
+    }
+}
+
+private struct MediaDetailGlassGroup<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 18) {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -948,4 +900,3 @@ private extension TimeInterval {
         return formatter
     }()
 }
-

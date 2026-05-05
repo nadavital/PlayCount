@@ -47,17 +47,7 @@ struct AlbumRow: View {
     var body: some View {
         HStack(spacing: 12) {
             if let rank = rank {
-                if rank <= 3 {
-                    Text(medalForRank(rank))
-                        .font(.system(size: 20))
-                        .frame(minWidth: 24, alignment: .trailing)
-                } else {
-                    Text("\(rank)")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 24, alignment: .trailing)
-                        .monospacedDigit()
-                }
+                RankBadgeView(rank: rank)
             }
 
             ArtworkView(artwork: album.artwork)
@@ -80,14 +70,5 @@ struct AlbumRow: View {
             MetricBadge(text: sortMetric.badgeText(playCount: album.playCount, duration: album.totalPlayDuration))
         }
         .padding(.vertical, 4)
-    }
-
-    private func medalForRank(_ rank: Int) -> String {
-        switch rank {
-        case 1: return "🥇"
-        case 2: return "🥈"
-        case 3: return "🥉"
-        default: return "\(rank)"
-        }
     }
 }

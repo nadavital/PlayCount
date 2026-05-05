@@ -213,7 +213,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             let songs = Self.fetchTopSongs()
             let albums = Self.fetchTopAlbums()
             let artists = Self.fetchTopArtists()
-            let recap = snapshotStore.record(songs: songs, at: Date(), reason: reason)
+            let recap = snapshotStore.record(songs: songs, albums: albums, artists: artists, at: Date(), reason: reason)
             return (songs, albums, artists, recap)
         }.value
 
@@ -259,7 +259,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             let songs = Self.fetchTopSongs()
             let albums = Self.fetchTopAlbums()
             let artists = Self.fetchTopArtists()
-            let recap = self.snapshotStore.record(songs: songs, at: Date(), reason: snapshotReason)
+            let recap = self.snapshotStore.record(songs: songs, albums: albums, artists: artists, at: Date(), reason: snapshotReason)
 
             DispatchQueue.main.async {
                 self.librarySongs = songs

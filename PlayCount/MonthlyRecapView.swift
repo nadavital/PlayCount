@@ -14,16 +14,116 @@ struct MonthlyRecapView: View {
     }
 
     private var artworkHighlights: [MPMediaItemArtwork] {
-        let recapArtwork = recap.topSongs.compactMap(\.artwork)
+        let recapArtwork = uniqueArtwork(
+            from: recap.topSongs,
+            key: { "\($0.albumTitle)|\($0.artist)" },
+            artwork: \.artwork
+        )
         if !recapArtwork.isEmpty {
-            return Array(recapArtwork.prefix(4))
+            return recapArtwork
         }
 
-        return Array(manager.topSongs.compactMap(\.artwork).prefix(4))
+        return uniqueArtwork(
+            from: manager.topSongs,
+            key: { song in
+                if song.albumPersistentID != 0 {
+                    return String(song.albumPersistentID)
+                }
+                return "\(song.albumTitle)|\(song.artist)"
+            },
+            artwork: \.artwork
+        )
     }
 
     private var heroArtwork: MPMediaItemArtwork? {
         artworkHighlights.first
+    }
+
+    private func resolvedArtwork(for song: MonthlyRecap.RankedSong) -> MPMediaItemArtwork? {
+        song.artwork
+            ?? allLibrarySongs.first(where: { $0.id == song.id })?.artwork
+            ?? allLibrarySongs.first(where: {
+                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
+                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
+            })?.artwork
+            ?? albumArtwork(title: song.albumTitle, artist: song.artist)
+    }
+
+    private func resolvedArtwork(for song: MonthlyRecap.MovementSong) -> MPMediaItemArtwork? {
+        song.artwork
+            ?? allLibrarySongs.first(where: { $0.id == song.id })?.artwork
+            ?? allLibrarySongs.first(where: {
+                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
+                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
+            })?.artwork
+    }
+
+    private func resolvedArtwork(for group: MonthlyRecap.RankedGroup, systemImage: String) -> MPMediaItemArtwork? {
+        if let artwork = group.artwork {
+            return artwork
+        }
+
+        if systemImage == "person.fill" {
+            return artistArtwork(name: group.title)
+        }
+
+        return albumArtwork(title: group.title, artist: group.subtitle)
+    }
+
+    private var allLibrarySongs: [TopSong] {
+        manager.librarySongs + manager.topSongs
+    }
+
+    private var allLibraryAlbums: [TopAlbum] {
+        manager.libraryAlbums + manager.topAlbums
+    }
+
+    private var allLibraryArtists: [TopArtist] {
+        manager.libraryArtists + manager.topArtists
+    }
+
+    private func albumArtwork(title: String, artist: String) -> MPMediaItemArtwork? {
+        allLibraryAlbums.first(where: {
+            $0.title.normalizedRecapArtworkKey == title.normalizedRecapArtworkKey &&
+                $0.artist.normalizedRecapArtworkKey == artist.normalizedRecapArtworkKey
+        })?.artwork
+            ?? allLibrarySongs.first(where: {
+                $0.albumTitle.normalizedRecapArtworkKey == title.normalizedRecapArtworkKey &&
+                    $0.artist.normalizedRecapArtworkKey == artist.normalizedRecapArtworkKey
+            })?.artwork
+    }
+
+    private func artistArtwork(name: String) -> MPMediaItemArtwork? {
+        allLibraryArtists.first(where: {
+            $0.name.normalizedRecapArtworkKey == name.normalizedRecapArtworkKey
+        })?.artwork
+            ?? allLibrarySongs.first(where: {
+                $0.artist.normalizedRecapArtworkKey == name.normalizedRecapArtworkKey
+            })?.artwork
+    }
+
+    private func uniqueArtwork<Item>(
+        from items: [Item],
+        key: (Item) -> String,
+        artwork: KeyPath<Item, MPMediaItemArtwork?>
+    ) -> [MPMediaItemArtwork] {
+        var seen: Set<String> = []
+        var result: [MPMediaItemArtwork] = []
+
+        for item in items {
+            guard let itemArtwork = item[keyPath: artwork] else { continue }
+            let itemKey = key(item)
+            guard !seen.contains(itemKey) else { continue }
+
+            seen.insert(itemKey)
+            result.append(itemArtwork)
+
+            if result.count == 4 {
+                break
+            }
+        }
+
+        return result
     }
 
     var body: some View {
@@ -36,18 +136,21 @@ struct MonthlyRecapView: View {
                 .frame(maxWidth: .infinity, minHeight: 280)
             } else {
                 VStack(alignment: .leading, spacing: 22) {
-                    RecapHeroCard(
+                    RecapHeroPoster(
                         monthTitle: monthTitle,
-                        subtitle: heroSubtitle,
                         recap: recap,
-                        artworks: artworkHighlights
+                        artworks: artworkHighlights,
+                        leadingSong: recap.topSongs.first,
+                        leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:))
                     )
 
                     if recap.hasActivity {
-                        if let leadingSong = recap.topSongs.first {
-                            RecapSpotlight(song: leadingSong)
+                        if !recap.biggestGainers.isEmpty {
+                            biggestGainersSection
                         }
-
+                        if !recap.topNewSongs.isEmpty {
+                            topNewSongsSection
+                        }
                         if !recap.topSongs.isEmpty {
                             topSongsSection
                         }
@@ -87,25 +190,71 @@ struct MonthlyRecapView: View {
     }
 
     private var topSongsSection: some View {
-        RecapRankingSection(title: "Top Songs") {
-            ForEach(Array(recap.topSongs.prefix(8).enumerated()), id: \.element.id) { index, song in
-                RecapSongRow(rank: index + 1, song: song)
+        RecapRankingSection(
+            title: "Top Songs",
+            totalCount: recap.topSongs.count,
+            visibleCount: 5
+        ) {
+            RecapFullSongsView(title: "Top Songs", songs: recap.topSongs)
+        } content: {
+            ForEach(Array(recap.topSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
+                RecapSongRow(rank: index + 1, song: song, artwork: resolvedArtwork(for: song))
+            }
+        }
+    }
+
+    private var biggestGainersSection: some View {
+        RecapRankingSection(
+            title: "Biggest Gainers",
+            totalCount: recap.biggestGainers.count,
+            visibleCount: 5
+        ) {
+            RecapFullMovementView(title: "Biggest Gainers", songs: recap.biggestGainers)
+        } content: {
+            ForEach(recap.biggestGainers.prefix(5)) { song in
+                RecapMovementRow(song: song, artwork: resolvedArtwork(for: song))
+            }
+        }
+    }
+
+    private var topNewSongsSection: some View {
+        RecapRankingSection(
+            title: "Top New Songs",
+            totalCount: recap.topNewSongs.count,
+            visibleCount: 5
+        ) {
+            RecapFullSongsView(title: "Top New Songs", songs: recap.topNewSongs)
+        } content: {
+            ForEach(Array(recap.topNewSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
+                RecapSongRow(rank: index + 1, song: song, artwork: resolvedArtwork(for: song))
             }
         }
     }
 
     private var topAlbumsSection: some View {
-        RecapRankingSection(title: "Top Albums") {
-            ForEach(Array(recap.topAlbums.prefix(6).enumerated()), id: \.element.id) { index, album in
-                RecapGroupRow(rank: index + 1, group: album, systemImage: "rectangle.stack.fill")
+        RecapRankingSection(
+            title: "Top Albums",
+            totalCount: recap.topAlbums.count,
+            visibleCount: 5
+        ) {
+            RecapFullGroupsView(title: "Top Albums", groups: recap.topAlbums, systemImage: "rectangle.stack.fill")
+        } content: {
+            ForEach(Array(recap.topAlbums.prefix(5).enumerated()), id: \.element.id) { index, album in
+                RecapGroupRow(rank: index + 1, group: album, systemImage: "rectangle.stack.fill", artwork: resolvedArtwork(for: album, systemImage: "rectangle.stack.fill"))
             }
         }
     }
 
     private var topArtistsSection: some View {
-        RecapRankingSection(title: "Top Artists") {
-            ForEach(Array(recap.topArtists.prefix(6).enumerated()), id: \.element.id) { index, artist in
-                RecapGroupRow(rank: index + 1, group: artist, systemImage: "person.fill")
+        RecapRankingSection(
+            title: "Top Artists",
+            totalCount: recap.topArtists.count,
+            visibleCount: 5
+        ) {
+            RecapFullGroupsView(title: "Top Artists", groups: recap.topArtists, systemImage: "person.fill")
+        } content: {
+            ForEach(Array(recap.topArtists.prefix(5).enumerated()), id: \.element.id) { index, artist in
+                RecapGroupRow(rank: index + 1, group: artist, systemImage: "person.fill", artwork: resolvedArtwork(for: artist, systemImage: "person.fill"))
             }
         }
     }
@@ -166,13 +315,6 @@ struct MonthlyRecapView: View {
         Self.monthFormatter.string(from: recap.monthStart)
     }
 
-    private var heroSubtitle: String {
-        if recap.hasActivity {
-            return "Your most-played music this month."
-        }
-        return "Listening insights will fill in as new plays are captured."
-    }
-
     private static let monthFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "LLLL yyyy"
@@ -180,134 +322,251 @@ struct MonthlyRecapView: View {
     }()
 }
 
-private struct RecapHeroCard: View {
+private struct RecapHeroPoster: View {
     let monthTitle: String
-    let subtitle: String
     let recap: MonthlyRecap
     let artworks: [MPMediaItemArtwork]
+    let leadingSong: MonthlyRecap.RankedSong?
+    let leadingSongArtwork: MPMediaItemArtwork?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 18) {
             RecapArtworkStack(artworks: artworks)
                 .frame(maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(monthTitle)
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
 
-                Text(subtitle)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                RecapSummaryBar(recap: recap)
             }
 
-            RecapGlassGroup {
-                HStack(spacing: 10) {
-                    RecapStatTile(title: "Plays", value: "\(recap.totalPlayDelta)", systemImage: "play.fill")
-                    RecapStatTile(title: "Time", value: recap.totalListeningDuration.formattedPlayback, systemImage: "clock.fill")
-                }
-                HStack(spacing: 10) {
-                    RecapMiniInsight(title: "Songs", value: "\(recap.topSongs.count)", systemImage: "music.note")
-                    RecapMiniInsight(title: "Albums", value: "\(recap.topAlbums.count)", systemImage: "rectangle.stack.fill")
-                    RecapMiniInsight(title: "Artists", value: "\(recap.topArtists.count)", systemImage: "person.2.fill")
-                }
+            if let leadingSong {
+                RecapHeroSpotlight(song: leadingSong, artwork: leadingSongArtwork)
             }
         }
-        .padding(18)
-        .recapTileSurface(cornerRadius: 26, tintOpacity: 0.12)
+        .padding(.top, 4)
     }
 }
 
 private struct RecapArtworkStack: View {
     let artworks: [MPMediaItemArtwork]
+    @State private var isAnimated = false
 
     var body: some View {
         ZStack {
             if let mainArtwork = artworks.first {
+                if artworks.count > 1 {
+                    ForEach(Array(artworks.dropFirst().prefix(3).enumerated()), id: \.offset) { index, artwork in
+                        ArtworkView(
+                            artwork: artwork,
+                            size: CGSize(width: sideArtworkSize(for: index), height: sideArtworkSize(for: index)),
+                            cornerRadius: 13
+                        )
+                        .shadow(color: .black.opacity(0.17), radius: 11, x: 0, y: 8)
+                        .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
+                        .offset(sideArtworkOffset(for: index, animated: isAnimated))
+                    }
+                }
+
                 ArtworkView(
                     artwork: mainArtwork,
-                    size: CGSize(width: 176, height: 176),
-                    cornerRadius: 20
+                    size: CGSize(width: 182, height: 182),
+                    cornerRadius: 26
                 )
-                .shadow(color: .black.opacity(0.22), radius: 22, x: 0, y: 14)
-                .rotationEffect(.degrees(-2))
-
-                if artworks.count > 1 {
-                    HStack {
-                        Spacer()
-                        VStack(spacing: -12) {
-                            ForEach(Array(artworks.dropFirst().prefix(3).enumerated()), id: \.offset) { index, artwork in
-                                ArtworkView(
-                                    artwork: artwork,
-                                    size: CGSize(width: 70, height: 70),
-                                    cornerRadius: 12
-                                )
-                                .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 8)
-                                .rotationEffect(.degrees(index.isMultiple(of: 2) ? 5 : -5))
-                            }
-                        }
-                    }
-                    .padding(.trailing, 20)
-                }
+                .shadow(color: .black.opacity(0.26), radius: 26, x: 0, y: 18)
+                .rotationEffect(.degrees(-1.5))
             } else {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(.thinMaterial)
-                    .frame(width: 176, height: 176)
+                    .frame(width: 172, height: 172)
                     .overlay {
                         Image(systemName: "music.note")
-                            .font(.system(size: 48, weight: .semibold))
+                            .font(.system(size: 42, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
             }
         }
-        .frame(height: 198)
-    }
-}
-
-private struct RecapSpotlight: View {
-    let song: MonthlyRecap.RankedSong
-
-    var body: some View {
-        RecapSurface {
-            HStack(spacing: 14) {
-                ArtworkView(
-                    artwork: song.artwork,
-                    size: CGSize(width: 74, height: 74),
-                    cornerRadius: 14
-                )
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Most Played")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(.secondary)
-                    Text(song.title)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-                    Text(song.artist)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 10)
-
-                MetricBadge(text: "+\(song.playDelta)")
+        .frame(height: 286)
+        .task {
+            guard !isAnimated else { return }
+            withAnimation(.easeInOut(duration: 3.8).repeatForever(autoreverses: true)) {
+                isAnimated = true
             }
         }
     }
+
+    private func sideArtworkRotation(for index: Int) -> Double {
+        switch index {
+        case 0: return -8
+        case 1: return 7
+        default: return -4
+        }
+    }
+
+    private func sideAnimationRotation(for index: Int) -> Double {
+        switch index {
+        case 0: return -1.8
+        case 1: return 1.4
+        default: return -1.2
+        }
+    }
+
+    private func sideArtworkOffset(for index: Int, animated: Bool) -> CGSize {
+        let float = animated ? sideFloat(for: index) : .zero
+        switch index {
+        case 0:
+            return CGSize(width: -104 + float.width, height: 86 + float.height)
+        case 1:
+            return CGSize(width: 104 + float.width, height: 90 + float.height)
+        default:
+            return CGSize(width: 0 + float.width, height: 124 + float.height)
+        }
+    }
+
+    private func sideFloat(for index: Int) -> CGSize {
+        switch index {
+        case 0:
+            return CGSize(width: -4, height: 4)
+        case 1:
+            return CGSize(width: 4, height: -3)
+        default:
+            return CGSize(width: 0, height: 5)
+        }
+    }
+
+    private func sideArtworkSize(for index: Int) -> CGFloat {
+        index == 2 ? 82 : 92
+    }
 }
 
-private struct RecapRankingSection<Content: View>: View {
+private struct RecapHeroSpotlight: View {
+    let song: MonthlyRecap.RankedSong
+    let artwork: MPMediaItemArtwork?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ArtworkView(
+                artwork: artwork ?? song.artwork,
+                size: CGSize(width: 52, height: 52),
+                cornerRadius: 10
+            )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Most Played")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+                Text(song.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(song.artist)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 10)
+
+            MetricBadge(text: "+\(song.playDelta)")
+        }
+        .padding(10)
+        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.07)
+    }
+}
+
+private struct RecapSummaryBar: View {
+    let recap: MonthlyRecap
+
+    var body: some View {
+        HStack(spacing: 0) {
+            RecapSummaryItem(title: "Plays", value: "\(recap.totalPlayDelta)", systemImage: "play.fill")
+            Divider()
+                .padding(.vertical, 8)
+            RecapSummaryItem(title: "Time", value: recap.totalListeningDuration.formattedPlayback, systemImage: "clock.fill")
+            Divider()
+                .padding(.vertical, 8)
+            RecapSummaryItem(title: "Songs", value: "\(recap.topSongs.count)", systemImage: "music.note")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.06)
+    }
+}
+
+private struct RecapSummaryItem: View {
     let title: String
-    @ViewBuilder var content: Content
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+            Text(value)
+                .font(.headline.weight(.bold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct RecapRankingSection<Content: View, Destination: View>: View {
+    let title: String
+    let totalCount: Int
+    let visibleCount: Int
+    let destination: (() -> Destination)?
+    let content: Content
+
+    init(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) where Destination == EmptyView {
+        self.title = title
+        totalCount = 0
+        visibleCount = 0
+        destination = nil
+        self.content = content()
+    }
+
+    init(
+        title: String,
+        totalCount: Int,
+        visibleCount: Int,
+        @ViewBuilder destination: @escaping () -> Destination,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.totalCount = totalCount
+        self.visibleCount = visibleCount
+        self.destination = destination
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.title3.weight(.semibold))
+            HStack {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                if totalCount > visibleCount, let destination {
+                    NavigationLink {
+                        destination()
+                    } label: {
+                        Text("See All")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             RecapSurface {
                 VStack(spacing: 0) {
@@ -315,6 +574,109 @@ private struct RecapRankingSection<Content: View>: View {
                 }
             }
         }
+    }
+}
+
+private struct RecapFullSongsView: View {
+    let title: String
+    let songs: [MonthlyRecap.RankedSong]
+
+    var body: some View {
+        List {
+            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                RecapSongRow(rank: index + 1, song: song)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
+private struct RecapFullGroupsView: View {
+    let title: String
+    let groups: [MonthlyRecap.RankedGroup]
+    let systemImage: String
+
+    var body: some View {
+        List {
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
+private struct RecapFullMovementView: View {
+    let title: String
+    let songs: [MonthlyRecap.MovementSong]
+
+    var body: some View {
+        List {
+            ForEach(songs) { song in
+                RecapMovementRow(song: song)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
+private struct RecapMovementRow: View {
+    let song: MonthlyRecap.MovementSong
+    let artwork: MPMediaItemArtwork?
+
+    init(song: MonthlyRecap.MovementSong, artwork: MPMediaItemArtwork? = nil) {
+        self.song = song
+        self.artwork = artwork
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ArtworkView(
+                artwork: artwork ?? song.artwork,
+                size: CGSize(width: 58, height: 58),
+                cornerRadius: 10
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(song.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(song.artist)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(rankSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Label("+\(song.rankChange)", systemImage: "arrow.up")
+                    .font(.subheadline.weight(.semibold))
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.green)
+                Text("+\(song.playDelta) plays")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.vertical, 9)
+    }
+
+    private var rankSubtitle: String {
+        if let previousRank = song.previousRank {
+            return "#\(previousRank) to #\(song.currentRank)"
+        }
+        return "New at #\(song.currentRank)"
     }
 }
 
@@ -338,8 +700,8 @@ private struct RecapStatTile: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: 104)
-        .padding(12)
+        .frame(minHeight: 86)
+        .padding(10)
         .recapTileSurface(cornerRadius: 16, tintOpacity: 0.08)
     }
 }
@@ -362,7 +724,7 @@ private struct RecapMiniInsight: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .recapTileSurface(cornerRadius: 16, tintOpacity: 0.06)
     }
 }
@@ -370,12 +732,19 @@ private struct RecapMiniInsight: View {
 private struct RecapSongRow: View {
     let rank: Int
     let song: MonthlyRecap.RankedSong
+    let artwork: MPMediaItemArtwork?
+
+    init(rank: Int, song: MonthlyRecap.RankedSong, artwork: MPMediaItemArtwork? = nil) {
+        self.rank = rank
+        self.song = song
+        self.artwork = artwork
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            RecapRankView(rank: rank)
+            RankBadgeView(rank: rank, style: .plain)
             ArtworkView(
-                artwork: song.artwork,
+                artwork: artwork ?? song.artwork,
                 size: CGSize(width: 58, height: 58),
                 cornerRadius: 10
             )
@@ -405,16 +774,24 @@ private struct RecapGroupRow: View {
     let rank: Int
     let group: MonthlyRecap.RankedGroup
     let systemImage: String
+    let artwork: MPMediaItemArtwork?
+
+    init(rank: Int, group: MonthlyRecap.RankedGroup, systemImage: String, artwork: MPMediaItemArtwork? = nil) {
+        self.rank = rank
+        self.group = group
+        self.systemImage = systemImage
+        self.artwork = artwork
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            RecapRankView(rank: rank)
+            RankBadgeView(rank: rank, style: .plain)
 
             if systemImage == "person.fill" {
-                ArtistArtworkView(artwork: group.artwork, name: group.title, diameter: 58)
+                ArtistArtworkView(artwork: artwork ?? group.artwork, name: group.title, diameter: 58)
             } else {
                 ArtworkView(
-                    artwork: group.artwork,
+                    artwork: artwork ?? group.artwork,
                     size: CGSize(width: 58, height: 58),
                     cornerRadius: 10
                 )
@@ -438,18 +815,6 @@ private struct RecapGroupRow: View {
             MetricBadge(text: "+\(group.playDelta)")
         }
         .padding(.vertical, 9)
-    }
-}
-
-private struct RecapRankView: View {
-    let rank: Int
-
-    var body: some View {
-        Text("\(rank)")
-            .font(.system(size: 17, weight: .semibold, design: .rounded))
-            .foregroundStyle(.secondary)
-            .frame(minWidth: 24, alignment: .trailing)
-            .monospacedDigit()
     }
 }
 
@@ -599,6 +964,12 @@ private extension MPMediaItemArtwork {
             Double(bitmap[1]) / 255.0,
             Double(bitmap[2]) / 255.0
         )
+    }
+}
+
+private extension String {
+    var normalizedRecapArtworkKey: String {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 

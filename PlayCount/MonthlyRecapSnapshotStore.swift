@@ -72,6 +72,27 @@ struct MonthlyRecap: Equatable {
         }
     }
 
+    struct MovementSong: Identifiable, Equatable {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let playDelta: Int
+        let rankChange: Int
+        let currentRank: Int
+        let previousRank: Int?
+        let artwork: MPMediaItemArtwork?
+
+        static func == (lhs: MovementSong, rhs: MovementSong) -> Bool {
+            lhs.id == rhs.id &&
+                lhs.title == rhs.title &&
+                lhs.artist == rhs.artist &&
+                lhs.playDelta == rhs.playDelta &&
+                lhs.rankChange == rhs.rankChange &&
+                lhs.currentRank == rhs.currentRank &&
+                lhs.previousRank == rhs.previousRank
+        }
+    }
+
     let monthStart: Date
     let generatedAt: Date
     let lastCaptureReason: RecapSnapshotReason?
@@ -84,6 +105,8 @@ struct MonthlyRecap: Equatable {
     let topSongs: [RankedSong]
     let topArtists: [RankedGroup]
     let topAlbums: [RankedGroup]
+    let biggestGainers: [MovementSong]
+    let topNewSongs: [RankedSong]
 
     var hasActivity: Bool {
         totalPlayDelta > 0 || newSongCount > 0
@@ -106,7 +129,9 @@ struct MonthlyRecap: Equatable {
             newSongCount: 0,
             topSongs: [],
             topArtists: [],
-            topAlbums: []
+            topAlbums: [],
+            biggestGainers: [],
+            topNewSongs: []
         )
     }
 }
@@ -153,11 +178,15 @@ final class MonthlyRecapSnapshotStore {
         let songs: [UInt64: MPMediaItemArtwork]
         let albums: [UInt64: MPMediaItemArtwork]
         let artists: [UInt64: MPMediaItemArtwork]
+        let albumsByName: [String: MPMediaItemArtwork]
+        let artistsByName: [String: MPMediaItemArtwork]
 
-        init(sourceSongs: [TopSong]) {
+        init(sourceSongs: [TopSong], sourceAlbums: [TopAlbum] = [], sourceArtists: [TopArtist] = []) {
             var songs: [UInt64: MPMediaItemArtwork] = [:]
             var albums: [UInt64: MPMediaItemArtwork] = [:]
             var artists: [UInt64: MPMediaItemArtwork] = [:]
+            var albumsByName: [String: MPMediaItemArtwork] = [:]
+            var artistsByName: [String: MPMediaItemArtwork] = [:]
 
             for song in sourceSongs {
                 if let artwork = song.artwork {
@@ -167,15 +196,83 @@ final class MonthlyRecapSnapshotStore {
                         albums[song.albumPersistentID] = artwork
                     }
 
+                    let albumKey = Self.albumKey(title: song.albumTitle, artist: song.artist)
+                    if albumsByName[albumKey] == nil {
+                        albumsByName[albumKey] = artwork
+                    }
+
                     if song.artistPersistentID != 0, artists[song.artistPersistentID] == nil {
                         artists[song.artistPersistentID] = artwork
                     }
+
+                    let artistKey = Self.artistKey(song.artist)
+                    if artistsByName[artistKey] == nil {
+                        artistsByName[artistKey] = artwork
+                    }
+                }
+            }
+
+            for album in sourceAlbums {
+                guard let artwork = album.artwork else { continue }
+
+                if album.id != 0, albums[album.id] == nil {
+                    albums[album.id] = artwork
+                }
+
+                let albumKey = Self.albumKey(title: album.title, artist: album.artist)
+                if albumsByName[albumKey] == nil {
+                    albumsByName[albumKey] = artwork
+                }
+
+                if album.artistPersistentID != 0, artists[album.artistPersistentID] == nil {
+                    artists[album.artistPersistentID] = artwork
+                }
+            }
+
+            for artist in sourceArtists {
+                guard let artwork = artist.artwork else { continue }
+
+                if artist.id != 0, artists[artist.id] == nil {
+                    artists[artist.id] = artwork
+                }
+
+                let artistKey = Self.artistKey(artist.name)
+                if artistsByName[artistKey] == nil {
+                    artistsByName[artistKey] = artwork
                 }
             }
 
             self.songs = songs
             self.albums = albums
             self.artists = artists
+            self.albumsByName = albumsByName
+            self.artistsByName = artistsByName
+        }
+
+        func artwork(for song: SongSnapshot) -> MPMediaItemArtwork? {
+            songs[song.id] ?? albumArtwork(for: song)
+        }
+
+        func albumArtwork(for song: SongSnapshot) -> MPMediaItemArtwork? {
+            if song.albumPersistentID != 0, let artwork = albums[song.albumPersistentID] {
+                return artwork
+            }
+            return albumsByName[Self.albumKey(title: song.albumTitle, artist: song.artist)]
+        }
+
+        func artistArtwork(for song: SongSnapshot) -> MPMediaItemArtwork? {
+            if song.artistPersistentID != 0, let artwork = artists[song.artistPersistentID] {
+                return artwork
+            }
+            return artistsByName[Self.artistKey(song.artist)]
+        }
+
+        private static func albumKey(title: String, artist: String) -> String {
+            "\(title.normalizedArtworkKey)|\(artist.normalizedArtworkKey)"
+        }
+
+        private static func artistKey(_ artist: String) -> String {
+            artist.normalizedArtworkKey
         }
     }
 
@@ -195,9 +292,15 @@ final class MonthlyRecapSnapshotStore {
         fileURL = directoryURL.appendingPathComponent("monthly-recap-snapshots.json")
     }
 
-    func record(songs: [TopSong], at capturedAt: Date, reason: RecapSnapshotReason) -> MonthlyRecap {
+    func record(
+        songs: [TopSong],
+        albums: [TopAlbum] = [],
+        artists: [TopArtist] = [],
+        at capturedAt: Date,
+        reason: RecapSnapshotReason
+    ) -> MonthlyRecap {
         accessQueue.sync {
-            recordLocked(songs: songs, at: capturedAt, reason: reason)
+            recordLocked(songs: songs, albums: albums, artists: artists, at: capturedAt, reason: reason)
         }
     }
 
@@ -232,7 +335,13 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    private func recordLocked(songs: [TopSong], at capturedAt: Date, reason: RecapSnapshotReason) -> MonthlyRecap {
+    private func recordLocked(
+        songs: [TopSong],
+        albums: [TopAlbum],
+        artists: [TopArtist],
+        at capturedAt: Date,
+        reason: RecapSnapshotReason
+    ) -> MonthlyRecap {
         var stored = load()
         let snapshot = LibrarySnapshot(
             capturedAt: capturedAt,
@@ -248,7 +357,7 @@ final class MonthlyRecapSnapshotStore {
             save(stored)
         }
 
-        return recap(for: capturedAt, snapshots: stored.snapshots, sourceSongs: songs)
+        return recap(for: capturedAt, snapshots: stored.snapshots, sourceSongs: songs, sourceAlbums: albums, sourceArtists: artists)
     }
 
     private func shouldAppend(_ snapshot: LibrarySnapshot, after previous: LibrarySnapshot?) -> Bool {
@@ -268,7 +377,13 @@ final class MonthlyRecapSnapshotStore {
         return snapshots.filter { $0.capturedAt >= cutoff }
     }
 
-    private func recap(for date: Date, snapshots: [LibrarySnapshot], sourceSongs: [TopSong] = []) -> MonthlyRecap {
+    private func recap(
+        for date: Date,
+        snapshots: [LibrarySnapshot],
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = []
+    ) -> MonthlyRecap {
         let ordered = snapshots.sorted { $0.capturedAt < $1.capturedAt }
         let monthStart = calendar.startOfMonth(containing: date)
         let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? date
@@ -280,7 +395,7 @@ final class MonthlyRecapSnapshotStore {
         let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
         let baseline = baselineSnapshot(for: latest, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
         let baselineByID = Dictionary(uniqueKeysWithValues: baseline.songs.map { ($0.id, $0) })
-        let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs)
+        let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs, sourceAlbums: sourceAlbums, sourceArtists: sourceArtists)
 
         let deltas = latest.songs.compactMap { song -> SongDelta? in
             let baselineSong = baselineByID[song.id]
@@ -296,25 +411,14 @@ final class MonthlyRecapSnapshotStore {
         let topSongs = playDeltas
             .sorted(by: compareDeltas)
             .prefix(10)
-            .map { delta in
-                MonthlyRecap.RankedSong(
-                    id: delta.latest.id,
-                    title: delta.latest.title,
-                    artist: delta.latest.artist,
-                    albumTitle: delta.latest.albumTitle,
-                    playDelta: delta.playDelta,
-                    skipDelta: delta.skipDelta,
-                    listeningDuration: delta.listeningDuration,
-                    artwork: artworkLookup.songs[delta.latest.id]
-                )
-            }
+            .map { rankedSong(from: $0, artworkLookup: artworkLookup) }
 
         let topArtists = groupedDeltas(
             playDeltas,
             id: { String($0.latest.artistPersistentID) },
             title: { $0.latest.artist },
             subtitle: { _ in "Artist" },
-            artwork: { artworkLookup.artists[$0.latest.artistPersistentID] }
+            artwork: { artworkLookup.artistArtwork(for: $0.latest) }
         )
 
         let topAlbums = groupedDeltas(
@@ -322,8 +426,21 @@ final class MonthlyRecapSnapshotStore {
             id: { String($0.latest.albumPersistentID) },
             title: { $0.latest.albumTitle },
             subtitle: { $0.latest.artist },
-            artwork: { artworkLookup.albums[$0.latest.albumPersistentID] }
+            artwork: { artworkLookup.albumArtwork(for: $0.latest) }
         )
+
+        let biggestGainers = movementSongs(
+            from: playDeltas,
+            baseline: baseline,
+            latest: latest,
+            artworkLookup: artworkLookup
+        )
+
+        let topNewSongs = playDeltas
+            .filter { baselineByID[$0.latest.id] == nil }
+            .sorted(by: compareDeltas)
+            .prefix(10)
+            .map { rankedSong(from: $0, artworkLookup: artworkLookup) }
 
         let newSongCount = latest.songs.filter { song in
             guard let dateAdded = song.dateAdded else { return false }
@@ -342,7 +459,25 @@ final class MonthlyRecapSnapshotStore {
             newSongCount: newSongCount,
             topSongs: topSongs,
             topArtists: topArtists,
-            topAlbums: topAlbums
+            topAlbums: topAlbums,
+            biggestGainers: biggestGainers,
+            topNewSongs: topNewSongs
+        )
+    }
+
+    private func rankedSong(
+        from delta: SongDelta,
+        artworkLookup: ArtworkLookup
+    ) -> MonthlyRecap.RankedSong {
+        MonthlyRecap.RankedSong(
+            id: delta.latest.id,
+            title: delta.latest.title,
+            artist: delta.latest.artist,
+            albumTitle: delta.latest.albumTitle,
+            playDelta: delta.playDelta,
+            skipDelta: delta.skipDelta,
+            listeningDuration: delta.listeningDuration,
+            artwork: artworkLookup.artwork(for: delta.latest)
         )
     }
 
@@ -428,6 +563,69 @@ final class MonthlyRecapSnapshotStore {
         .map { $0 }
     }
 
+    private func movementSongs(
+        from deltas: [SongDelta],
+        baseline: LibrarySnapshot,
+        latest: LibrarySnapshot,
+        artworkLookup: ArtworkLookup
+    ) -> [MonthlyRecap.MovementSong] {
+        let baselineRanks = rankByPlayCount(for: baseline.songs)
+        let latestRanks = rankByPlayCount(for: latest.songs)
+
+        return deltas.compactMap { delta in
+            guard let currentRank = latestRanks[delta.latest.id] else {
+                return nil
+            }
+
+            guard let previousRank = baselineRanks[delta.latest.id] else {
+                return nil
+            }
+            let rankChange = max(0, previousRank - currentRank)
+
+            guard rankChange > 0 else {
+                return nil
+            }
+
+            return MonthlyRecap.MovementSong(
+                id: delta.latest.id,
+                title: delta.latest.title,
+                artist: delta.latest.artist,
+                playDelta: delta.playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: artworkLookup.artwork(for: delta.latest)
+            )
+        }
+        .sorted {
+            if $0.rankChange == $1.rankChange {
+                if $0.playDelta == $1.playDelta {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return $0.playDelta > $1.playDelta
+            }
+            return $0.rankChange > $1.rankChange
+        }
+        .prefix(8)
+        .map { $0 }
+    }
+
+    private func rankByPlayCount(for songs: [SongSnapshot]) -> [UInt64: Int] {
+        let ranked = songs.sorted {
+            if $0.playCount == $1.playCount {
+                if $0.playbackDuration == $1.playbackDuration {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return $0.playbackDuration > $1.playbackDuration
+            }
+            return $0.playCount > $1.playCount
+        }
+
+        return Dictionary(uniqueKeysWithValues: ranked.enumerated().map { index, song in
+            (song.id, index + 1)
+        })
+    }
+
     private func compareDeltas(_ lhs: SongDelta, _ rhs: SongDelta) -> Bool {
         if lhs.playDelta == rhs.playDelta {
             if lhs.listeningDuration == rhs.listeningDuration {
@@ -507,5 +705,11 @@ private extension Calendar {
     func startOfMonth(containing date: Date) -> Date {
         let components = dateComponents([.year, .month], from: date)
         return self.date(from: components) ?? startOfDay(for: date)
+    }
+}
+
+private extension String {
+    var normalizedArtworkKey: String {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
