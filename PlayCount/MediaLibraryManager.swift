@@ -9,8 +9,11 @@ struct TopSong: Identifiable {
     let artist: String
     let albumTitle: String
     let playCount: Int
+    let skipCount: Int
     let totalPlayDuration: TimeInterval
+    let playbackDuration: TimeInterval
     let lastPlayedDate: Date?
+    let dateAdded: Date?
     let artwork: MPMediaItemArtwork?
     let albumPersistentID: UInt64
     let artistPersistentID: UInt64
@@ -114,18 +117,26 @@ final class MediaLibraryManager: ObservableObject, Sendable {
     }
     @Published private(set) var hasLoadedInitialSnapshot = false
     @Published private(set) var nowPlayingState: NowPlayingState?
+    @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
 
     private let fetchLimit: Int
+    private let mediaLibrary = MPMediaLibrary.default()
     private let musicPlayer = MPMusicPlayerController.systemMusicPlayer
+    private let snapshotStore = MonthlyRecapSnapshotStore()
     private var notificationObservers: [NSObjectProtocol] = []
     private var progressTimer: AnyCancellable?
+    private var lastPlaybackDrivenRefresh: Date = .distantPast
+    private var pendingSnapshotReason: RecapSnapshotReason?
+    private let playbackRefreshInterval: TimeInterval = 20
 
     init(fetchLimit: Int = 0) {
         self.fetchLimit = fetchLimit
         authorizationStatus = MPMediaLibrary.authorizationStatus()
+        monthlyRecap = snapshotStore.currentMonthRecap()
 
+        mediaLibrary.beginGeneratingLibraryChangeNotifications()
         musicPlayer.beginGeneratingPlaybackNotifications()
-        configureNowPlayingObservers()
+        configureObservers()
         updateNowPlayingState()
 
         if authorizationStatus == .authorized {
@@ -134,12 +145,18 @@ final class MediaLibraryManager: ObservableObject, Sendable {
     }
 
     deinit {
-        teardownNowPlayingObservers()
+        teardownObservers()
+        mediaLibrary.endGeneratingLibraryChangeNotifications()
         musicPlayer.endGeneratingPlaybackNotifications()
     }
 
     func requestAuthorizationIfNeeded() {
-        switch authorizationStatus {
+        let currentStatus = MPMediaLibrary.authorizationStatus()
+        if authorizationStatus != currentStatus {
+            authorizationStatus = currentStatus
+        }
+
+        switch currentStatus {
         case .notDetermined:
             isLoading = true
             MPMediaLibrary.requestAuthorization { [weak self] status in
@@ -160,13 +177,78 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             }
         case .authorized:
             refreshTopItems()
+        case .denied, .restricted:
+            isLoading = false
+            errorMessage = "Media library access is required to show listening data."
         default:
             break
         }
     }
 
     func refreshTopItems() {
-        guard authorizationStatus == .authorized else { return }
+        refreshTopItems(snapshotReason: .manualRefresh)
+    }
+
+    func refreshForRecap(reason: RecapSnapshotReason) {
+        refreshTopItems(snapshotReason: reason)
+    }
+
+    func refreshForRecapSequence(reason: RecapSnapshotReason) {
+        refreshForRecap(reason: reason)
+
+        for delay in [8.0, 30.0, 90.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.refreshForRecap(reason: .delayedForeground)
+            }
+        }
+    }
+
+    @discardableResult
+    func recordBackgroundRecapSnapshot(reason: RecapSnapshotReason = .backgroundRefresh) async -> Bool {
+        guard MPMediaLibrary.authorizationStatus() == .authorized else {
+            return false
+        }
+
+        let result = await Task.detached(priority: .utility) { [snapshotStore] in
+            let songs = Self.fetchTopSongs()
+            let albums = Self.fetchTopAlbums()
+            let artists = Self.fetchTopArtists()
+            let recap = snapshotStore.record(songs: songs, at: Date(), reason: reason)
+            return (songs, albums, artists, recap)
+        }.value
+
+        await MainActor.run {
+            self.librarySongs = result.0
+            self.libraryAlbums = result.1
+            self.libraryArtists = result.2
+            self.monthlyRecap = result.3
+            self.applySortAndLimit()
+            self.hasLoadedInitialSnapshot = true
+        }
+
+        return true
+    }
+
+    func recapDebugSummary() -> String {
+        snapshotStore.debugSummary()
+    }
+
+    private func refreshTopItems(snapshotReason: RecapSnapshotReason) {
+        let currentStatus = MPMediaLibrary.authorizationStatus()
+        if authorizationStatus != currentStatus {
+            authorizationStatus = currentStatus
+        }
+
+        guard currentStatus == .authorized else {
+            isLoading = false
+            errorMessage = "Media library access is required to show listening data."
+            return
+        }
+
+        guard !isLoading else {
+            pendingSnapshotReason = snapshotReason
+            return
+        }
 
         isLoading = true
         errorMessage = nil
@@ -177,11 +259,13 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             let songs = Self.fetchTopSongs()
             let albums = Self.fetchTopAlbums()
             let artists = Self.fetchTopArtists()
+            let recap = self.snapshotStore.record(songs: songs, at: Date(), reason: snapshotReason)
 
             DispatchQueue.main.async {
                 self.librarySongs = songs
                 self.libraryAlbums = albums
                 self.libraryArtists = artists
+                self.monthlyRecap = recap
 
                 self.applySortAndLimit()
                 self.isLoading = false
@@ -190,8 +274,19 @@ final class MediaLibraryManager: ObservableObject, Sendable {
                 if songs.isEmpty && albums.isEmpty && artists.isEmpty {
                     self.errorMessage = "We couldn't find any listening data in your media library."
                 }
+
+                if let pendingSnapshotReason = self.pendingSnapshotReason {
+                    self.pendingSnapshotReason = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                        self?.refreshTopItems(snapshotReason: pendingSnapshotReason)
+                    }
+                }
             }
         }
+    }
+
+    private func handleMediaLibraryDidChange() {
+        refreshForRecap(reason: .libraryChanged)
     }
 
     private func applySortAndLimit() {
@@ -443,8 +538,12 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         }
     }
 
-    private func configureNowPlayingObservers() {
+    private func configureObservers() {
         let center = NotificationCenter.default
+
+        let libraryObserver = center.addObserver(forName: .MPMediaLibraryDidChange, object: mediaLibrary, queue: .main) { [weak self] _ in
+            self?.handleMediaLibraryDidChange()
+        }
 
         let itemObserver = center.addObserver(forName: .MPMusicPlayerControllerNowPlayingItemDidChange, object: musicPlayer, queue: .main) { [weak self] _ in
             self?.handleNowPlayingChange()
@@ -454,10 +553,10 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             self?.handlePlaybackStateChange()
         }
 
-        notificationObservers = [itemObserver, playbackObserver]
+        notificationObservers = [libraryObserver, itemObserver, playbackObserver]
     }
 
-    private func teardownNowPlayingObservers() {
+    private func teardownObservers() {
         let center = NotificationCenter.default
         for observer in notificationObservers {
             center.removeObserver(observer)
@@ -469,6 +568,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
 
     private func handleNowPlayingChange() {
         updateNowPlayingState()
+        refreshFromPlaybackIfNeeded(force: true)
     }
 
     private func handlePlaybackStateChange() {
@@ -477,8 +577,10 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         switch musicPlayer.playbackState {
         case .playing:
             startProgressUpdates()
+            refreshFromPlaybackIfNeeded()
         default:
             stopProgressUpdates()
+            refreshFromPlaybackIfNeeded(force: true)
         }
     }
 
@@ -488,6 +590,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.updateNowPlayingState()
+                self?.refreshFromPlaybackIfNeeded()
             }
     }
 
@@ -528,6 +631,7 @@ final class MediaLibraryManager: ObservableObject, Sendable {
 
         let duration = item.playbackDuration.isFinite ? max(item.playbackDuration, 0) : 0
         let playCount = item.playCount
+        let skipCount = item.skipCount
         let totalPlayDuration = Double(playCount) * duration
 
         let resolvedTitle = rawTitle.nonEmptyFallback("Unknown Title")
@@ -540,8 +644,11 @@ final class MediaLibraryManager: ObservableObject, Sendable {
             artist: resolvedArtist,
             albumTitle: resolvedAlbum,
             playCount: playCount,
+            skipCount: skipCount,
             totalPlayDuration: totalPlayDuration,
+            playbackDuration: duration,
             lastPlayedDate: item.lastPlayedDate,
+            dateAdded: item.dateAdded,
             artwork: item.artwork,
             albumPersistentID: item.albumPersistentID,
             artistPersistentID: item.artistPersistentID,
@@ -566,6 +673,19 @@ final class MediaLibraryManager: ObservableObject, Sendable {
         if playbackState == .playing {
             startProgressUpdates()
         }
+    }
+
+    private func refreshFromPlaybackIfNeeded(force: Bool = false) {
+        guard authorizationStatus == .authorized else { return }
+        guard !isLoading else { return }
+
+        let now = Date()
+        if !force, now.timeIntervalSince(lastPlaybackDrivenRefresh) < playbackRefreshInterval {
+            return
+        }
+
+        lastPlaybackDrivenRefresh = now
+        refreshForRecap(reason: .playbackChanged)
     }
 
     private func sortAlbums(_ albums: [TopAlbum]) -> [TopAlbum] {
@@ -629,8 +749,11 @@ final class MediaLibraryManager: ObservableObject, Sendable {
                     artist: item.artist ?? "Unknown Artist",
                     albumTitle: item.albumTitle ?? "Unknown Album",
                     playCount: item.playCount,
+                    skipCount: item.skipCount,
                     totalPlayDuration: totalDuration,
+                    playbackDuration: item.playbackDuration,
                     lastPlayedDate: item.lastPlayedDate,
+                    dateAdded: item.dateAdded,
                     artwork: item.artwork,
                     albumPersistentID: item.albumPersistentID,
                     artistPersistentID: item.artistPersistentID,
@@ -818,8 +941,11 @@ extension MediaLibraryManager {
             artist: "M83",
             albumTitle: "Hurry Up, We're Dreaming",
             playCount: 42,
+            skipCount: 3,
             totalPlayDuration: TimeInterval(240 * 42),
+            playbackDuration: 240,
             lastPlayedDate: nil,
+            dateAdded: nil,
             artwork: generatedArtwork(title: "MC", subtitle: "M83"),
             albumPersistentID: 1,
             artistPersistentID: 1,
@@ -847,8 +973,11 @@ extension MediaLibraryManager {
             artist: "Bon Iver",
             albumTitle: "Bon Iver",
             playCount: 17,
+            skipCount: 1,
             totalPlayDuration: TimeInterval(302 * 17),
+            playbackDuration: 302,
             lastPlayedDate: nil,
+            dateAdded: nil,
             artwork: generatedArtwork(title: "H", subtitle: "BI"),
             albumPersistentID: 2,
             artistPersistentID: 2,
