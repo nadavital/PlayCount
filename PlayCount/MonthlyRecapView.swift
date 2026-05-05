@@ -667,10 +667,11 @@ private struct RecapMovementRow: View {
             Spacer(minLength: 12)
 
             VStack(alignment: .trailing, spacing: 4) {
-                Label("+\(song.rankChange)", systemImage: "arrow.up")
+                Label("\(song.rankChange)", systemImage: "arrow.up")
                     .font(.subheadline.weight(.semibold))
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(.green)
+                    .accessibilityLabel("Up \(song.rankChange) ranks")
                 Text("+\(song.playDelta) plays")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
