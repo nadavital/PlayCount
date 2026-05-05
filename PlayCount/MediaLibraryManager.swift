@@ -38,7 +38,7 @@ struct TopArtist: Identifiable {
     let artwork: MPMediaItemArtwork?
 }
 
-final class MediaLibraryManager: ObservableObject, Sendable {
+final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     
     static let shared = MediaLibraryManager()
     
@@ -230,7 +230,59 @@ final class MediaLibraryManager: ObservableObject, Sendable {
     }
 
     func recapDebugSummary() -> String {
-        snapshotStore.debugSummary()
+        [
+            snapshotStore.debugSummary(),
+            recapArtworkDebugSummary()
+        ].joined(separator: "\n\n")
+    }
+
+    #if DEBUG
+    func runRecapSelfCheck() -> String {
+        snapshotStore.debugRunSelfCheck()
+    }
+    #endif
+
+    private func recapArtworkDebugSummary() -> String {
+        let recap = monthlyRecap
+        let topSongArtworkCount = recap.topSongs.filter { $0.artwork != nil }.count
+        let topAlbumArtworkCount = recap.topAlbums.filter { $0.artwork != nil }.count
+        let topArtistArtworkCount = recap.topArtists.filter { $0.artwork != nil }.count
+        let gainerArtworkCount = recap.biggestGainers.filter { $0.artwork != nil }.count
+        let newSongArtworkCount = recap.topNewSongs.filter { $0.artwork != nil }.count
+
+        func missingSongs(_ songs: [MonthlyRecap.RankedSong]) -> String {
+            let missing = songs.filter { $0.artwork == nil }.prefix(8)
+            guard !missing.isEmpty else { return "none" }
+            return missing.map { "\($0.title) - \($0.artist)" }.joined(separator: ", ")
+        }
+
+        func missingMovementSongs(_ songs: [MonthlyRecap.MovementSong]) -> String {
+            let missing = songs.filter { $0.artwork == nil }.prefix(8)
+            guard !missing.isEmpty else { return "none" }
+            return missing.map { "\($0.title) - \($0.artist)" }.joined(separator: ", ")
+        }
+
+        func missingGroups(_ groups: [MonthlyRecap.RankedGroup]) -> String {
+            let missing = groups.filter { $0.artwork == nil }.prefix(8)
+            guard !missing.isEmpty else { return "none" }
+            return missing.map { "\($0.title) - \($0.subtitle)" }.joined(separator: ", ")
+        }
+
+        return """
+        Recap artwork:
+        Top songs artwork: \(topSongArtworkCount)/\(recap.topSongs.count)
+        Top albums artwork: \(topAlbumArtworkCount)/\(recap.topAlbums.count)
+        Top artists artwork: \(topArtistArtworkCount)/\(recap.topArtists.count)
+        Biggest gainers artwork: \(gainerArtworkCount)/\(recap.biggestGainers.count)
+        Top new songs artwork: \(newSongArtworkCount)/\(recap.topNewSongs.count)
+        Live library songs/albums/artists: \(librarySongs.count)/\(libraryAlbums.count)/\(libraryArtists.count)
+        Visible top songs/albums/artists: \(topSongs.count)/\(topAlbums.count)/\(topArtists.count)
+        Missing top song art: \(missingSongs(recap.topSongs))
+        Missing top album art: \(missingGroups(recap.topAlbums))
+        Missing top artist art: \(missingGroups(recap.topArtists))
+        Missing gainer art: \(missingMovementSongs(recap.biggestGainers))
+        Missing new song art: \(missingSongs(recap.topNewSongs))
+        """
     }
 
     private func refreshTopItems(snapshotReason: RecapSnapshotReason) {

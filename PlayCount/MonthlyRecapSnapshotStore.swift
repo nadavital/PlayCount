@@ -315,6 +315,13 @@ final class MonthlyRecapSnapshotStore {
             let stored = load()
             let ordered = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let recap = recap(for: date, snapshots: ordered)
+            let monthStart = calendar.startOfMonth(containing: date)
+            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? date
+            let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
+            let latest = ordered.last(where: { $0.capturedAt < monthEnd })
+            let baseline = latest.map {
+                baselineSnapshot(for: $0, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
+            }
             let lines = ordered.suffix(8).map { snapshot in
                 let totalPlays = snapshot.songs.reduce(0) { $0 + $1.playCount }
                 let totalSkips = snapshot.songs.reduce(0) { $0 + $1.skipCount }
@@ -325,9 +332,14 @@ final class MonthlyRecapSnapshotStore {
             return """
             Snapshot file: \(fileURL.path)
             Snapshots stored: \(ordered.count)
+            Month snapshots: \(inMonth.count)
+            Baseline snapshot: \(baseline?.capturedAt.formatted(date: .numeric, time: .standard) ?? "none")
+            Latest snapshot: \(latest?.capturedAt.formatted(date: .numeric, time: .standard) ?? "none")
             Current recap plays: \(recap.totalPlayDelta)
             Current recap skips: \(recap.totalSkipDelta)
             Current recap songs: \(recap.topSongs.map { "\($0.title):+\($0.playDelta)" }.joined(separator: ", "))
+            Biggest gainers: \(recap.biggestGainers.map { "\($0.title):+\($0.rankChange)" }.joined(separator: ", "))
+            Top new songs: \(recap.topNewSongs.map { "\($0.title):+\($0.playDelta)" }.joined(separator: ", "))
 
             Recent snapshots:
             \(lines.joined(separator: "\n"))
@@ -656,6 +668,91 @@ final class MonthlyRecapSnapshotStore {
             assertionFailure("Failed to save monthly recap snapshots: \(error)")
         }
     }
+
+    #if DEBUG
+    func debugRunSelfCheck() -> String {
+        let calendar = Calendar(identifier: .gregorian)
+        let baselineDate = DateComponents(calendar: calendar, year: 2026, month: 4, day: 30, hour: 23).date!
+        let latestDate = DateComponents(calendar: calendar, year: 2026, month: 5, day: 5, hour: 12).date!
+        let dateAdded = DateComponents(calendar: calendar, year: 2026, month: 5, day: 2).date!
+
+        let baseline = LibrarySnapshot(
+            capturedAt: baselineDate,
+            reason: .manualRefresh,
+            appVersion: "self-check",
+            scannedSongCount: 3,
+            songs: [
+                debugSong(id: 1, title: "Former First", playCount: 100),
+                debugSong(id: 2, title: "Climber", playCount: 90),
+                debugSong(id: 3, title: "Skip Only", playCount: 50, skipCount: 1)
+            ]
+        )
+
+        let latest = LibrarySnapshot(
+            capturedAt: latestDate,
+            reason: .foreground,
+            appVersion: "self-check",
+            scannedSongCount: 4,
+            songs: [
+                debugSong(id: 1, title: "Former First", playCount: 101),
+                debugSong(id: 2, title: "Climber", playCount: 105),
+                debugSong(id: 3, title: "Skip Only", playCount: 50, skipCount: 3),
+                debugSong(id: 4, title: "New Track", playCount: 10, dateAdded: dateAdded)
+            ]
+        )
+
+        let recap = recap(for: latestDate, snapshots: [baseline, latest])
+        var failures: [String] = []
+
+        if recap.totalPlayDelta != 26 {
+            failures.append("expected totalPlayDelta 26, got \(recap.totalPlayDelta)")
+        }
+
+        if recap.topSongs.contains(where: { $0.title == "Skip Only" }) {
+            failures.append("skip-only song appeared in topSongs")
+        }
+
+        if recap.biggestGainers.map(\.title) != ["Climber"] {
+            failures.append("expected only Climber as biggest gainer, got \(recap.biggestGainers.map(\.title))")
+        }
+
+        if recap.topNewSongs.map(\.title) != ["New Track"] {
+            failures.append("expected only New Track as top new song, got \(recap.topNewSongs.map(\.title))")
+        }
+
+        if recap.topSongs.first?.title != "Climber" {
+            failures.append("expected Climber as top song, got \(recap.topSongs.first?.title ?? "none")")
+        }
+
+        if failures.isEmpty {
+            return "Recap self-check passed."
+        }
+
+        return "Recap self-check failed:\n- \(failures.joined(separator: "\n- "))"
+    }
+
+    private func debugSong(
+        id: UInt64,
+        title: String,
+        playCount: Int,
+        skipCount: Int = 0,
+        dateAdded: Date? = nil
+    ) -> SongSnapshot {
+        SongSnapshot(
+            id: id,
+            title: title,
+            artist: "Self Check Artist",
+            albumTitle: "Self Check Album",
+            playCount: playCount,
+            skipCount: skipCount,
+            playbackDuration: 180,
+            lastPlayedDate: nil,
+            dateAdded: dateAdded,
+            albumPersistentID: 10,
+            artistPersistentID: 20
+        )
+    }
+    #endif
 }
 
 private extension MonthlyRecapSnapshotStore.SongSnapshot {

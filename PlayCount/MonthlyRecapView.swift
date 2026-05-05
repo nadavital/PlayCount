@@ -298,6 +298,14 @@ struct MonthlyRecapView: View {
                 Label("Print Snapshot Summary", systemImage: "doc.text.magnifyingglass")
             }
 
+            Button {
+                let result = manager.runRecapSelfCheck()
+                print(result)
+                reminderStatusMessage = result
+            } label: {
+                Label("Run Recap Self Check", systemImage: "checkmark.seal")
+            }
+
             if let reminderStatusMessage {
                 Text(reminderStatusMessage)
                     .font(.caption)
