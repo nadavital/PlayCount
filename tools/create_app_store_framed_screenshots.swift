@@ -123,6 +123,7 @@ struct BezelCompositeAssets {
     let overlay: CGImage
     let screenMask: CGImage
     let screenBounds: CGRect
+    let visibleBounds: CGRect
 }
 
 func makeBezelCompositeAssets(from image: CGImage) throws -> BezelCompositeAssets {
@@ -177,6 +178,21 @@ func makeBezelCompositeAssets(from image: CGImage) throws -> BezelCompositeAsset
     var minY = height
     var maxX = 0
     var maxY = 0
+    var visibleMinX = width
+    var visibleMinY = height
+    var visibleMaxX = 0
+    var visibleMaxY = 0
+
+    for y in 0..<height {
+        for x in 0..<width {
+            let offset = y * bytesPerRow + x * bytesPerPixel
+            guard pixels[offset + 3] > 10 else { continue }
+            visibleMinX = min(visibleMinX, x)
+            visibleMinY = min(visibleMinY, y)
+            visibleMaxX = max(visibleMaxX, x)
+            visibleMaxY = max(visibleMaxY, y)
+        }
+    }
 
     while let point = stack.popLast() {
         guard point.x >= 0, point.x < width, point.y >= 0, point.y < height else { continue }
@@ -222,7 +238,13 @@ func makeBezelCompositeAssets(from image: CGImage) throws -> BezelCompositeAsset
     return BezelCompositeAssets(
         overlay: overlay,
         screenMask: mask,
-        screenBounds: CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+        screenBounds: CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1),
+        visibleBounds: CGRect(
+            x: visibleMinX,
+            y: visibleMinY,
+            width: visibleMaxX - visibleMinX + 1,
+            height: visibleMaxY - visibleMinY + 1
+        )
     )
 }
 
@@ -248,6 +270,29 @@ func makeScreenshotLayer(screenshot: CGImage, bezelSize: CGSize, screenBounds: C
         throw NSError(domain: "renderer", code: 10)
     }
     return output
+}
+
+func makeDeviceComposite(screenshotLayer: CGImage, bezelOverlay: CGImage, bezelSize: CGSize, visibleBounds: CGRect) throws -> CGImage {
+    guard let context = CGContext(
+        data: nil,
+        width: Int(bezelSize.width),
+        height: Int(bezelSize.height),
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: rgbaBitmapInfo
+    ) else {
+        throw NSError(domain: "renderer", code: 11)
+    }
+
+    context.draw(screenshotLayer, in: CGRect(x: 0, y: 0, width: bezelSize.width, height: bezelSize.height))
+    context.draw(bezelOverlay, in: CGRect(x: 0, y: 0, width: bezelSize.width, height: bezelSize.height))
+
+    guard let fullDevice = context.makeImage(),
+          let croppedDevice = fullDevice.cropping(to: visibleBounds) else {
+        throw NSError(domain: "renderer", code: 12)
+    }
+    return croppedDevice
 }
 
 func render(_ shot: Shot) throws {
@@ -294,9 +339,14 @@ func render(_ shot: Shot) throws {
         screenBounds: bezelAssets.screenBounds,
         screenMask: bezelAssets.screenMask
     )
+    let deviceComposite = try makeDeviceComposite(
+        screenshotLayer: screenshotLayer,
+        bezelOverlay: bezelAssets.overlay,
+        bezelSize: bezelSize,
+        visibleBounds: bezelAssets.visibleBounds
+    )
 
-    context.draw(screenshotLayer, in: flipped(deviceFrame))
-    context.draw(bezelAssets.overlay, in: flipped(deviceFrame))
+    context.draw(deviceComposite, in: flipped(deviceFrame))
 
     guard let image = context.makeImage() else {
         throw NSError(domain: "renderer", code: 3)
