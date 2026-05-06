@@ -422,7 +422,6 @@ final class MonthlyRecapSnapshotStore {
 
         let topSongs = playDeltas
             .sorted(by: compareDeltas)
-            .prefix(10)
             .map { rankedSong(from: $0, artworkLookup: artworkLookup) }
 
         let topArtists = groupedDeltas(
@@ -451,7 +450,6 @@ final class MonthlyRecapSnapshotStore {
         let topNewSongs = playDeltas
             .filter { baselineByID[$0.latest.id] == nil }
             .sorted(by: compareDeltas)
-            .prefix(10)
             .map { rankedSong(from: $0, artworkLookup: artworkLookup) }
 
         let newSongCount = latest.songs.filter { song in
@@ -571,7 +569,6 @@ final class MonthlyRecapSnapshotStore {
             }
             return $0.playDelta > $1.playDelta
         }
-        .prefix(10)
         .map { $0 }
     }
 
@@ -618,7 +615,6 @@ final class MonthlyRecapSnapshotStore {
             }
             return $0.rankChange > $1.rankChange
         }
-        .prefix(8)
         .map { $0 }
     }
 
