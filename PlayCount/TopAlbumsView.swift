@@ -29,6 +29,7 @@ struct TopAlbumsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .animation(.easeInOut(duration: 0.2), value: hasLoadedInitialSnapshot)
     }
 }

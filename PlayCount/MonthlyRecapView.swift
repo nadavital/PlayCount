@@ -14,25 +14,38 @@ struct MonthlyRecapView: View {
     }
 
     private var artworkHighlights: [MPMediaItemArtwork] {
-        let recapArtwork = uniqueArtwork(
-            from: recap.topSongs,
-            key: { "\($0.albumTitle)|\($0.artist)" },
-            artwork: \.artwork
-        )
-        if !recapArtwork.isEmpty {
-            return recapArtwork
+        var seen: Set<String> = []
+        var result: [MPMediaItemArtwork] = []
+
+        for song in recap.topSongs {
+            appendUniqueArtwork(
+                key: song.albumTitle.recapAlbumArtworkKey,
+                artwork: resolvedArtwork(for: song),
+                seen: &seen,
+                result: &result
+            )
         }
 
-        return uniqueArtwork(
-            from: manager.topSongs,
-            key: { song in
-                if song.albumPersistentID != 0 {
-                    return String(song.albumPersistentID)
-                }
-                return "\(song.albumTitle)|\(song.artist)"
-            },
-            artwork: \.artwork
-        )
+        for song in recap.topNewSongs {
+            appendUniqueArtwork(
+                key: song.albumTitle.recapAlbumArtworkKey,
+                artwork: resolvedArtwork(for: song),
+                seen: &seen,
+                result: &result
+            )
+        }
+
+        for song in manager.topSongs {
+            let key = song.albumPersistentID == 0 ? song.albumTitle.recapAlbumArtworkKey : "album-id-\(song.albumPersistentID)"
+            appendUniqueArtwork(key: key, artwork: song.artwork, seen: &seen, result: &result)
+        }
+
+        for album in manager.topAlbums {
+            let key = album.id == 0 ? album.title.recapAlbumArtworkKey : "album-id-\(album.id)"
+            appendUniqueArtwork(key: key, artwork: album.artwork, seen: &seen, result: &result)
+        }
+
+        return result
     }
 
     private var heroArtwork: MPMediaItemArtwork? {
@@ -102,28 +115,29 @@ struct MonthlyRecapView: View {
             })?.artwork
     }
 
-    private func uniqueArtwork<Item>(
-        from items: [Item],
-        key: (Item) -> String,
-        artwork: KeyPath<Item, MPMediaItemArtwork?>
-    ) -> [MPMediaItemArtwork] {
-        var seen: Set<String> = []
-        var result: [MPMediaItemArtwork] = []
-
-        for item in items {
-            guard let itemArtwork = item[keyPath: artwork] else { continue }
-            let itemKey = key(item)
-            guard !seen.contains(itemKey) else { continue }
-
-            seen.insert(itemKey)
-            result.append(itemArtwork)
-
-            if result.count == 4 {
-                break
-            }
+    private func appendUniqueArtwork(
+        key: String,
+        artwork: MPMediaItemArtwork?,
+        seen: inout Set<String>,
+        result: inout [MPMediaItemArtwork]
+    ) {
+        guard result.count < 4,
+              let artwork,
+              !key.isEmpty else {
+            return
         }
 
-        return result
+        let visualKey = artwork.recapVisualDedupKey
+        guard !seen.contains(key),
+              visualKey.map({ !seen.contains($0) }) ?? true else {
+            return
+        }
+
+        seen.insert(key)
+        if let visualKey {
+            seen.insert(visualKey)
+        }
+        result.append(artwork)
     }
 
     var body: some View {
@@ -172,6 +186,10 @@ struct MonthlyRecapView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 36)
             }
+        }
+        .scrollIndicators(.hidden)
+        .refreshable {
+            manager.refreshForRecapSequence(reason: .manualRefresh)
         }
         .background(RecapBackground(artwork: heroArtwork))
         .animation(.easeInOut(duration: 0.2), value: recap)
@@ -366,26 +384,30 @@ private struct RecapArtworkStack: View {
     var body: some View {
         ZStack {
             if let mainArtwork = artworks.first {
-                if artworks.count > 1 {
-                    ForEach(Array(artworks.dropFirst().prefix(3).enumerated()), id: \.offset) { index, artwork in
-                        ArtworkView(
-                            artwork: artwork,
-                            size: CGSize(width: sideArtworkSize(for: index), height: sideArtworkSize(for: index)),
-                            cornerRadius: 13
-                        )
-                        .shadow(color: .black.opacity(0.17), radius: 11, x: 0, y: 8)
-                        .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
-                        .offset(sideArtworkOffset(for: index, animated: isAnimated))
+                ZStack {
+                    if artworks.count > 1 {
+                        ForEach(Array(artworks.dropFirst().prefix(3).enumerated()), id: \.offset) { index, artwork in
+                            ArtworkView(
+                                artwork: artwork,
+                                size: CGSize(width: sideArtworkSize(for: index), height: sideArtworkSize(for: index)),
+                                cornerRadius: 18
+                            )
+                            .shadow(color: .black.opacity(0.17), radius: 13, x: 0, y: 9)
+                            .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
+                            .offset(sideArtworkOffset(for: index, animated: isAnimated))
+                            .zIndex(Double(index))
+                        }
                     }
-                }
 
-                ArtworkView(
-                    artwork: mainArtwork,
-                    size: CGSize(width: 182, height: 182),
-                    cornerRadius: 26
-                )
-                .shadow(color: .black.opacity(0.26), radius: 26, x: 0, y: 18)
-                .rotationEffect(.degrees(-1.5))
+                    ArtworkView(
+                        artwork: mainArtwork,
+                        size: CGSize(width: 212, height: 212),
+                        cornerRadius: 28
+                    )
+                    .shadow(color: .black.opacity(0.26), radius: 26, x: 0, y: 18)
+                    .rotationEffect(.degrees(-1.5 + (isAnimated ? 0.45 : 0)))
+                    .zIndex(10)
+                }
             } else {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .fill(.thinMaterial)
@@ -397,10 +419,10 @@ private struct RecapArtworkStack: View {
                     }
             }
         }
-        .frame(height: 286)
+        .frame(height: 314)
         .task {
             guard !isAnimated else { return }
-            withAnimation(.easeInOut(duration: 3.8).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 4.6).repeatForever(autoreverses: true)) {
                 isAnimated = true
             }
         }
@@ -408,17 +430,17 @@ private struct RecapArtworkStack: View {
 
     private func sideArtworkRotation(for index: Int) -> Double {
         switch index {
-        case 0: return -8
-        case 1: return 7
-        default: return -4
+        case 0: return -12
+        case 1: return 11
+        default: return 4
         }
     }
 
     private func sideAnimationRotation(for index: Int) -> Double {
         switch index {
-        case 0: return -1.8
-        case 1: return 1.4
-        default: return -1.2
+        case 0: return -1.4
+        case 1: return 1.2
+        default: return -0.8
         }
     }
 
@@ -426,27 +448,27 @@ private struct RecapArtworkStack: View {
         let float = animated ? sideFloat(for: index) : .zero
         switch index {
         case 0:
-            return CGSize(width: -104 + float.width, height: 86 + float.height)
+            return CGSize(width: -126 + float.width, height: 72 + float.height)
         case 1:
-            return CGSize(width: 104 + float.width, height: 90 + float.height)
+            return CGSize(width: 126 + float.width, height: 76 + float.height)
         default:
-            return CGSize(width: 0 + float.width, height: 124 + float.height)
+            return CGSize(width: 0 + float.width, height: 118 + float.height)
         }
     }
 
     private func sideFloat(for index: Int) -> CGSize {
         switch index {
         case 0:
-            return CGSize(width: -4, height: 4)
+            return CGSize(width: -5, height: 5)
         case 1:
-            return CGSize(width: 4, height: -3)
+            return CGSize(width: 5, height: -4)
         default:
-            return CGSize(width: 0, height: 5)
+            return CGSize(width: 0, height: 6)
         }
     }
 
     private func sideArtworkSize(for index: Int) -> CGFloat {
-        index == 2 ? 82 : 92
+        index == 2 ? 96 : 112
     }
 }
 
@@ -596,6 +618,7 @@ private struct RecapFullSongsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle(title)
         .toolbar(.visible, for: .navigationBar)
     }
@@ -613,6 +636,7 @@ private struct RecapFullGroupsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle(title)
         .toolbar(.visible, for: .navigationBar)
     }
@@ -629,6 +653,7 @@ private struct RecapFullMovementView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle(title)
         .toolbar(.visible, for: .navigationBar)
     }
@@ -938,6 +963,17 @@ private enum RecapColorCalculator {
 }
 
 private extension MPMediaItemArtwork {
+    var recapVisualDedupKey: String? {
+        guard let components = recapAverageColorComponents(maxDimension: 36) else {
+            return nil
+        }
+
+        let red = Int((components.0 * 24).rounded())
+        let green = Int((components.1 * 24).rounded())
+        let blue = Int((components.2 * 24).rounded())
+        return "visual-\(red)-\(green)-\(blue)"
+    }
+
     func recapAverageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
         let targetSize = CGSize(width: maxDimension, height: maxDimension)
         guard let image = image(at: targetSize),
@@ -979,6 +1015,11 @@ private extension MPMediaItemArtwork {
 private extension String {
     var normalizedRecapArtworkKey: String {
         trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var recapAlbumArtworkKey: String {
+        normalizedRecapArtworkKey
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 }
 

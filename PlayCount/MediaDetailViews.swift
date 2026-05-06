@@ -24,6 +24,7 @@ struct SongInfoView: View {
             .padding(.top, 40)
             .padding(.bottom, 60)
         }
+        .scrollIndicators(.hidden)
         .background(MediaDetailBackground(artwork: song.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(song.title)
@@ -116,6 +117,7 @@ struct AlbumInfoView: View {
             .padding(.top, 40)
             .padding(.bottom, 60)
         }
+        .scrollIndicators(.hidden)
         .background(MediaDetailBackground(artwork: album.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(album.title)
@@ -255,6 +257,7 @@ struct ArtistInfoView: View {
             .padding(.top, 40)
             .padding(.bottom, 60)
         }
+        .scrollIndicators(.hidden)
         .background(MediaDetailBackground(artwork: artist.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(artist.name)
@@ -731,6 +734,7 @@ private struct ArtistSongsListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Songs")
     }
 }
@@ -762,6 +766,7 @@ private struct ArtistAlbumsListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Albums")
     }
 }

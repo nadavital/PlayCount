@@ -699,8 +699,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             skipCount: skipCount,
             totalPlayDuration: totalPlayDuration,
             playbackDuration: duration,
-            lastPlayedDate: item.lastPlayedDate,
-            dateAdded: item.dateAdded,
+            lastPlayedDate: item.safeLastPlayedDate,
+            dateAdded: item.safeDateAdded,
             artwork: item.artwork,
             albumPersistentID: item.albumPersistentID,
             artistPersistentID: item.artistPersistentID,
@@ -804,8 +804,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     skipCount: item.skipCount,
                     totalPlayDuration: totalDuration,
                     playbackDuration: item.playbackDuration,
-                    lastPlayedDate: item.lastPlayedDate,
-                    dateAdded: item.dateAdded,
+                    lastPlayedDate: item.safeLastPlayedDate,
+                    dateAdded: item.safeDateAdded,
                     artwork: item.artwork,
                     albumPersistentID: item.albumPersistentID,
                     artistPersistentID: item.artistPersistentID,
@@ -918,6 +918,16 @@ extension MediaLibraryManager {
                 lhs.playCount == rhs.playCount &&
                 lhs.song?.id == rhs.song?.id
         }
+    }
+}
+
+private extension MPMediaItem {
+    var safeLastPlayedDate: Date? {
+        value(forProperty: MPMediaItemPropertyLastPlayedDate) as? Date
+    }
+
+    var safeDateAdded: Date? {
+        value(forProperty: MPMediaItemPropertyDateAdded) as? Date
     }
 }
 
