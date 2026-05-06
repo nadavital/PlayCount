@@ -6,7 +6,7 @@ struct Shot {
     let input: String
     let output: String
     let title: String
-    let colors: [NSColor]
+    let backgroundOffset: CGFloat
 }
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -21,49 +21,34 @@ let shots: [Shot] = [
     Shot(
         input: "01-top-songs.png",
         output: "01-your-music-ranked.png",
-        title: "See what you actually replay",
-        colors: [
-            NSColor(calibratedRed: 0.98, green: 0.94, blue: 0.97, alpha: 1),
-            NSColor(calibratedRed: 0.88, green: 0.94, blue: 1.00, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.90, blue: 0.70, alpha: 1)
-        ]
+        title: "See your all-time favorites",
+        backgroundOffset: 0
     ),
     Shot(
         input: "02-top-albums.png",
         output: "02-albums-that-stick.png",
-        title: "The albums you live in",
-        colors: [
-            NSColor(calibratedRed: 0.94, green: 0.98, blue: 1.00, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.91, blue: 0.78, alpha: 1),
-            NSColor(calibratedRed: 0.84, green: 0.90, blue: 0.82, alpha: 1)
-        ]
+        title: "Find your top albums",
+        backgroundOffset: 1
     ),
     Shot(
         input: "03-top-artists.png",
         output: "03-top-artists.png",
-        title: "Who owned your rotation?",
-        colors: [
-            NSColor(calibratedRed: 0.95, green: 0.93, blue: 1.00, alpha: 1),
-            NSColor(calibratedRed: 0.86, green: 0.97, blue: 0.94, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.86, blue: 0.84, alpha: 1)
-        ]
+        title: "Track your top artists",
+        backgroundOffset: 2
     ),
     Shot(
         input: "04-monthly-recap.png",
         output: "04-monthly-recaps.png",
-        title: "Your month in music",
-        colors: [
-            NSColor(calibratedRed: 0.84, green: 0.78, blue: 0.92, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.86, blue: 0.91, alpha: 1),
-            NSColor(calibratedRed: 0.82, green: 0.91, blue: 1.00, alpha: 1)
-        ]
+        title: "Replay your month",
+        backgroundOffset: 3
     )
 ]
 
 let canvasSize = CGSize(width: 1320, height: 2868)
-let deviceFrame = CGRect(x: 82, y: 420, width: 1156, height: 2359)
-let bezelScreenRect = CGRect(x: 75, y: 66, width: 1320, height: 2868)
-let titleRect = CGRect(x: 86, y: 118, width: 1148, height: 132)
+let cardRect = CGRect(x: 82, y: 88, width: 1156, height: 2692)
+let deviceFrame = CGRect(x: 250, y: 610, width: 820, height: 1673)
+let titleRect = CGRect(x: 158, y: 190, width: 1004, height: 210)
+let rgbaBitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
 
 func flipped(_ rect: CGRect) -> CGRect {
     CGRect(x: rect.origin.x, y: canvasSize.height - rect.origin.y - rect.height, width: rect.width, height: rect.height)
@@ -100,52 +85,53 @@ func drawText(_ text: String, rect: CGRect, font: NSFont, color: NSColor, contex
     NSGraphicsContext.restoreGraphicsState()
 }
 
-func drawBackground(colors: [NSColor], context: CGContext) {
+func drawBackground(offset: CGFloat, context: CGContext) {
     let colorSpace = CGColorSpaceCreateDeviceRGB()
-    let cgColors = colors.map { $0.cgColor } as CFArray
-    let gradient = CGGradient(colorsSpace: colorSpace, colors: cgColors, locations: [0, 0.54, 1])!
+    let cgColors = [
+        NSColor(calibratedRed: 0.96, green: 0.93, blue: 1.00, alpha: 1).cgColor,
+        NSColor(calibratedRed: 0.86, green: 0.94, blue: 1.00, alpha: 1).cgColor,
+        NSColor(calibratedRed: 1.00, green: 0.89, blue: 0.75, alpha: 1).cgColor,
+        NSColor(calibratedRed: 0.89, green: 0.96, blue: 0.88, alpha: 1).cgColor,
+        NSColor(calibratedRed: 1.00, green: 0.84, blue: 0.92, alpha: 1).cgColor
+    ] as CFArray
+    let gradient = CGGradient(colorsSpace: colorSpace, colors: cgColors, locations: [0, 0.25, 0.50, 0.75, 1])!
     context.drawLinearGradient(
         gradient,
-        start: CGPoint(x: 0, y: canvasSize.height),
-        end: CGPoint(x: canvasSize.width, y: 0),
+        start: CGPoint(x: -canvasSize.width * (0.55 + offset * 0.45), y: canvasSize.height),
+        end: CGPoint(x: canvasSize.width * (1.65 + offset * 0.45), y: 0),
         options: []
     )
 
-    let overlay = CGGradient(
-        colorsSpace: colorSpace,
-        colors: [
-            NSColor.white.withAlphaComponent(0.26).cgColor,
-            NSColor.white.withAlphaComponent(0.00).cgColor
-        ] as CFArray,
-        locations: [0, 1]
-    )!
-    context.drawRadialGradient(
-        overlay,
-        startCenter: CGPoint(x: canvasSize.width * 0.50, y: canvasSize.height * 0.18),
-        startRadius: 0,
-        endCenter: CGPoint(x: canvasSize.width * 0.50, y: canvasSize.height * 0.18),
-        endRadius: 950,
-        options: [.drawsAfterEndLocation]
-    )
+    context.saveGState()
+    context.setBlendMode(.softLight)
+    for index in 0..<5 {
+        let rect = CGRect(
+            x: -760 + CGFloat(index * 120) - offset * 300,
+            y: CGFloat(430 + index * 430),
+            width: 2100,
+            height: 170
+        )
+        let path = CGPath(roundedRect: flipped(rect), cornerWidth: 85, cornerHeight: 85, transform: nil)
+        context.addPath(path)
+        context.setFillColor(NSColor.white.withAlphaComponent(index.isMultiple(of: 2) ? 0.18 : 0.10).cgColor)
+        context.fillPath()
+    }
+    context.restoreGState()
 }
 
-func screenRect(in destination: CGRect, bezelSize: CGSize) -> CGRect {
-    let scaleX = destination.width / bezelSize.width
-    let scaleY = destination.height / bezelSize.height
-    return CGRect(
-        x: destination.minX + bezelScreenRect.minX * scaleX,
-        y: destination.minY + bezelScreenRect.minY * scaleY,
-        width: bezelScreenRect.width * scaleX,
-        height: bezelScreenRect.height * scaleY
-    )
+struct BezelCompositeAssets {
+    let overlay: CGImage
+    let screenMask: CGImage
+    let screenBounds: CGRect
 }
 
-func transparentScreenBezel(from image: CGImage) throws -> CGImage {
+func makeBezelCompositeAssets(from image: CGImage) throws -> BezelCompositeAssets {
     let width = image.width
     let height = image.height
     let bytesPerPixel = 4
     let bytesPerRow = width * bytesPerPixel
     var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+    var maskPixels = [UInt8](repeating: 0, count: width * height)
     let colorSpace = CGColorSpaceCreateDeviceRGB()
 
     guard let bitmap = CGContext(
@@ -155,36 +141,111 @@ func transparentScreenBezel(from image: CGImage) throws -> CGImage {
         bitsPerComponent: 8,
         bytesPerRow: bytesPerRow,
         space: colorSpace,
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        bitmapInfo: rgbaBitmapInfo
     ) else {
         throw NSError(domain: "renderer", code: 5)
     }
 
     bitmap.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-    let minX = max(0, Int(bezelScreenRect.minX))
-    let maxX = min(width, Int(bezelScreenRect.maxX))
-    let minY = max(0, Int(bezelScreenRect.minY))
-    let maxY = min(height, Int(bezelScreenRect.maxY))
+    func isScreenCutout(_ x: Int, _ y: Int) -> Bool {
+        let offset = y * bytesPerRow + x * bytesPerPixel
+        return pixels[offset + 3] < 10
+    }
 
-    for y in minY..<maxY {
-        for x in minX..<maxX {
-            let offset = y * bytesPerRow + x * bytesPerPixel
-            let red = pixels[offset]
-            let green = pixels[offset + 1]
-            let blue = pixels[offset + 2]
-            let alpha = pixels[offset + 3]
-            if alpha > 0 && red < 18 && green < 18 && blue < 22 {
-                pixels[offset] = 0
-                pixels[offset + 1] = 0
-                pixels[offset + 2] = 0
-                pixels[offset + 3] = 0
+    var startPoint: (x: Int, y: Int)?
+    var bestDistance = Int.max
+    let centerX = width / 2
+    let centerY = height / 2
+    for y in 0..<height {
+        for x in 0..<width where isScreenCutout(x, y) {
+            let distance = abs(x - centerX) + abs(y - centerY)
+            if distance < bestDistance {
+                bestDistance = distance
+                startPoint = (x, y)
             }
         }
     }
 
-    guard let output = bitmap.makeImage() else {
+    guard let startPoint else {
+        throw NSError(domain: "renderer", code: 8, userInfo: [NSLocalizedDescriptionKey: "Could not find transparent screen pixels in Apple bezel"])
+    }
+
+    var visited = [Bool](repeating: false, count: width * height)
+    var stack = [startPoint]
+    var minX = width
+    var minY = height
+    var maxX = 0
+    var maxY = 0
+
+    while let point = stack.popLast() {
+        guard point.x >= 0, point.x < width, point.y >= 0, point.y < height else { continue }
+        let index = point.y * width + point.x
+        guard !visited[index] else { continue }
+        visited[index] = true
+        guard isScreenCutout(point.x, point.y) else { continue }
+
+        maskPixels[index] = 255
+        minX = min(minX, point.x)
+        minY = min(minY, point.y)
+        maxX = max(maxX, point.x)
+        maxY = max(maxY, point.y)
+
+        stack.append((point.x + 1, point.y))
+        stack.append((point.x - 1, point.y))
+        stack.append((point.x, point.y + 1))
+        stack.append((point.x, point.y - 1))
+    }
+
+    guard minX < maxX, minY < maxY else {
+        throw NSError(domain: "renderer", code: 8, userInfo: [NSLocalizedDescriptionKey: "Could not detect Apple bezel screen area"])
+    }
+
+    guard let overlay = bitmap.makeImage(),
+          let maskProvider = CGDataProvider(data: Data(maskPixels) as CFData),
+          let mask = CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 8,
+            bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+            provider: maskProvider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+          ) else {
         throw NSError(domain: "renderer", code: 6)
+    }
+
+    return BezelCompositeAssets(
+        overlay: overlay,
+        screenMask: mask,
+        screenBounds: CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    )
+}
+
+func makeScreenshotLayer(screenshot: CGImage, bezelSize: CGSize, screenBounds: CGRect, screenMask: CGImage) throws -> CGImage {
+    guard let context = CGContext(
+        data: nil,
+        width: Int(bezelSize.width),
+        height: Int(bezelSize.height),
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: rgbaBitmapInfo
+    ) else {
+        throw NSError(domain: "renderer", code: 9)
+    }
+
+    context.saveGState()
+    context.clip(to: CGRect(x: 0, y: 0, width: bezelSize.width, height: bezelSize.height), mask: screenMask)
+    context.draw(screenshot, in: CGRect(x: screenBounds.minX, y: screenBounds.minY, width: screenBounds.width, height: screenBounds.height))
+    context.restoreGState()
+
+    guard let output = context.makeImage() else {
+        throw NSError(domain: "renderer", code: 10)
     }
     return output
 }
@@ -197,41 +258,45 @@ func render(_ shot: Shot) throws {
         bitsPerComponent: 8,
         bytesPerRow: 0,
         space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        bitmapInfo: rgbaBitmapInfo
     ) else {
         throw NSError(domain: "renderer", code: 1)
     }
 
-    drawBackground(colors: shot.colors, context: context)
+    drawBackground(offset: shot.backgroundOffset, context: context)
+    drawRoundedRect(cardRect, radius: 48, color: NSColor.white.withAlphaComponent(0.90), in: context)
 
     drawText(
         shot.title,
         rect: titleRect,
-        font: NSFont.systemFont(ofSize: 70, weight: .black),
-        color: .black,
+        font: NSFont.systemFont(ofSize: 56, weight: .bold),
+        color: NSColor(calibratedRed: 0.83, green: 0.18, blue: 0.22, alpha: 1),
         context: context,
         alignment: .center,
-        lineHeight: 78
+        lineHeight: 64
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),
           let bezelCGImage = bezelImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
         throw NSError(domain: "renderer", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing Apple bezel image at \(bezelURL.path)"])
     }
-    let bezelOverlay = try transparentScreenBezel(from: bezelCGImage)
-    let screenDestination = screenRect(in: deviceFrame, bezelSize: CGSize(width: bezelCGImage.width, height: bezelCGImage.height))
+    let bezelSize = CGSize(width: bezelCGImage.width, height: bezelCGImage.height)
+    let bezelAssets = try makeBezelCompositeAssets(from: bezelCGImage)
 
     let inputURL = inputDir.appendingPathComponent(shot.input)
     guard let source = NSImage(contentsOf: inputURL), let cgImage = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
         throw NSError(domain: "renderer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing input \(shot.input)"])
     }
 
-    context.saveGState()
-    context.addPath(CGPath(roundedRect: flipped(screenDestination), cornerWidth: 76, cornerHeight: 76, transform: nil))
-    context.clip()
-    context.draw(cgImage, in: flipped(screenDestination))
-    context.restoreGState()
-    context.draw(bezelOverlay, in: flipped(deviceFrame))
+    let screenshotLayer = try makeScreenshotLayer(
+        screenshot: cgImage,
+        bezelSize: bezelSize,
+        screenBounds: bezelAssets.screenBounds,
+        screenMask: bezelAssets.screenMask
+    )
+
+    context.draw(screenshotLayer, in: flipped(deviceFrame))
+    context.draw(bezelAssets.overlay, in: flipped(deviceFrame))
 
     guard let image = context.makeImage() else {
         throw NSError(domain: "renderer", code: 3)
