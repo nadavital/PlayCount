@@ -54,6 +54,7 @@ struct LibrarySearchView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: manager.hasLoadedInitialSnapshot)
         .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(selectedDomain.searchPrompt))

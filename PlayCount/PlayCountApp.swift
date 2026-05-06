@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppIntents
+import BackgroundTasks
 
 @main
 struct PlayCountApp: App {
@@ -18,11 +19,19 @@ struct PlayCountApp: App {
         mediaLibraryManager = mediaManager
         
         AppDependencyManager.shared.add(dependency: mediaManager)
+        RecapNotificationScheduler.shared.configure()
     }
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(libraryManager: mediaLibraryManager)
+                .task {
+                    RecapBackgroundRefreshScheduler.schedule()
+                }
+        }
+        .backgroundTask(.appRefresh(RecapBackgroundRefreshScheduler.identifier)) {
+            RecapBackgroundRefreshScheduler.schedule()
+            _ = await mediaLibraryManager.recordBackgroundRecapSnapshot()
         }
     }
 }

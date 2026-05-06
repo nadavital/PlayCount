@@ -2,7 +2,12 @@ import SwiftUI
 import MediaPlayer
 
 struct ContentView: View {
-    @StateObject private var libraryManager = MediaLibraryManager()
+    @StateObject private var libraryManager: MediaLibraryManager
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(libraryManager: MediaLibraryManager = .shared) {
+        _libraryManager = StateObject(wrappedValue: libraryManager)
+    }
 
     var body: some View {
         Group {
@@ -18,19 +23,63 @@ struct ContentView: View {
             }
         }
         .task {
-            libraryManager.requestAuthorizationIfNeeded()
+            if libraryManager.authorizationStatus == .authorized {
+                libraryManager.refreshForRecapSequence(reason: .appLaunch)
+            } else {
+                libraryManager.requestAuthorizationIfNeeded()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            if libraryManager.authorizationStatus == .authorized {
+                libraryManager.refreshForRecapSequence(reason: .foreground)
+            } else {
+                libraryManager.requestAuthorizationIfNeeded()
+            }
         }
     }
 }
 
 private struct AuthorizedLibraryView: View {
+    private enum LibraryTab: Hashable {
+        case songs
+        case albums
+        case artists
+        case recap
+        case search
+
+        static var screenshotInitialTab: Self {
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
+               arguments.indices.contains(index + 1) {
+                switch arguments[index + 1].lowercased() {
+                case "albums":
+                    return .albums
+                case "artists":
+                    return .artists
+                case "recap":
+                    return .recap
+                case "search":
+                    return .search
+                default:
+                    return .songs
+                }
+            }
+            #endif
+
+            return .songs
+        }
+    }
+
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.colorScheme) var colorScheme
+    @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
 
     var body: some View {
-        TabView {
-            Tab("Songs", systemImage: "music.note.list") {
+        TabView(selection: $selectedTab) {
+            Tab("Songs", systemImage: "music.note.list", value: LibraryTab.songs) {
                 NavigationStack {
                     TopSongsView(
                         songs: manager.topSongs,
@@ -45,7 +94,7 @@ private struct AuthorizedLibraryView: View {
                 }
             }
 
-            Tab("Albums", systemImage: "rectangle.stack") {
+            Tab("Albums", systemImage: "rectangle.stack", value: LibraryTab.albums) {
                 NavigationStack {
                     TopAlbumsView(albums: manager.topAlbums, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Albums")
@@ -55,7 +104,7 @@ private struct AuthorizedLibraryView: View {
                 }
             }
 
-            Tab("Artists", systemImage: "person.2.fill") {
+            Tab("Artists", systemImage: "person.2.fill", value: LibraryTab.artists) {
                 NavigationStack {
                     TopArtistsView(artists: manager.topArtists, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Artists")
@@ -65,7 +114,15 @@ private struct AuthorizedLibraryView: View {
                 }
             }
 
-            Tab("Search", systemImage: "magnifyingglass", role: .search) {
+            Tab("Recap", systemImage: "calendar", value: LibraryTab.recap) {
+                NavigationStack {
+                    MonthlyRecapView(manager: manager)
+                        .toolbar(.hidden, for: .navigationBar)
+                        .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
+                }
+            }
+
+            Tab("Search", systemImage: "magnifyingglass", value: LibraryTab.search, role: .search) {
                 NavigationStack {
                     LibrarySearchView(manager: manager)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
@@ -88,7 +145,7 @@ private struct AuthorizedLibraryView: View {
                 SongInfoView(song: song, manager: manager)
             }
         }
-        .onChange(of: manager.nowPlayingState) { state in
+        .onChange(of: manager.nowPlayingState) { _, state in
             guard let state else {
                 presentedNowPlayingSong = nil
                 return
@@ -99,6 +156,10 @@ private struct AuthorizedLibraryView: View {
             } else if presentedNowPlayingSong != nil {
                 presentedNowPlayingSong = state.song
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openMonthlyRecap)) { _ in
+            selectedTab = .recap
+            manager.refreshForRecapSequence(reason: .notificationOpen)
         }
     }
 
