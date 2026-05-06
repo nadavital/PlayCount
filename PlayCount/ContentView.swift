@@ -47,11 +47,34 @@ private struct AuthorizedLibraryView: View {
         case artists
         case recap
         case search
+
+        static var screenshotInitialTab: Self {
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
+               arguments.indices.contains(index + 1) {
+                switch arguments[index + 1].lowercased() {
+                case "albums":
+                    return .albums
+                case "artists":
+                    return .artists
+                case "recap":
+                    return .recap
+                case "search":
+                    return .search
+                default:
+                    return .songs
+                }
+            }
+            #endif
+
+            return .songs
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.colorScheme) var colorScheme
-    @State private var selectedTab: LibraryTab = .songs
+    @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
 
     var body: some View {
