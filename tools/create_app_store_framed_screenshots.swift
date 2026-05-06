@@ -21,49 +21,49 @@ let shots: [Shot] = [
     Shot(
         input: "01-top-songs.png",
         output: "01-your-music-ranked.png",
-        title: "Your music, ranked",
+        title: "See what you actually replay",
         colors: [
-            NSColor(calibratedRed: 0.97, green: 0.92, blue: 0.96, alpha: 1),
-            NSColor(calibratedRed: 0.82, green: 0.91, blue: 1.00, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.83, blue: 0.58, alpha: 1)
+            NSColor(calibratedRed: 0.98, green: 0.94, blue: 0.97, alpha: 1),
+            NSColor(calibratedRed: 0.88, green: 0.94, blue: 1.00, alpha: 1),
+            NSColor(calibratedRed: 1.00, green: 0.90, blue: 0.70, alpha: 1)
         ]
     ),
     Shot(
         input: "02-top-albums.png",
         output: "02-albums-that-stick.png",
-        title: "Albums you play most",
+        title: "The albums you live in",
         colors: [
-            NSColor(calibratedRed: 0.92, green: 0.96, blue: 0.99, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.89, blue: 0.73, alpha: 1),
-            NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.78, alpha: 1)
+            NSColor(calibratedRed: 0.94, green: 0.98, blue: 1.00, alpha: 1),
+            NSColor(calibratedRed: 1.00, green: 0.91, blue: 0.78, alpha: 1),
+            NSColor(calibratedRed: 0.84, green: 0.90, blue: 0.82, alpha: 1)
         ]
     ),
     Shot(
         input: "03-top-artists.png",
         output: "03-top-artists.png",
-        title: "Artists on repeat",
+        title: "Who owned your rotation?",
         colors: [
-            NSColor(calibratedRed: 0.94, green: 0.92, blue: 1.00, alpha: 1),
-            NSColor(calibratedRed: 0.82, green: 0.95, blue: 0.91, alpha: 1),
-            NSColor(calibratedRed: 1.00, green: 0.79, blue: 0.76, alpha: 1)
+            NSColor(calibratedRed: 0.95, green: 0.93, blue: 1.00, alpha: 1),
+            NSColor(calibratedRed: 0.86, green: 0.97, blue: 0.94, alpha: 1),
+            NSColor(calibratedRed: 1.00, green: 0.86, blue: 0.84, alpha: 1)
         ]
     ),
     Shot(
         input: "04-monthly-recap.png",
         output: "04-monthly-recaps.png",
-        title: "Monthly recaps, made visual",
+        title: "Your month in music",
         colors: [
-            NSColor(calibratedRed: 0.80, green: 0.74, blue: 0.88, alpha: 1),
-            NSColor(calibratedRed: 0.99, green: 0.82, blue: 0.88, alpha: 1),
-            NSColor(calibratedRed: 0.78, green: 0.89, blue: 1.00, alpha: 1)
+            NSColor(calibratedRed: 0.84, green: 0.78, blue: 0.92, alpha: 1),
+            NSColor(calibratedRed: 1.00, green: 0.86, blue: 0.91, alpha: 1),
+            NSColor(calibratedRed: 0.82, green: 0.91, blue: 1.00, alpha: 1)
         ]
     )
 ]
 
 let canvasSize = CGSize(width: 1320, height: 2868)
-let deviceFrame = CGRect(x: 80, y: 390, width: 1160, height: 2367)
-let bezelScreenRect = CGRect(x: 76, y: 75, width: 1318, height: 2855)
-let titleRect = CGRect(x: 72, y: 118, width: 1176, height: 150)
+let deviceFrame = CGRect(x: 82, y: 420, width: 1156, height: 2359)
+let bezelScreenRect = CGRect(x: 75, y: 66, width: 1320, height: 2868)
+let titleRect = CGRect(x: 86, y: 118, width: 1148, height: 132)
 
 func flipped(_ rect: CGRect) -> CGRect {
     CGRect(x: rect.origin.x, y: canvasSize.height - rect.origin.y - rect.height, width: rect.width, height: rect.height)
@@ -111,30 +111,22 @@ func drawBackground(colors: [NSColor], context: CGContext) {
         options: []
     )
 
-    context.saveGState()
-    context.setBlendMode(.softLight)
-    for index in 0..<7 {
-        let width = CGFloat(560 + index * 88)
-        let x = CGFloat(-180 + index * 182)
-        let y = CGFloat(260 + index * 238)
-        let rect = CGRect(x: x, y: y, width: width, height: 250)
-        let path = CGPath(roundedRect: flipped(rect), cornerWidth: 80, cornerHeight: 80, transform: nil)
-        context.addPath(path)
-        context.setFillColor(NSColor.white.withAlphaComponent(index.isMultiple(of: 2) ? 0.20 : 0.11).cgColor)
-        context.fillPath()
-    }
-    context.restoreGState()
-}
-
-func drawDeviceShadow(context: CGContext) {
-    context.saveGState()
-    let shadowRect = deviceFrame.offsetBy(dx: 0, dy: 38).insetBy(dx: 46, dy: 22)
-    context.setShadow(offset: CGSize(width: 0, height: -34), blur: 76, color: NSColor.black.withAlphaComponent(0.26).cgColor)
-    let path = CGPath(roundedRect: flipped(shadowRect), cornerWidth: 120, cornerHeight: 120, transform: nil)
-    context.addPath(path)
-    context.setFillColor(NSColor.black.withAlphaComponent(0.52).cgColor)
-    context.fillPath()
-    context.restoreGState()
+    let overlay = CGGradient(
+        colorsSpace: colorSpace,
+        colors: [
+            NSColor.white.withAlphaComponent(0.26).cgColor,
+            NSColor.white.withAlphaComponent(0.00).cgColor
+        ] as CFArray,
+        locations: [0, 1]
+    )!
+    context.drawRadialGradient(
+        overlay,
+        startCenter: CGPoint(x: canvasSize.width * 0.50, y: canvasSize.height * 0.18),
+        startRadius: 0,
+        endCenter: CGPoint(x: canvasSize.width * 0.50, y: canvasSize.height * 0.18),
+        endRadius: 950,
+        options: [.drawsAfterEndLocation]
+    )
 }
 
 func screenRect(in destination: CGRect, bezelSize: CGSize) -> CGRect {
@@ -215,11 +207,11 @@ func render(_ shot: Shot) throws {
     drawText(
         shot.title,
         rect: titleRect,
-        font: NSFont.systemFont(ofSize: 74, weight: .bold),
+        font: NSFont.systemFont(ofSize: 70, weight: .black),
         color: .black,
         context: context,
         alignment: .center,
-        lineHeight: 82
+        lineHeight: 78
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),
@@ -234,9 +226,8 @@ func render(_ shot: Shot) throws {
         throw NSError(domain: "renderer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing input \(shot.input)"])
     }
 
-    drawDeviceShadow(context: context)
     context.saveGState()
-    context.addPath(CGPath(roundedRect: flipped(screenDestination), cornerWidth: 74, cornerHeight: 74, transform: nil))
+    context.addPath(CGPath(roundedRect: flipped(screenDestination), cornerWidth: 76, cornerHeight: 76, transform: nil))
     context.clip()
     context.draw(cgImage, in: flipped(screenDestination))
     context.restoreGState()
