@@ -45,22 +45,12 @@ let shots: [Shot] = [
 ]
 
 let canvasSize = CGSize(width: 1320, height: 2868)
-let cardRect = CGRect(x: 82, y: 88, width: 1156, height: 2692)
-let deviceFrame = CGRect(x: 250, y: 610, width: 820, height: 1673)
-let titleRect = CGRect(x: 158, y: 190, width: 1004, height: 210)
+let deviceFrame = CGRect(x: 145, y: 530, width: 1030, height: 2190)
+let titleRect = CGRect(x: 104, y: 160, width: 1112, height: 190)
 let rgbaBitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
 
 func flipped(_ rect: CGRect) -> CGRect {
     CGRect(x: rect.origin.x, y: canvasSize.height - rect.origin.y - rect.height, width: rect.width, height: rect.height)
-}
-
-func drawRoundedRect(_ rect: CGRect, radius: CGFloat, color: NSColor, in context: CGContext) {
-    context.saveGState()
-    let path = CGPath(roundedRect: flipped(rect), cornerWidth: radius, cornerHeight: radius, transform: nil)
-    context.addPath(path)
-    context.setFillColor(color.cgColor)
-    context.fillPath()
-    context.restoreGState()
 }
 
 func drawText(_ text: String, rect: CGRect, font: NSFont, color: NSColor, context: CGContext, alignment: NSTextAlignment = .left, lineHeight: CGFloat? = nil) {
@@ -309,16 +299,15 @@ func render(_ shot: Shot) throws {
     }
 
     drawBackground(offset: shot.backgroundOffset, context: context)
-    drawRoundedRect(cardRect, radius: 48, color: NSColor.white.withAlphaComponent(0.90), in: context)
 
     drawText(
         shot.title,
         rect: titleRect,
-        font: NSFont.systemFont(ofSize: 56, weight: .bold),
+        font: NSFont.systemFont(ofSize: 64, weight: .bold),
         color: NSColor(calibratedRed: 0.83, green: 0.18, blue: 0.22, alpha: 1),
         context: context,
         alignment: .center,
-        lineHeight: 64
+        lineHeight: 72
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),
