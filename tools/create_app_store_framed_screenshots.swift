@@ -14,6 +14,9 @@ let inputDir = root.appendingPathComponent("AppStoreScreenshots")
 let outputDir = inputDir.appendingPathComponent("Framed")
 try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
+let defaultBezelPath = "/tmp/Bezel-iPhone-17/PNG/iPhone 17 Pro Max/iPhone 17 Pro Max - Deep Blue - Portrait.png"
+let bezelURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["PLAYCOUNT_APPSTORE_BEZEL"] ?? defaultBezelPath)
+
 let shots: [Shot] = [
     Shot(
         input: "01-top-songs.png",
@@ -58,9 +61,9 @@ let shots: [Shot] = [
 ]
 
 let canvasSize = CGSize(width: 1320, height: 2868)
-let phoneOuter = CGRect(x: 132, y: 468, width: 1056, height: 2294)
-let phoneBezel = phoneOuter.insetBy(dx: 18, dy: 18)
-let phoneInner = phoneOuter.insetBy(dx: 50, dy: 50)
+let deviceFrame = CGRect(x: 80, y: 390, width: 1160, height: 2367)
+let bezelScreenRect = CGRect(x: 76, y: 75, width: 1318, height: 2855)
+let titleRect = CGRect(x: 72, y: 118, width: 1176, height: 150)
 
 func flipped(_ rect: CGRect) -> CGRect {
     CGRect(x: rect.origin.x, y: canvasSize.height - rect.origin.y - rect.height, width: rect.width, height: rect.height)
@@ -123,45 +126,75 @@ func drawBackground(colors: [NSColor], context: CGContext) {
     context.restoreGState()
 }
 
-func drawPhoneShadow(context: CGContext) {
+func drawDeviceShadow(context: CGContext) {
     context.saveGState()
-    let shadowRect = phoneOuter.offsetBy(dx: 0, dy: 34)
-    context.setShadow(offset: CGSize(width: 0, height: -34), blur: 82, color: NSColor.black.withAlphaComponent(0.24).cgColor)
-    let path = CGPath(roundedRect: flipped(shadowRect), cornerWidth: 150, cornerHeight: 150, transform: nil)
+    let shadowRect = deviceFrame.offsetBy(dx: 0, dy: 38).insetBy(dx: 46, dy: 22)
+    context.setShadow(offset: CGSize(width: 0, height: -34), blur: 76, color: NSColor.black.withAlphaComponent(0.26).cgColor)
+    let path = CGPath(roundedRect: flipped(shadowRect), cornerWidth: 120, cornerHeight: 120, transform: nil)
     context.addPath(path)
-    context.setFillColor(NSColor.black.withAlphaComponent(0.64).cgColor)
+    context.setFillColor(NSColor.black.withAlphaComponent(0.52).cgColor)
     context.fillPath()
     context.restoreGState()
 }
 
-func drawDeviceFrame(context: CGContext) {
-    func sideButton(_ rect: CGRect, radius: CGFloat) {
-        let buttonPath = CGPath(roundedRect: flipped(rect), cornerWidth: radius, cornerHeight: radius, transform: nil)
-        context.addPath(buttonPath)
-        context.setFillColor(NSColor(calibratedWhite: 0.09, alpha: 1).cgColor)
-        context.fillPath()
+func screenRect(in destination: CGRect, bezelSize: CGSize) -> CGRect {
+    let scaleX = destination.width / bezelSize.width
+    let scaleY = destination.height / bezelSize.height
+    return CGRect(
+        x: destination.minX + bezelScreenRect.minX * scaleX,
+        y: destination.minY + bezelScreenRect.minY * scaleY,
+        width: bezelScreenRect.width * scaleX,
+        height: bezelScreenRect.height * scaleY
+    )
+}
+
+func transparentScreenBezel(from image: CGImage) throws -> CGImage {
+    let width = image.width
+    let height = image.height
+    let bytesPerPixel = 4
+    let bytesPerRow = width * bytesPerPixel
+    var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+
+    guard let bitmap = CGContext(
+        data: &pixels,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: bytesPerRow,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        throw NSError(domain: "renderer", code: 5)
     }
 
-    context.saveGState()
-    sideButton(CGRect(x: phoneOuter.minX - 13, y: phoneOuter.minY + 328, width: 14, height: 128), radius: 7)
-    sideButton(CGRect(x: phoneOuter.minX - 13, y: phoneOuter.minY + 510, width: 14, height: 206), radius: 7)
-    sideButton(CGRect(x: phoneOuter.maxX - 1, y: phoneOuter.minY + 456, width: 14, height: 260), radius: 7)
-    context.restoreGState()
+    bitmap.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-    drawRoundedRect(phoneOuter, radius: 156, color: NSColor(calibratedWhite: 0.015, alpha: 1), in: context)
-    drawRoundedRect(phoneBezel, radius: 140, color: NSColor(calibratedWhite: 0.07, alpha: 1), in: context)
-    drawRoundedRect(phoneInner.insetBy(dx: -7, dy: -7), radius: 124, color: NSColor(calibratedWhite: 0.012, alpha: 1), in: context)
+    let minX = max(0, Int(bezelScreenRect.minX))
+    let maxX = min(width, Int(bezelScreenRect.maxX))
+    let minY = max(0, Int(bezelScreenRect.minY))
+    let maxY = min(height, Int(bezelScreenRect.maxY))
 
-    context.saveGState()
-    context.setStrokeColor(NSColor.white.withAlphaComponent(0.14).cgColor)
-    context.setLineWidth(5)
-    context.addPath(CGPath(roundedRect: flipped(phoneOuter.insetBy(dx: 5, dy: 5)), cornerWidth: 150, cornerHeight: 150, transform: nil))
-    context.strokePath()
-    context.setStrokeColor(NSColor.black.withAlphaComponent(0.42).cgColor)
-    context.setLineWidth(3)
-    context.addPath(CGPath(roundedRect: flipped(phoneBezel.insetBy(dx: 2, dy: 2)), cornerWidth: 136, cornerHeight: 136, transform: nil))
-    context.strokePath()
-    context.restoreGState()
+    for y in minY..<maxY {
+        for x in minX..<maxX {
+            let offset = y * bytesPerRow + x * bytesPerPixel
+            let red = pixels[offset]
+            let green = pixels[offset + 1]
+            let blue = pixels[offset + 2]
+            let alpha = pixels[offset + 3]
+            if alpha > 0 && red < 18 && green < 18 && blue < 22 {
+                pixels[offset] = 0
+                pixels[offset + 1] = 0
+                pixels[offset + 2] = 0
+                pixels[offset + 3] = 0
+            }
+        }
+    }
+
+    guard let output = bitmap.makeImage() else {
+        throw NSError(domain: "renderer", code: 6)
+    }
+    return output
 }
 
 func render(_ shot: Shot) throws {
@@ -181,36 +214,33 @@ func render(_ shot: Shot) throws {
 
     drawText(
         shot.title,
-        rect: CGRect(x: 86, y: 128, width: 1148, height: 150),
-        font: NSFont.systemFont(ofSize: 82, weight: .black),
+        rect: titleRect,
+        font: NSFont.systemFont(ofSize: 74, weight: .bold),
         color: .black,
         context: context,
         alignment: .center,
-        lineHeight: 92
+        lineHeight: 82
     )
 
-    drawPhoneShadow(context: context)
-    drawDeviceFrame(context: context)
-    drawRoundedRect(phoneInner, radius: 110, color: .white, in: context)
+    guard let bezelImage = NSImage(contentsOf: bezelURL),
+          let bezelCGImage = bezelImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        throw NSError(domain: "renderer", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing Apple bezel image at \(bezelURL.path)"])
+    }
+    let bezelOverlay = try transparentScreenBezel(from: bezelCGImage)
+    let screenDestination = screenRect(in: deviceFrame, bezelSize: CGSize(width: bezelCGImage.width, height: bezelCGImage.height))
 
     let inputURL = inputDir.appendingPathComponent(shot.input)
     guard let source = NSImage(contentsOf: inputURL), let cgImage = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
         throw NSError(domain: "renderer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing input \(shot.input)"])
     }
 
+    drawDeviceShadow(context: context)
     context.saveGState()
-    context.addPath(CGPath(roundedRect: flipped(phoneInner), cornerWidth: 110, cornerHeight: 110, transform: nil))
+    context.addPath(CGPath(roundedRect: flipped(screenDestination), cornerWidth: 74, cornerHeight: 74, transform: nil))
     context.clip()
-    context.draw(cgImage, in: flipped(phoneInner))
+    context.draw(cgImage, in: flipped(screenDestination))
     context.restoreGState()
-
-    context.saveGState()
-    context.setBlendMode(.overlay)
-    context.setStrokeColor(NSColor.white.withAlphaComponent(0.22).cgColor)
-    context.setLineWidth(3)
-    context.addPath(CGPath(roundedRect: flipped(phoneInner.insetBy(dx: -3, dy: -3)), cornerWidth: 116, cornerHeight: 116, transform: nil))
-    context.strokePath()
-    context.restoreGState()
+    context.draw(bezelOverlay, in: flipped(deviceFrame))
 
     guard let image = context.makeImage() else {
         throw NSError(domain: "renderer", code: 3)
