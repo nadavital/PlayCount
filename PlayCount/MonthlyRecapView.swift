@@ -1754,6 +1754,15 @@ private struct RecapBackground: View {
 
 private enum RecapColorCalculator {
     static let context = CIContext(options: [.workingColorSpace: NSNull()])
+    static let cache = NSCache<NSString, RecapArtworkColorBox>()
+}
+
+private final class RecapArtworkColorBox {
+    let components: (Double, Double, Double)
+
+    init(_ components: (Double, Double, Double)) {
+        self.components = components
+    }
 }
 
 private extension MPMediaItemArtwork {
@@ -1769,6 +1778,13 @@ private extension MPMediaItemArtwork {
     }
 
     func recapAverageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
+        let pixelDimension = Int((maxDimension * UIScreen.main.scale).rounded(.up))
+        let cacheKey = "\(ObjectIdentifier(self))-\(pixelDimension)" as NSString
+
+        if let cached = RecapColorCalculator.cache.object(forKey: cacheKey) {
+            return cached.components
+        }
+
         let targetSize = CGSize(width: maxDimension, height: maxDimension)
         guard let image = image(at: targetSize),
               let inputImage = CIImage(image: image) else {
@@ -1798,11 +1814,14 @@ private extension MPMediaItemArtwork {
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
 
-        return (
+        let components = (
             Double(bitmap[0]) / 255.0,
             Double(bitmap[1]) / 255.0,
             Double(bitmap[2]) / 255.0
         )
+
+        RecapColorCalculator.cache.setObject(RecapArtworkColorBox(components), forKey: cacheKey)
+        return components
     }
 }
 

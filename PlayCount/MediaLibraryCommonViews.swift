@@ -1,5 +1,28 @@
 import SwiftUI
 import MediaPlayer
+import UIKit
+
+private enum ArtworkImageCache {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func image(for artwork: MPMediaItemArtwork, size: CGSize) -> UIImage? {
+        let scale = UIScreen.main.scale
+        let pixelWidth = Int((size.width * scale).rounded(.up))
+        let pixelHeight = Int((size.height * scale).rounded(.up))
+        let key = "\(ObjectIdentifier(artwork))-\(pixelWidth)x\(pixelHeight)" as NSString
+
+        if let image = cache.object(forKey: key) {
+            return image
+        }
+
+        guard let image = artwork.image(at: size) else {
+            return nil
+        }
+
+        cache.setObject(image, forKey: key)
+        return image
+    }
+}
 
 struct EmptyLibrarySection: View {
     let systemImage: String
@@ -78,7 +101,7 @@ struct ArtworkView: View {
     var body: some View {
         Group {
             if let artwork,
-               let image = artwork.image(at: size) {
+               let image = ArtworkImageCache.image(for: artwork, size: size) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -127,7 +150,7 @@ struct ArtistArtworkView: View {
     var body: some View {
         Group {
             if let artwork,
-               let image = artwork.image(at: renderSize) {
+               let image = ArtworkImageCache.image(for: artwork, size: renderSize) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
