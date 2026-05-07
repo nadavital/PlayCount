@@ -50,9 +50,9 @@ let shots: [Shot] = [
     )
 ]
 
-let canvasSize = CGSize(width: 1320, height: 2868)
-let deviceFrame = CGRect(x: 145, y: 530, width: 1030, height: 2190)
-let titleRect = CGRect(x: 74, y: 216, width: 1172, height: 124)
+let canvasSize = CGSize(width: 1284, height: 2778)
+let deviceFrame = CGRect(x: 141, y: 513, width: 1002, height: 2121)
+let titleRect = CGRect(x: 72, y: 209, width: 1140, height: 120)
 let rgbaBitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
 
 func flipped(_ rect: CGRect) -> CGRect {
@@ -309,11 +309,11 @@ func render(_ shot: Shot) throws {
     drawText(
         shot.title,
         rect: titleRect,
-        font: NSFont.systemFont(ofSize: 78, weight: .black),
+        font: NSFont.systemFont(ofSize: 76, weight: .black),
         color: NSColor(calibratedRed: 0.09, green: 0.08, blue: 0.04, alpha: 1),
         context: context,
         alignment: .center,
-        lineHeight: 84
+        lineHeight: 81
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),
