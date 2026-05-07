@@ -1116,11 +1116,11 @@ extension MediaLibraryManager {
             screenshotSong(id: 101, title: "Afterglow Drive", artist: "Nova Lane", album: "Glass Coast", plays: 184, delta: 18, duration: 214, initials: "AD", colors: [.systemPink, .systemOrange], coverIndex: 1),
             screenshotSong(id: 102, title: "Velvet Static", artist: "Mira Vale", album: "Night Signal", plays: 161, delta: 16, duration: 198, initials: "VS", colors: [.systemPurple, .systemBlue], coverIndex: 2),
             screenshotSong(id: 103, title: "Golden Hour", artist: "The Satellites", album: "Solar Bloom", plays: 149, delta: 15, duration: 236, initials: "GH", colors: [.systemYellow, .systemTeal], coverIndex: 3),
-            screenshotSong(id: 104, title: "North Star", artist: "Arden Fox", album: "Quiet Motion", plays: 132, delta: 14, duration: 221, initials: "NS", colors: [.systemIndigo, .systemMint], coverIndex: 4),
+            screenshotSong(id: 104, title: "North Star", artist: "Nova Lane", album: "Quiet Motion", plays: 132, delta: 14, duration: 221, initials: "NS", colors: [.systemIndigo, .systemMint], coverIndex: 4, artistID: 1_101),
             screenshotSong(id: 105, title: "Soft Focus", artist: "Vera June", album: "Dayglow Static", plays: 118, delta: 13, duration: 205, initials: "SF", colors: [.systemPurple, .systemBlue], coverIndex: 5),
             screenshotSong(id: 106, title: "City Lights", artist: "Juniper Park", album: "Late Checkout", plays: 104, delta: 12, duration: 187, initials: "CL", colors: [.systemRed, .systemBrown], coverIndex: 6),
             screenshotSong(id: 107, title: "Clear Water", artist: "Eli North", album: "Blue Room", plays: 93, delta: 11, duration: 203, initials: "CW", colors: [.systemCyan, .systemBlue], coverIndex: 7),
-            screenshotSong(id: 108, title: "Paper Moon", artist: "Ivy Vale", album: "Soft Geometry", plays: 88, delta: 10, duration: 192, initials: "PM", colors: [.systemOrange, .systemTeal], coverIndex: 8),
+            screenshotSong(id: 108, title: "Paper Moon", artist: "Nova Lane", album: "Soft Geometry", plays: 88, delta: 10, duration: 192, initials: "PM", colors: [.systemOrange, .systemTeal], coverIndex: 8, artistID: 1_101),
             screenshotSong(id: 109, title: "Glass Rain", artist: "The Meridian", album: "Prism House", plays: 82, delta: 9, duration: 225, initials: "GR", colors: [.systemPink, .systemCyan], coverIndex: 9),
             screenshotSong(id: 110, title: "Low Tide", artist: "Cassia Row", album: "Silver Dunes", plays: 76, delta: 8, duration: 218, initials: "LT", colors: [.systemGray, .systemOrange], coverIndex: 10),
             screenshotSong(id: 111, title: "Electric Blue", artist: "Ocean Avenue", album: "Deep Signal", plays: 69, delta: 7, duration: 207, initials: "EB", colors: [.systemBlue, .systemMint], coverIndex: 11),
@@ -1138,7 +1138,8 @@ extension MediaLibraryManager {
         duration: TimeInterval,
         initials: String,
         colors: [UIColor],
-        coverIndex: Int
+        coverIndex: Int,
+        artistID: UInt64? = nil
     ) -> TopSong {
         TopSong(
             id: id,
@@ -1153,7 +1154,7 @@ extension MediaLibraryManager {
             dateAdded: Date().addingTimeInterval(-TimeInterval(id * 3200)),
             artwork: screenshotArtwork(coverIndex: coverIndex, title: initials, subtitle: artist, colors: colors),
             albumPersistentID: id,
-            artistPersistentID: id + 1_000,
+            artistPersistentID: artistID ?? id + 1_000,
             trackNumber: Int(id % 10)
         )
     }
@@ -1243,7 +1244,7 @@ extension MediaLibraryManager {
     }
 
     private static func screenshotRecap(from songs: [TopSong]) -> MonthlyRecap {
-        let deltas = songs.indices.map { max(3, 18 - $0) }
+        let deltas = [46, 39, 35, 31, 27, 24, 21, 18, 15, 13, 11, 9]
         let rankedSongs = zip(songs, deltas).map { song, delta in
             MonthlyRecap.RankedSong(
                 id: song.id,
@@ -1279,26 +1280,30 @@ extension MediaLibraryManager {
             )
         }
 
+        let calendar = Calendar.current
+        let monthStart = calendar.screenshotStartOfMonth(containing: Date())
+        let trackingStart = calendar.date(byAdding: .month, value: -4, to: monthStart) ?? Date().addingTimeInterval(-60 * 60 * 24 * 120)
+
         return MonthlyRecap(
-            monthStart: Calendar.current.screenshotStartOfMonth(containing: Date()),
+            monthStart: monthStart,
             generatedAt: Date(),
             lastCaptureReason: .manualRefresh,
-            trackingStart: Date().addingTimeInterval(-60 * 60 * 24 * 9),
-            snapshotCount: 12,
+            trackingStart: trackingStart,
+            snapshotCount: 58,
             totalPlayDelta: deltas.reduce(0, +),
-            totalSkipDelta: 8,
+            totalSkipDelta: 19,
             totalListeningDuration: rankedSongs.reduce(0) { $0 + $1.listeningDuration },
-            newSongCount: 5,
+            newSongCount: 7,
             topSongs: rankedSongs,
             topArtists: Array(artists),
             topAlbums: Array(albums),
             biggestGainers: [
                 MonthlyRecap.MovementSong(id: songs[2].id, title: songs[2].title, artist: songs[2].artist, playDelta: deltas[2], rankChange: 42, currentRank: 12, previousRank: 54, artwork: songs[2].artwork),
-                MonthlyRecap.MovementSong(id: songs[3].id, title: songs[3].title, artist: songs[3].artist, playDelta: deltas[3], rankChange: 31, currentRank: 18, previousRank: 49, artwork: songs[3].artwork),
-                MonthlyRecap.MovementSong(id: songs[4].id, title: songs[4].title, artist: songs[4].artist, playDelta: deltas[4], rankChange: 24, currentRank: 21, previousRank: 45, artwork: songs[4].artwork),
-                MonthlyRecap.MovementSong(id: songs[5].id, title: songs[5].title, artist: songs[5].artist, playDelta: deltas[5], rankChange: 18, currentRank: 29, previousRank: 47, artwork: songs[5].artwork)
+                MonthlyRecap.MovementSong(id: songs[4].id, title: songs[4].title, artist: songs[4].artist, playDelta: deltas[4], rankChange: 31, currentRank: 18, previousRank: 49, artwork: songs[4].artwork),
+                MonthlyRecap.MovementSong(id: songs[6].id, title: songs[6].title, artist: songs[6].artist, playDelta: deltas[6], rankChange: 24, currentRank: 21, previousRank: 45, artwork: songs[6].artwork),
+                MonthlyRecap.MovementSong(id: songs[8].id, title: songs[8].title, artist: songs[8].artist, playDelta: deltas[8], rankChange: 18, currentRank: 29, previousRank: 47, artwork: songs[8].artwork)
             ],
-            topNewSongs: Array(rankedSongs.suffix(5))
+            topNewSongs: Array(rankedSongs.suffix(7))
         )
     }
 

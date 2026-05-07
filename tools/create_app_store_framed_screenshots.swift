@@ -21,32 +21,38 @@ let shots: [Shot] = [
     Shot(
         input: "01-top-songs.png",
         output: "01-your-music-ranked.png",
-        title: "See your all-time favorites",
+        title: "See your most-played songs",
         backgroundOffset: 0
     ),
     Shot(
-        input: "02-top-albums.png",
-        output: "02-albums-that-stick.png",
-        title: "Find your top albums",
+        input: "04-monthly-recap.png",
+        output: "02-monthly-recaps.png",
+        title: "Replay your month in music",
         backgroundOffset: 1
     ),
     Shot(
-        input: "03-top-artists.png",
-        output: "03-top-artists.png",
-        title: "Track your top artists",
+        input: "07-artist-detail.png",
+        output: "03-artist-detail.png",
+        title: "Explore each artist's top plays",
         backgroundOffset: 2
     ),
     Shot(
-        input: "04-monthly-recap.png",
-        output: "04-monthly-recaps.png",
-        title: "Replay your month",
+        input: "06-song-detail.png",
+        output: "04-song-playback.png",
+        title: "Play music from your stats",
         backgroundOffset: 3
+    ),
+    Shot(
+        input: "05-search.png",
+        output: "05-search-library.png",
+        title: "Search your listening history",
+        backgroundOffset: 4
     )
 ]
 
 let canvasSize = CGSize(width: 1320, height: 2868)
 let deviceFrame = CGRect(x: 145, y: 530, width: 1030, height: 2190)
-let titleRect = CGRect(x: 104, y: 160, width: 1112, height: 190)
+let titleRect = CGRect(x: 74, y: 216, width: 1172, height: 124)
 let rgbaBitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
 
 func flipped(_ rect: CGRect) -> CGRect {
@@ -303,11 +309,11 @@ func render(_ shot: Shot) throws {
     drawText(
         shot.title,
         rect: titleRect,
-        font: NSFont.systemFont(ofSize: 64, weight: .bold),
-        color: NSColor(calibratedRed: 0.83, green: 0.18, blue: 0.22, alpha: 1),
+        font: NSFont.systemFont(ofSize: 78, weight: .black),
+        color: NSColor(calibratedRed: 0.09, green: 0.08, blue: 0.04, alpha: 1),
         context: context,
         alignment: .center,
-        lineHeight: 72
+        lineHeight: 84
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),

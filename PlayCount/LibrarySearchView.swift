@@ -29,6 +29,23 @@ struct LibrarySearchView: View {
         }
     }
 
+    init(manager: MediaLibraryManager) {
+        self.manager = manager
+
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-PlayCountScreenshotSearchQuery"),
+           arguments.indices.contains(index + 1) {
+            _searchText = State(initialValue: arguments[index + 1])
+        }
+        if let index = arguments.firstIndex(of: "-PlayCountScreenshotSearchDomain"),
+           arguments.indices.contains(index + 1),
+           let domain = SearchDomain(rawValue: arguments[index + 1].lowercased()) {
+            _selectedDomain = State(initialValue: domain)
+        }
+        #endif
+    }
+
     var body: some View {
         List {
             Section {

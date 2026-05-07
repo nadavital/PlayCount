@@ -202,6 +202,15 @@ struct ArtistInfoView: View {
     let recapContext: RecapDrilldownContext?
 
     private let displayLimit = 5
+    private let topSongsSectionID = "artist-detail-top-songs"
+
+    private static var screenshotFocusesArtistContent: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotArtistContent")
+        #else
+        false
+        #endif
+    }
 
     init(artist: TopArtist, manager: MediaLibraryManager, recapContext: RecapDrilldownContext? = nil) {
         self.artist = artist
@@ -216,136 +225,144 @@ struct ArtistInfoView: View {
         let topAlbums = Array(albums.prefix(displayLimit))
         let monthlySongs = recapContext?.songs(for: artist) ?? []
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                ArtistDetailHeader(artist: artist, manager: manager)
-                    .frame(maxWidth: .infinity)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    ArtistDetailHeader(artist: artist, manager: manager)
+                        .frame(maxWidth: .infinity)
 
-                if let recapContext, !monthlySongs.isEmpty {
-                    MonthlyDetailSongsSection(
-                        title: "Top This Month",
-                        subtitle: recapContext.monthTitle,
-                        songs: monthlySongs,
-                        manager: manager,
-                        recapContext: recapContext
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("Top Songs")
-                            .font(.title3.weight(.semibold))
-                        Spacer()
-                        if songs.count > displayLimit {
-                            NavigationLink {
-                                ArtistSongsListView(artist: artist, manager: manager)
-                            } label: {
-                                Text("See All")
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                            }
-                            .buttonStyle(.plain)
-                        }
+                    if let recapContext, !monthlySongs.isEmpty {
+                        MonthlyDetailSongsSection(
+                            title: "Top This Month",
+                            subtitle: recapContext.monthTitle,
+                            songs: monthlySongs,
+                            manager: manager,
+                            recapContext: recapContext
+                        )
                     }
 
-                    if topSongs.isEmpty {
-                        Text("No individual songs tracked for this artist yet.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 12)
-                    } else {
-                        LazyVStack(spacing: 12) {
-                            ForEach(topSongs) { song in
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Text("Top Songs")
+                                .font(.title3.weight(.semibold))
+                            Spacer()
+                            if songs.count > displayLimit {
                                 NavigationLink {
-                                    SongInfoView(song: song, manager: manager)
+                                    ArtistSongsListView(artist: artist, manager: manager)
                                 } label: {
-                                    SongRow(song: song, sortMetric: manager.sortMetric)
+                                    Text("See All")
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(.primary)
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.2),
-                                            Color.white.opacity(0.05)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1
-                                )
-                        )
-                    }
-                }
 
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("Top Albums")
-                            .font(.title3.weight(.semibold))
-                        Spacer()
-                        if albums.count > displayLimit {
-                            NavigationLink {
-                                ArtistAlbumsListView(artist: artist, manager: manager)
-                            } label: {
-                                Text("See All")
-                                    .font(.callout.weight(.semibold))
-                                    .foregroundStyle(.primary)
+                        if topSongs.isEmpty {
+                            Text("No individual songs tracked for this artist yet.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 12)
+                        } else {
+                            LazyVStack(spacing: 12) {
+                                ForEach(topSongs) { song in
+                                    NavigationLink {
+                                        SongInfoView(song: song, manager: manager)
+                                    } label: {
+                                        SongRow(song: song, sortMetric: manager.sortMetric)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: [
+                                                Color.white.opacity(0.2),
+                                                Color.white.opacity(0.05)
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1
+                                    )
+                            )
                         }
                     }
+                    .id(topSongsSectionID)
 
-                    if topAlbums.isEmpty {
-                        Text("No album play data for this artist yet.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 12)
-                    } else {
-                        LazyVStack(spacing: 12) {
-                            ForEach(topAlbums) { album in
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Text("Top Albums")
+                                .font(.title3.weight(.semibold))
+                            Spacer()
+                            if albums.count > displayLimit {
                                 NavigationLink {
-                                    AlbumInfoView(album: album, manager: manager)
+                                    ArtistAlbumsListView(artist: artist, manager: manager)
                                 } label: {
-                                    AlbumRow(album: album, sortMetric: manager.sortMetric)
+                                    Text("See All")
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(.primary)
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
-                        .padding(.vertical, 12)
-                        .padding(.horizontal, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(.ultraThinMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.2),
-                                            Color.white.opacity(0.05)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1
-                                )
-                        )
+
+                        if topAlbums.isEmpty {
+                            Text("No album play data for this artist yet.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 12)
+                        } else {
+                            LazyVStack(spacing: 12) {
+                                ForEach(topAlbums) { album in
+                                    NavigationLink {
+                                        AlbumInfoView(album: album, manager: manager)
+                                    } label: {
+                                        AlbumRow(album: album, sortMetric: manager.sortMetric)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: [
+                                                Color.white.opacity(0.2),
+                                                Color.white.opacity(0.05)
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1
+                                    )
+                            )
+                        }
                     }
                 }
+                .padding(.horizontal, 24)
+                .padding(.top, 40)
+                .padding(.bottom, 60)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 40)
-            .padding(.bottom, 60)
+            .task {
+                guard Self.screenshotFocusesArtistContent else { return }
+                try? await Task.sleep(for: .milliseconds(450))
+                proxy.scrollTo(topSongsSectionID, anchor: .top)
+            }
         }
         .scrollIndicators(.hidden)
         .background(MediaDetailBackground(artwork: artist.artwork))

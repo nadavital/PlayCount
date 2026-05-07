@@ -70,12 +70,29 @@ private struct AuthorizedLibraryView: View {
 
             return .songs
         }
+
+        static var screenshotPresentsNowPlaying: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotNowPlayingDetail")
+            #else
+            false
+            #endif
+        }
+
+        static var screenshotPresentsArtistDetail: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotArtistDetail")
+            #else
+            false
+            #endif
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.colorScheme) var colorScheme
     @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
+    @State private var presentedScreenshotArtist: TopArtist?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -144,6 +161,23 @@ private struct AuthorizedLibraryView: View {
             NavigationStack {
                 SongInfoView(song: song, manager: manager)
             }
+        }
+        .sheet(item: $presentedScreenshotArtist) { artist in
+            NavigationStack {
+                ArtistInfoView(artist: artist, manager: manager)
+            }
+        }
+        .task {
+            guard LibraryTab.screenshotPresentsNowPlaying else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            if let song = manager.nowPlayingState?.song {
+                presentedNowPlayingSong = song
+            }
+        }
+        .task {
+            guard LibraryTab.screenshotPresentsArtistDetail else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            presentedScreenshotArtist = manager.topArtists.first
         }
         .onChange(of: manager.nowPlayingState) { _, state in
             guard let state else {

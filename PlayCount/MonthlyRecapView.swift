@@ -486,6 +486,10 @@ private struct RecapHeroPoster: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
 
+                if let trackingStart = recap.trackingStart {
+                    RecapMonthTrail(trackingStart: trackingStart, monthStart: recap.monthStart)
+                }
+
                 RecapSummaryBar(recap: recap)
             }
 
@@ -590,6 +594,68 @@ private struct RecapArtworkStack: View {
     private func sideArtworkSize(for index: Int) -> CGFloat {
         index == 2 ? 96 : 112
     }
+}
+
+private struct RecapMonthTrail: View {
+    let trackingStart: Date
+    let monthStart: Date
+
+    private var months: [Date] {
+        let calendar = Calendar.current
+        let firstMonth = Self.startOfMonth(containing: trackingStart, calendar: calendar)
+        let currentMonth = Self.startOfMonth(containing: monthStart, calendar: calendar)
+        let monthCount = max(0, calendar.dateComponents([.month], from: firstMonth, to: currentMonth).month ?? 0)
+        let visibleCount = min(monthCount + 1, 5)
+        let startOffset = max(0, monthCount - visibleCount + 1)
+
+        return (0..<visibleCount).compactMap {
+            calendar.date(byAdding: .month, value: startOffset + $0, to: firstMonth)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ForEach(months, id: \.timeIntervalSinceReferenceDate) { month in
+                let isCurrent = Calendar.current.isDate(month, equalTo: monthStart, toGranularity: .month)
+                Text(Self.monthFormatter.string(from: month))
+                    .font(.caption.weight(isCurrent ? .bold : .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(isCurrent ? .primary : .secondary)
+                    .padding(.horizontal, isCurrent ? 10 : 8)
+                    .padding(.vertical, 6)
+                    .background {
+                        Capsule(style: .continuous)
+                            .fill(isCurrent ? Color.primary.opacity(0.09) : Color.secondary.opacity(0.08))
+                    }
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(isCurrent ? 0.55 : 0.28), lineWidth: 1)
+                    }
+            }
+        }
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        "Recap history from \(Self.fullMonthFormatter.string(from: trackingStart)) through \(Self.fullMonthFormatter.string(from: monthStart))"
+    }
+
+    private static func startOfMonth(containing date: Date, calendar: Calendar) -> Date {
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? date
+    }
+
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLL"
+        return formatter
+    }()
+
+    private static let fullMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLLL yyyy"
+        return formatter
+    }()
 }
 
 private struct RecapHeroSpotlight: View {
