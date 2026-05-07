@@ -46,30 +46,14 @@ struct SongRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let rank = rank {
-                RankBadgeView(rank: rank)
-            }
-
+        MediaListRow(
+            rank: rank,
+            title: song.title,
+            subtitle: song.artist,
+            detail: sortMetric.supplementaryDescription(playCount: song.playCount, duration: song.totalPlayDuration),
+            badgeText: sortMetric.badgeText(playCount: song.playCount, duration: song.totalPlayDuration)
+        ) {
             ArtworkView(artwork: song.artwork)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(song.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(song.artist)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(sortMetric.supplementaryDescription(playCount: song.playCount, duration: song.totalPlayDuration))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer(minLength: 12)
-
-            MetricBadge(text: sortMetric.badgeText(playCount: song.playCount, duration: song.totalPlayDuration))
         }
-        .padding(.vertical, 4)
     }
 }

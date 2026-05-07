@@ -150,6 +150,74 @@ struct ArtistArtworkView: View {
     }
 }
 
+struct MediaListRow<Artwork: View>: View {
+    let rank: Int?
+    let title: String
+    let subtitle: String?
+    let detail: String
+    let badgeText: String
+    private let artwork: Artwork
+
+    init(
+        rank: Int? = nil,
+        title: String,
+        subtitle: String? = nil,
+        detail: String,
+        badgeText: String,
+        @ViewBuilder artwork: () -> Artwork
+    ) {
+        self.rank = rank
+        self.title = title
+        self.subtitle = subtitle
+        self.detail = detail
+        self.badgeText = badgeText
+        self.artwork = artwork()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let rank {
+                RankBadgeView(rank: rank)
+            }
+
+            artwork
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                subtitleLine
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            MetricBadge(text: badgeText)
+        }
+        .frame(minHeight: 64, alignment: .center)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var subtitleLine: some View {
+        if let subtitle, !subtitle.isEmpty {
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else {
+            Text(" ")
+                .font(.subheadline)
+                .lineLimit(1)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 struct MetricBadge: View {
     let text: String
 
@@ -157,6 +225,7 @@ struct MetricBadge: View {
         Text(text)
             .font(.subheadline.weight(.semibold))
             .monospacedDigit()
+            .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Capsule().fill(Color.secondary.opacity(0.14)))

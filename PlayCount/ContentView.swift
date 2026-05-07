@@ -134,7 +134,6 @@ private struct AuthorizedLibraryView: View {
             Tab("Recap", systemImage: "calendar", value: LibraryTab.recap) {
                 NavigationStack {
                     MonthlyRecapView(manager: manager)
-                        .toolbar(.hidden, for: .navigationBar)
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                 }
             }

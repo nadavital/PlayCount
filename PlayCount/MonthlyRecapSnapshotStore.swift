@@ -310,6 +310,41 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    func recap(
+        forMonthContaining date: Date,
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = []
+    ) -> MonthlyRecap {
+        accessQueue.sync {
+            recap(
+                for: date,
+                snapshots: load().snapshots,
+                sourceSongs: sourceSongs,
+                sourceAlbums: sourceAlbums,
+                sourceArtists: sourceArtists
+            )
+        }
+    }
+
+    func availableMonthStarts(through date: Date = Date()) -> [Date] {
+        accessQueue.sync {
+            let ordered = load().snapshots.sorted { $0.capturedAt < $1.capturedAt }
+            let currentMonth = calendar.startOfMonth(containing: date)
+
+            guard let firstSnapshot = ordered.first else {
+                return [currentMonth]
+            }
+
+            let firstMonth = calendar.startOfMonth(containing: firstSnapshot.capturedAt)
+            let monthCount = max(0, calendar.dateComponents([.month], from: firstMonth, to: currentMonth).month ?? 0)
+
+            return (0...monthCount).compactMap {
+                calendar.date(byAdding: .month, value: $0, to: firstMonth)
+            }
+        }
+    }
+
     func debugSummary(at date: Date = Date()) -> String {
         accessQueue.sync {
             let stored = load()

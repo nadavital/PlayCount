@@ -46,26 +46,13 @@ struct ArtistRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let rank = rank {
-                RankBadgeView(rank: rank)
-            }
-
+        MediaListRow(
+            rank: rank,
+            title: artist.name,
+            detail: sortMetric.supplementaryDescription(playCount: artist.playCount, duration: artist.totalPlayDuration),
+            badgeText: sortMetric.badgeText(playCount: artist.playCount, duration: artist.totalPlayDuration)
+        ) {
             ArtistArtworkView(artwork: artist.artwork, name: artist.name)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(artist.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(sortMetric.supplementaryDescription(playCount: artist.playCount, duration: artist.totalPlayDuration))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 12)
-
-            MetricBadge(text: sortMetric.badgeText(playCount: artist.playCount, duration: artist.totalPlayDuration))
         }
-        .padding(.vertical, 4)
     }
 }

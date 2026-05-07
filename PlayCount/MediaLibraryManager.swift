@@ -119,6 +119,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var hasLoadedInitialSnapshot = false
     @Published private(set) var nowPlayingState: NowPlayingState?
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
+    @Published private(set) var availableRecapMonths: [Date] = []
 
     private let fetchLimit: Int
     private lazy var mediaLibrary = MPMediaLibrary.default()
@@ -144,6 +145,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
         authorizationStatus = MPMediaLibrary.authorizationStatus()
         monthlyRecap = snapshotStore.currentMonthRecap()
+        availableRecapMonths = snapshotStore.availableMonthStarts()
 
         mediaLibrary.beginGeneratingLibraryChangeNotifications()
         musicPlayer.beginGeneratingPlaybackNotifications()
@@ -263,11 +265,27 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             self.libraryAlbums = result.1
             self.libraryArtists = result.2
             self.monthlyRecap = result.3
+            self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
             self.applySortAndLimit()
             self.hasLoadedInitialSnapshot = true
         }
 
         return true
+    }
+
+    func recap(forMonthContaining date: Date) -> MonthlyRecap {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return Self.screenshotRecap(from: Self.screenshotSongs, monthStart: date)
+        }
+        #endif
+
+        return snapshotStore.recap(
+            forMonthContaining: date,
+            sourceSongs: librarySongs + topSongs,
+            sourceAlbums: libraryAlbums + topAlbums,
+            sourceArtists: libraryArtists + topArtists
+        )
     }
 
     func recapDebugSummary() -> String {
@@ -359,6 +377,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.libraryAlbums = albums
                 self.libraryArtists = artists
                 self.monthlyRecap = recap
+                self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
 
                 self.applySortAndLimit()
                 self.isLoading = false
@@ -1057,6 +1076,15 @@ private extension Calendar {
     }
 }
 
+private extension Array {
+    func rotatedLeft(by distance: Int) -> [Element] {
+        guard !isEmpty else { return [] }
+        let offset = distance % count
+        guard offset > 0 else { return self }
+        return Array(self[offset...]) + Array(self[..<offset])
+    }
+}
+
 extension MediaLibraryManager {
     private static func generatedArtwork(size: CGSize = CGSize(width: 300, height: 300), title: String, subtitle: String) -> MPMediaItemArtwork? {
         #if os(iOS)
@@ -1098,6 +1126,7 @@ extension MediaLibraryManager {
         topAlbums = Array(libraryAlbums.prefix(20))
         topArtists = Array(libraryArtists.prefix(20))
         monthlyRecap = Self.screenshotRecap(from: songs)
+        availableRecapMonths = Self.screenshotRecapMonths(endingAt: monthlyRecap.monthStart)
         hasLoadedInitialSnapshot = true
         nowPlayingState = NowPlayingState(
             title: songs[0].title,
@@ -1243,9 +1272,17 @@ extension MediaLibraryManager {
         .sorted { $0.playCount > $1.playCount }
     }
 
-    private static func screenshotRecap(from songs: [TopSong]) -> MonthlyRecap {
-        let deltas = [46, 39, 35, 31, 27, 24, 21, 18, 15, 13, 11, 9]
-        let rankedSongs = zip(songs, deltas).map { song, delta in
+    private static func screenshotRecap(from songs: [TopSong], monthStart overrideMonthStart: Date? = nil) -> MonthlyRecap {
+        let calendar = Calendar.current
+        let monthStart = overrideMonthStart.map { calendar.screenshotStartOfMonth(containing: $0) }
+            ?? calendar.screenshotStartOfMonth(containing: Date())
+        let monthOrdinal = calendar.component(.year, from: monthStart) * 12 + calendar.component(.month, from: monthStart)
+        let rotation = abs(monthOrdinal) % max(songs.count, 1)
+        let monthlySongs = songs.rotatedLeft(by: rotation)
+        let monthlyDeltas = [46, 39, 35, 31, 27, 24, 21, 18, 15, 13, 11, 9]
+            .map { max(4, $0 - (abs(monthOrdinal) % 4) * 2) }
+
+        let rankedSongs = zip(monthlySongs, monthlyDeltas).map { song, delta in
             MonthlyRecap.RankedSong(
                 id: song.id,
                 title: song.title,
@@ -1258,7 +1295,7 @@ extension MediaLibraryManager {
             )
         }
 
-        let albums = screenshotAlbums(from: songs).map { album in
+        let albums = screenshotAlbums(from: monthlySongs).map { album in
             MonthlyRecap.RankedGroup(
                 id: String(album.id),
                 title: album.title,
@@ -1269,7 +1306,7 @@ extension MediaLibraryManager {
             )
         }
 
-        let artists = screenshotArtists(from: songs).map { artist in
+        let artists = screenshotArtists(from: monthlySongs).map { artist in
             MonthlyRecap.RankedGroup(
                 id: String(artist.id),
                 title: artist.name,
@@ -1280,8 +1317,6 @@ extension MediaLibraryManager {
             )
         }
 
-        let calendar = Calendar.current
-        let monthStart = calendar.screenshotStartOfMonth(containing: Date())
         let trackingStart = calendar.date(byAdding: .month, value: -4, to: monthStart) ?? Date().addingTimeInterval(-60 * 60 * 24 * 120)
 
         return MonthlyRecap(
@@ -1290,7 +1325,7 @@ extension MediaLibraryManager {
             lastCaptureReason: .manualRefresh,
             trackingStart: trackingStart,
             snapshotCount: 58,
-            totalPlayDelta: deltas.reduce(0, +),
+            totalPlayDelta: monthlyDeltas.reduce(0, +),
             totalSkipDelta: 19,
             totalListeningDuration: rankedSongs.reduce(0) { $0 + $1.listeningDuration },
             newSongCount: 7,
@@ -1298,13 +1333,21 @@ extension MediaLibraryManager {
             topArtists: Array(artists),
             topAlbums: Array(albums),
             biggestGainers: [
-                MonthlyRecap.MovementSong(id: songs[2].id, title: songs[2].title, artist: songs[2].artist, playDelta: deltas[2], rankChange: 42, currentRank: 12, previousRank: 54, artwork: songs[2].artwork),
-                MonthlyRecap.MovementSong(id: songs[4].id, title: songs[4].title, artist: songs[4].artist, playDelta: deltas[4], rankChange: 31, currentRank: 18, previousRank: 49, artwork: songs[4].artwork),
-                MonthlyRecap.MovementSong(id: songs[6].id, title: songs[6].title, artist: songs[6].artist, playDelta: deltas[6], rankChange: 24, currentRank: 21, previousRank: 45, artwork: songs[6].artwork),
-                MonthlyRecap.MovementSong(id: songs[8].id, title: songs[8].title, artist: songs[8].artist, playDelta: deltas[8], rankChange: 18, currentRank: 29, previousRank: 47, artwork: songs[8].artwork)
+                MonthlyRecap.MovementSong(id: monthlySongs[2].id, title: monthlySongs[2].title, artist: monthlySongs[2].artist, playDelta: monthlyDeltas[2], rankChange: 42, currentRank: 12, previousRank: 54, artwork: monthlySongs[2].artwork),
+                MonthlyRecap.MovementSong(id: monthlySongs[4].id, title: monthlySongs[4].title, artist: monthlySongs[4].artist, playDelta: monthlyDeltas[4], rankChange: 31, currentRank: 18, previousRank: 49, artwork: monthlySongs[4].artwork),
+                MonthlyRecap.MovementSong(id: monthlySongs[6].id, title: monthlySongs[6].title, artist: monthlySongs[6].artist, playDelta: monthlyDeltas[6], rankChange: 24, currentRank: 21, previousRank: 45, artwork: monthlySongs[6].artwork),
+                MonthlyRecap.MovementSong(id: monthlySongs[8].id, title: monthlySongs[8].title, artist: monthlySongs[8].artist, playDelta: monthlyDeltas[8], rankChange: 18, currentRank: 29, previousRank: 47, artwork: monthlySongs[8].artwork)
             ],
             topNewSongs: Array(rankedSongs.suffix(7))
         )
+    }
+
+    private static func screenshotRecapMonths(endingAt monthStart: Date) -> [Date] {
+        let calendar = Calendar.current
+        let currentMonth = calendar.screenshotStartOfMonth(containing: monthStart)
+        return (0...17).compactMap {
+            calendar.date(byAdding: .month, value: -17 + $0, to: currentMonth)
+        }
     }
 
     static var previewPlaying: MediaLibraryManager {

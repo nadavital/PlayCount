@@ -4,13 +4,278 @@ import SwiftUI
 
 struct MonthlyRecapView: View {
     @ObservedObject var manager: MediaLibraryManager
+    @State private var selectedMonthStart: Date?
+    @State private var isShowingYearAggregate = false
+    @State private var monthTransitionEdge: Edge = .trailing
+    @State private var monthDragOffset: CGFloat = 0
 
     #if DEBUG
     @State private var reminderStatusMessage: String?
     #endif
 
     private var recap: MonthlyRecap {
-        manager.monthlyRecap
+        if isShowingYearAggregate {
+            return yearlyRecap(for: selectedRecapYear)
+        }
+        return recapForMonth(selectedMonthStartOrCurrent)
+    }
+
+    private func recapForMonth(_ month: Date) -> MonthlyRecap {
+        if Calendar.current.isDate(month, equalTo: manager.monthlyRecap.monthStart, toGranularity: .month) {
+            return manager.monthlyRecap
+        }
+        return manager.recap(forMonthContaining: month)
+    }
+
+    private var selectedMonthStartOrCurrent: Date {
+        normalizedMonth(selectedMonthStart ?? manager.monthlyRecap.monthStart)
+    }
+
+    private var availableMonthStarts: [Date] {
+        let source = manager.availableRecapMonths.isEmpty ? [manager.monthlyRecap.monthStart] : manager.availableRecapMonths
+        return Array(Set(source.map(normalizedMonth))).sorted()
+    }
+
+    private var selectedMonthIndex: Int? {
+        availableMonthStarts.firstIndex {
+            Calendar.current.isDate($0, equalTo: selectedMonthStartOrCurrent, toGranularity: .month)
+        }
+    }
+
+    private var canSelectPreviousMonth: Bool {
+        if isShowingYearAggregate {
+            guard let selectedYearIndex = availableRecapYears.firstIndex(of: selectedRecapYear) else { return false }
+            return selectedYearIndex > 0
+        }
+        guard let selectedMonthIndex else { return false }
+        return selectedMonthIndex > 0
+    }
+
+    private var canSelectNextMonth: Bool {
+        if isShowingYearAggregate {
+            guard let selectedYearIndex = availableRecapYears.firstIndex(of: selectedRecapYear) else { return false }
+            return selectedYearIndex < availableRecapYears.count - 1
+        }
+        guard let selectedMonthIndex else { return false }
+        return selectedMonthIndex < availableMonthStarts.count - 1
+    }
+
+    private var hasMultipleRecapMonths: Bool {
+        availableMonthStarts.count > 1
+    }
+
+    private var availableRecapYears: [Int] {
+        Array(Set(availableMonthStarts.map { Calendar.current.component(.year, from: $0) })).sorted()
+    }
+
+    private var hasMultipleRecapYears: Bool {
+        availableRecapYears.count > 1
+    }
+
+    private var selectedRecapYear: Int {
+        Calendar.current.component(.year, from: selectedMonthStartOrCurrent)
+    }
+
+    private var selectedYearMonths: [Date] {
+        months(in: selectedRecapYear)
+    }
+
+    private func months(in year: Int) -> [Date] {
+        let calendar = Calendar.current
+        return availableMonthStarts.filter {
+            calendar.component(.year, from: $0) == year
+        }
+    }
+
+    private func yearlyRecap(for year: Int) -> MonthlyRecap {
+        let calendar = Calendar.current
+        let months = months(in: year)
+        guard let firstMonth = months.first else {
+            return recapForMonth(selectedMonthStartOrCurrent)
+        }
+
+        let monthlyRecaps = months.map(recapForMonth)
+        let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? firstMonth
+
+        var songs: [UInt64: RankedSongAggregate] = [:]
+        var albums: [String: RankedGroupAggregate] = [:]
+        var artists: [String: RankedGroupAggregate] = [:]
+        var movement: [UInt64: MovementSongAggregate] = [:]
+        var newSongIDs: [UInt64] = []
+
+        for recap in monthlyRecaps {
+            for song in recap.topSongs {
+                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+            }
+            for song in recap.topNewSongs {
+                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+                if !newSongIDs.contains(song.id) {
+                    newSongIDs.append(song.id)
+                }
+            }
+            for group in recap.topAlbums {
+                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for group in recap.topArtists {
+                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for song in recap.biggestGainers {
+                movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
+            }
+        }
+
+        let rankedSongs = songs.values
+            .map(\.rankedSong)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedAlbums = albums.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedArtists = artists.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let biggestGainers = movement.values
+            .map(\.movementSong)
+            .sorted { $0.rankChange > $1.rankChange }
+
+        let newSongs = newSongIDs.compactMap { id in
+            songs[id]?.rankedSong
+        }
+        .sorted { $0.playDelta > $1.playDelta }
+
+        return MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: Date(),
+            lastCaptureReason: .manualRefresh,
+            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
+            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
+            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
+            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
+            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
+            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
+            topSongs: rankedSongs,
+            topArtists: rankedArtists,
+            topAlbums: rankedAlbums,
+            biggestGainers: biggestGainers,
+            topNewSongs: newSongs
+        )
+    }
+
+    private struct RankedSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let albumTitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var skipDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(song: MonthlyRecap.RankedSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            albumTitle = song.albumTitle
+            artwork = song.artwork
+            playDelta = 0
+            skipDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ song: MonthlyRecap.RankedSong) {
+            playDelta += song.playDelta
+            skipDelta += song.skipDelta
+            listeningDuration += song.listeningDuration
+        }
+
+        var rankedSong: MonthlyRecap.RankedSong {
+            MonthlyRecap.RankedSong(
+                id: id,
+                title: title,
+                artist: artist,
+                albumTitle: albumTitle,
+                playDelta: playDelta,
+                skipDelta: skipDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct RankedGroupAggregate {
+        let id: String
+        let title: String
+        let subtitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(group: MonthlyRecap.RankedGroup) {
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            artwork = group.artwork
+            playDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ group: MonthlyRecap.RankedGroup) {
+            playDelta += group.playDelta
+            listeningDuration += group.listeningDuration
+        }
+
+        var rankedGroup: MonthlyRecap.RankedGroup {
+            MonthlyRecap.RankedGroup(
+                id: id,
+                title: title,
+                subtitle: subtitle,
+                playDelta: playDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct MovementSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let currentRank: Int
+        let previousRank: Int
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var rankChange: Int
+
+        init(song: MonthlyRecap.MovementSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            currentRank = song.currentRank
+            previousRank = song.previousRank ?? song.currentRank + song.rankChange
+            artwork = song.artwork
+            playDelta = 0
+            rankChange = 0
+        }
+
+        mutating func merge(_ song: MonthlyRecap.MovementSong) {
+            playDelta += song.playDelta
+            rankChange += song.rankChange
+        }
+
+        var movementSong: MonthlyRecap.MovementSong {
+            MonthlyRecap.MovementSong(
+                id: id,
+                title: title,
+                artist: artist,
+                playDelta: playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: artwork
+            )
+        }
     }
 
     private var recapDrilldownContext: RecapDrilldownContext {
@@ -230,7 +495,13 @@ struct MonthlyRecapView: View {
                         recap: recap,
                         artworks: artworkHighlights,
                         leadingSong: recap.topSongs.first,
-                        leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:))
+                        leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:)),
+                        selectedYear: selectedRecapYear,
+                        months: selectedYearMonths,
+                        isYearSelected: isShowingYearAggregate,
+                        selectedMonthStart: selectedMonthStartOrCurrent,
+                        onSelectYear: selectYearAggregate,
+                        onSelectMonth: { selectMonth($0) }
                     )
 
                     if recap.hasActivity {
@@ -260,6 +531,9 @@ struct MonthlyRecapView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
                 .padding(.bottom, 36)
+                .offset(x: monthDragDisplayOffset)
+                .id(selectedMonthStartOrCurrent)
+                .transition(monthContentTransition)
             }
         }
         .scrollIndicators(.hidden)
@@ -267,7 +541,63 @@ struct MonthlyRecapView: View {
             manager.refreshForRecapSequence(reason: .manualRefresh)
         }
         .background(RecapBackground(artwork: heroArtwork))
-        .animation(.easeInOut(duration: 0.2), value: recap)
+        .overlay(alignment: .topTrailing) {
+            floatingYearPicker
+                .padding(.top, 8)
+                .padding(.trailing, 18)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .animation(.smooth(duration: 0.26), value: selectedMonthStartOrCurrent)
+        .simultaneousGesture(monthSwipeGesture)
+        .onAppear {
+            syncSelectedMonthIfNeeded()
+        }
+        .onChange(of: manager.availableRecapMonths) { _, _ in
+            syncSelectedMonthIfNeeded()
+        }
+        .onChange(of: manager.monthlyRecap.monthStart) { _, _ in
+            syncSelectedMonthIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var floatingYearPicker: some View {
+        if hasMultipleRecapYears {
+            Menu {
+                ForEach(availableRecapYears, id: \.self) { year in
+                    Button {
+                        selectYear(year)
+                    } label: {
+                        if year == selectedRecapYear {
+                            Label(String(year), systemImage: "checkmark")
+                                .foregroundStyle(.primary)
+                        } else {
+                            Text(String(year))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(String(selectedRecapYear))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(.regularMaterial, in: Capsule(style: .continuous))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+            }
+            .tint(.primary)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Recap year")
+        }
     }
 
     private var baselineSection: some View {
@@ -306,13 +636,7 @@ struct MonthlyRecapView: View {
     }
 
     private var biggestGainersSection: some View {
-        RecapRankingSection(
-            title: "Biggest Gainers",
-            totalCount: recap.biggestGainers.count,
-            visibleCount: 5
-        ) {
-            RecapFullMovementView(title: "Biggest Gainers", songs: recap.biggestGainers, manager: manager, recapContext: recapDrilldownContext)
-        } content: {
+        RecapRankingSection(title: "Biggest Gainers") {
             ForEach(recap.biggestGainers.prefix(5)) { song in
                 if let topSong = resolvedTopSong(for: song) {
                     NavigationLink {
@@ -329,13 +653,7 @@ struct MonthlyRecapView: View {
     }
 
     private var topNewSongsSection: some View {
-        RecapRankingSection(
-            title: "Top New Songs",
-            totalCount: recap.topNewSongs.count,
-            visibleCount: 5
-        ) {
-            RecapFullSongsView(title: "Top New Songs", songs: recap.topNewSongs, manager: manager, recapContext: recapDrilldownContext)
-        } content: {
+        RecapRankingSection(title: "Top New Songs") {
             ForEach(Array(recap.topNewSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
                     NavigationLink {
@@ -458,7 +776,147 @@ struct MonthlyRecapView: View {
     #endif
 
     private var monthTitle: String {
-        Self.monthFormatter.string(from: recap.monthStart)
+        if isShowingYearAggregate {
+            return String(selectedRecapYear)
+        }
+        return Self.monthFormatter.string(from: recap.monthStart)
+    }
+
+    private var monthSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onChanged { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > 8,
+                      abs(horizontal) > abs(vertical) * 1.2 else {
+                    return
+                }
+
+                monthDragOffset = clampedMonthDragOffset(horizontal)
+            }
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                defer {
+                    withAnimation(.smooth(duration: 0.22)) {
+                        monthDragOffset = 0
+                    }
+                }
+
+                guard abs(horizontal) > 64,
+                      abs(horizontal) > abs(vertical) * 1.35 else {
+                    return
+                }
+
+                if horizontal < 0 {
+                    selectNextMonth()
+                } else {
+                    selectPreviousMonth()
+                }
+            }
+    }
+
+    private var monthDragDisplayOffset: CGFloat {
+        clampedMonthDragOffset(monthDragOffset)
+    }
+
+    private var monthContentTransition: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: monthTransitionEdge).combined(with: .opacity),
+            removal: .opacity
+        )
+    }
+
+    private func clampedMonthDragOffset(_ offset: CGFloat) -> CGFloat {
+        let hasDestination = offset > 0 ? canSelectPreviousMonth : canSelectNextMonth
+        let resistance = hasDestination ? 1 : 0.22
+        return min(118, max(-118, offset * resistance))
+    }
+
+    private func syncSelectedMonthIfNeeded() {
+        let currentSelection = selectedMonthStart.map(normalizedMonth)
+        if let currentSelection,
+           availableMonthStarts.contains(where: { Calendar.current.isDate($0, equalTo: currentSelection, toGranularity: .month) }) {
+            selectedMonthStart = currentSelection
+            return
+        }
+
+        selectedMonthStart = normalizedMonth(manager.monthlyRecap.monthStart)
+    }
+
+    private func selectPreviousMonth() {
+        if isShowingYearAggregate {
+            selectAdjacentYear(offset: -1)
+            return
+        }
+        guard let selectedMonthIndex, selectedMonthIndex > 0 else { return }
+        selectMonth(availableMonthStarts[selectedMonthIndex - 1], transitionEdge: .leading)
+    }
+
+    private func selectNextMonth() {
+        if isShowingYearAggregate {
+            selectAdjacentYear(offset: 1)
+            return
+        }
+        guard let selectedMonthIndex, selectedMonthIndex < availableMonthStarts.count - 1 else { return }
+        selectMonth(availableMonthStarts[selectedMonthIndex + 1], transitionEdge: .trailing)
+    }
+
+    private func selectMonth(_ month: Date, transitionEdge explicitEdge: Edge? = nil) {
+        let nextMonth = normalizedMonth(month)
+        let currentMonth = selectedMonthStartOrCurrent
+        if let explicitEdge {
+            monthTransitionEdge = explicitEdge
+        } else {
+            monthTransitionEdge = nextMonth < currentMonth ? .leading : .trailing
+        }
+
+        withAnimation(.smooth(duration: 0.26)) {
+            isShowingYearAggregate = false
+            selectedMonthStart = nextMonth
+        }
+    }
+
+    private func selectYear(_ year: Int) {
+        let calendar = Calendar.current
+        let selectedMonth = calendar.component(.month, from: selectedMonthStartOrCurrent)
+        let monthsInYear = availableMonthStarts.filter {
+            calendar.component(.year, from: $0) == year
+        }
+
+        guard let fallback = monthsInYear.last else { return }
+        let matchingMonth = monthsInYear.first {
+            calendar.component(.month, from: $0) == selectedMonth
+        }
+
+        selectYearAggregate(year, anchorMonth: matchingMonth ?? fallback)
+    }
+
+    private func selectYearAggregate() {
+        selectYearAggregate(selectedRecapYear, anchorMonth: selectedMonthStartOrCurrent)
+    }
+
+    private func selectAdjacentYear(offset: Int) {
+        guard let selectedYearIndex = availableRecapYears.firstIndex(of: selectedRecapYear) else { return }
+        let nextIndex = selectedYearIndex + offset
+        guard availableRecapYears.indices.contains(nextIndex) else { return }
+        selectYear(availableRecapYears[nextIndex])
+    }
+
+    private func selectYearAggregate(_ year: Int, anchorMonth: Date) {
+        let nextMonth = normalizedMonth(anchorMonth)
+        monthTransitionEdge = nextMonth < selectedMonthStartOrCurrent ? .leading : .trailing
+
+        withAnimation(.smooth(duration: 0.26)) {
+            selectedMonthStart = nextMonth
+            isShowingYearAggregate = true
+        }
+    }
+
+    private func normalizedMonth(_ date: Date) -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? calendar.startOfDay(for: date)
     }
 
     private static let monthFormatter: DateFormatter = {
@@ -474,6 +932,12 @@ private struct RecapHeroPoster: View {
     let artworks: [MPMediaItemArtwork]
     let leadingSong: MonthlyRecap.RankedSong?
     let leadingSongArtwork: MPMediaItemArtwork?
+    let selectedYear: Int
+    let months: [Date]
+    let isYearSelected: Bool
+    let selectedMonthStart: Date
+    let onSelectYear: () -> Void
+    let onSelectMonth: (Date) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -485,10 +949,16 @@ private struct RecapHeroPoster: View {
                     .font(.system(size: 42, weight: .bold, design: .rounded))
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let trackingStart = recap.trackingStart {
-                    RecapMonthTrail(trackingStart: trackingStart, monthStart: recap.monthStart)
-                }
+                RecapPeriodStrip(
+                    selectedYear: selectedYear,
+                    months: months,
+                    isYearSelected: isYearSelected,
+                    selectedMonthStart: selectedMonthStart,
+                    onSelectYear: onSelectYear,
+                    onSelectMonth: onSelectMonth
+                )
 
                 RecapSummaryBar(recap: recap)
             }
@@ -501,36 +971,108 @@ private struct RecapHeroPoster: View {
     }
 }
 
+private struct RecapPeriodStrip: View {
+    let selectedYear: Int
+    let months: [Date]
+    let isYearSelected: Bool
+    let selectedMonthStart: Date
+    let onSelectYear: () -> Void
+    let onSelectMonth: (Date) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 7) {
+                periodChip(
+                    title: String(selectedYear),
+                    isSelected: isYearSelected,
+                    action: onSelectYear
+                )
+
+                ForEach(months, id: \.timeIntervalSinceReferenceDate) { month in
+                    periodChip(
+                        title: Self.monthFormatter.string(from: month),
+                        isSelected: !isYearSelected && Calendar.current.isDate(month, equalTo: selectedMonthStart, toGranularity: .month)
+                    ) {
+                        onSelectMonth(month)
+                    }
+                }
+            }
+            .padding(.vertical, 1)
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityLabel("Recap period")
+    }
+
+    private func periodChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(isSelected ? .bold : .semibold))
+                .monospacedDigit()
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .padding(.horizontal, isSelected ? 11 : 9)
+                .frame(height: 28)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(isSelected ? Color.primary.opacity(0.10) : Color.primary.opacity(0.045))
+                }
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.primary.opacity(isSelected ? 0.12 : 0.06), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLL"
+        return formatter
+    }()
+}
+
 private struct RecapArtworkStack: View {
     let artworks: [MPMediaItemArtwork]
     @State private var isAnimated = false
+    @State private var topArtworkID = 0
 
     var body: some View {
         ZStack {
             if let mainArtwork = artworks.first {
                 ZStack {
-                    if artworks.count > 1 {
-                        ForEach(Array(artworks.dropFirst().prefix(3).enumerated()), id: \.offset) { index, artwork in
+                    ForEach(Array(sideArtworks.enumerated()), id: \.element.id) { index, sideArtwork in
+                        Button {
+                            bringArtworkToTop(sideArtwork.id)
+                        } label: {
                             ArtworkView(
-                                artwork: artwork,
+                                artwork: sideArtwork.artwork,
                                 size: CGSize(width: sideArtworkSize(for: index), height: sideArtworkSize(for: index)),
                                 cornerRadius: 18
                             )
-                            .shadow(color: .black.opacity(0.17), radius: 13, x: 0, y: 9)
-                            .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
-                            .offset(sideArtworkOffset(for: index, animated: isAnimated))
-                            .zIndex(Double(index))
                         }
+                        .buttonStyle(RecapArtworkButtonStyle())
+                        .shadow(color: .black.opacity(0.17), radius: 13, x: 0, y: 9)
+                        .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
+                        .offset(sideArtworkOffset(for: index, animated: isAnimated))
+                        .zIndex(zIndex(for: sideArtwork.id, defaultZIndex: Double(index)))
+                        .accessibilityLabel("Bring album cover forward")
                     }
 
-                    ArtworkView(
-                        artwork: mainArtwork,
-                        size: CGSize(width: 212, height: 212),
-                        cornerRadius: 28
-                    )
+                    Button {
+                        bringArtworkToTop(0)
+                    } label: {
+                        ArtworkView(
+                            artwork: mainArtwork,
+                            size: CGSize(width: 212, height: 212),
+                            cornerRadius: 28
+                        )
+                    }
+                    .buttonStyle(RecapArtworkButtonStyle())
                     .shadow(color: .black.opacity(0.26), radius: 26, x: 0, y: 18)
                     .rotationEffect(.degrees(-1.5 + (isAnimated ? 0.45 : 0)))
-                    .zIndex(10)
+                    .scaleEffect(isAnimated ? 1.015 : 1)
+                    .zIndex(zIndex(for: 0, defaultZIndex: 20))
+                    .accessibilityLabel("Bring main album cover forward")
                 }
             } else {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -550,6 +1092,46 @@ private struct RecapArtworkStack: View {
                 isAnimated = true
             }
         }
+        .onChange(of: artworks.count) { _, newCount in
+            guard newCount > 0 else {
+                topArtworkID = 0
+                return
+            }
+            if !artworks.indices.contains(topArtworkID) {
+                topArtworkID = 0
+            }
+        }
+    }
+
+    private struct SideArtwork: Identifiable {
+        let id: Int
+        let artwork: MPMediaItemArtwork
+    }
+
+    private struct RecapArtworkButtonStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+        }
+    }
+
+    private var sideArtworks: [SideArtwork] {
+        artworks.enumerated()
+            .dropFirst()
+            .prefix(3)
+            .map { SideArtwork(id: $0.offset, artwork: $0.element) }
+    }
+
+    private func bringArtworkToTop(_ id: Int) {
+        guard artworks.indices.contains(id) else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            topArtworkID = id
+        }
+    }
+
+    private func zIndex(for id: Int, defaultZIndex: Double) -> Double {
+        id == topArtworkID ? 40 : defaultZIndex
     }
 
     private func sideArtworkRotation(for index: Int) -> Double {
@@ -576,7 +1158,7 @@ private struct RecapArtworkStack: View {
         case 1:
             return CGSize(width: 126 + float.width, height: 76 + float.height)
         default:
-            return CGSize(width: 0 + float.width, height: 118 + float.height)
+            return CGSize(width: float.width, height: 118 + float.height)
         }
     }
 
@@ -594,68 +1176,6 @@ private struct RecapArtworkStack: View {
     private func sideArtworkSize(for index: Int) -> CGFloat {
         index == 2 ? 96 : 112
     }
-}
-
-private struct RecapMonthTrail: View {
-    let trackingStart: Date
-    let monthStart: Date
-
-    private var months: [Date] {
-        let calendar = Calendar.current
-        let firstMonth = Self.startOfMonth(containing: trackingStart, calendar: calendar)
-        let currentMonth = Self.startOfMonth(containing: monthStart, calendar: calendar)
-        let monthCount = max(0, calendar.dateComponents([.month], from: firstMonth, to: currentMonth).month ?? 0)
-        let visibleCount = min(monthCount + 1, 5)
-        let startOffset = max(0, monthCount - visibleCount + 1)
-
-        return (0..<visibleCount).compactMap {
-            calendar.date(byAdding: .month, value: startOffset + $0, to: firstMonth)
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 7) {
-            ForEach(months, id: \.timeIntervalSinceReferenceDate) { month in
-                let isCurrent = Calendar.current.isDate(month, equalTo: monthStart, toGranularity: .month)
-                Text(Self.monthFormatter.string(from: month))
-                    .font(.caption.weight(isCurrent ? .bold : .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(isCurrent ? .primary : .secondary)
-                    .padding(.horizontal, isCurrent ? 10 : 8)
-                    .padding(.vertical, 6)
-                    .background {
-                        Capsule(style: .continuous)
-                            .fill(isCurrent ? Color.primary.opacity(0.09) : Color.secondary.opacity(0.08))
-                    }
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(Color.white.opacity(isCurrent ? 0.55 : 0.28), lineWidth: 1)
-                    }
-            }
-        }
-        .accessibilityLabel(accessibilitySummary)
-    }
-
-    private var accessibilitySummary: String {
-        "Recap history from \(Self.fullMonthFormatter.string(from: trackingStart)) through \(Self.fullMonthFormatter.string(from: monthStart))"
-    }
-
-    private static func startOfMonth(containing date: Date, calendar: Calendar) -> Date {
-        let components = calendar.dateComponents([.year, .month], from: date)
-        return calendar.date(from: components) ?? date
-    }
-
-    private static let monthFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "LLL"
-        return formatter
-    }()
-
-    private static let fullMonthFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "LLLL yyyy"
-        return formatter
-    }()
 }
 
 private struct RecapHeroSpotlight: View {
