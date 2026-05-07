@@ -11,8 +11,6 @@ struct Shot {
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let inputDir = root.appendingPathComponent("AppStoreScreenshots")
-let outputDir = inputDir.appendingPathComponent("Framed")
-try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
 let defaultBezelPath = "/tmp/Bezel-iPhone-17/PNG/iPhone 17 Pro Max/iPhone 17 Pro Max - Deep Blue - Portrait.png"
 let bezelURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["PLAYCOUNT_APPSTORE_BEZEL"] ?? defaultBezelPath)
@@ -50,16 +48,49 @@ let shots: [Shot] = [
     )
 ]
 
-let canvasSize = CGSize(width: 1284, height: 2778)
-let deviceFrame = CGRect(x: 141, y: 513, width: 1002, height: 2121)
-let titleRect = CGRect(x: 72, y: 209, width: 1140, height: 120)
+struct RenderProfile {
+    let outputDirectoryName: String
+    let canvasSize: CGSize
+    let deviceFrame: CGRect
+    let titleRect: CGRect
+    let titleFontSize: CGFloat
+    let titleLineHeight: CGFloat
+}
+
+let profiles = [
+    RenderProfile(
+        outputDirectoryName: "Framed",
+        canvasSize: CGSize(width: 1284, height: 2778),
+        deviceFrame: CGRect(x: 141, y: 513, width: 1002, height: 2121),
+        titleRect: CGRect(x: 72, y: 209, width: 1140, height: 120),
+        titleFontSize: 76,
+        titleLineHeight: 81
+    ),
+    RenderProfile(
+        outputDirectoryName: "Framed-6.5",
+        canvasSize: CGSize(width: 1284, height: 2778),
+        deviceFrame: CGRect(x: 141, y: 513, width: 1002, height: 2121),
+        titleRect: CGRect(x: 72, y: 209, width: 1140, height: 120),
+        titleFontSize: 76,
+        titleLineHeight: 81
+    ),
+    RenderProfile(
+        outputDirectoryName: "Framed-6.9",
+        canvasSize: CGSize(width: 1320, height: 2868),
+        deviceFrame: CGRect(x: 145, y: 530, width: 1030, height: 2190),
+        titleRect: CGRect(x: 74, y: 216, width: 1172, height: 124),
+        titleFontSize: 78,
+        titleLineHeight: 84
+    )
+]
+
 let rgbaBitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
 
-func flipped(_ rect: CGRect) -> CGRect {
+func flipped(_ rect: CGRect, canvasSize: CGSize) -> CGRect {
     CGRect(x: rect.origin.x, y: canvasSize.height - rect.origin.y - rect.height, width: rect.width, height: rect.height)
 }
 
-func drawText(_ text: String, rect: CGRect, font: NSFont, color: NSColor, context: CGContext, alignment: NSTextAlignment = .left, lineHeight: CGFloat? = nil) {
+func drawText(_ text: String, rect: CGRect, font: NSFont, color: NSColor, context: CGContext, canvasSize: CGSize, alignment: NSTextAlignment = .left, lineHeight: CGFloat? = nil) {
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = alignment
     paragraph.lineBreakMode = .byWordWrapping
@@ -77,11 +108,11 @@ func drawText(_ text: String, rect: CGRect, font: NSFont, color: NSColor, contex
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-    NSString(string: text).draw(in: flipped(rect), withAttributes: attributes)
+    NSString(string: text).draw(in: flipped(rect, canvasSize: canvasSize), withAttributes: attributes)
     NSGraphicsContext.restoreGraphicsState()
 }
 
-func drawBackground(offset: CGFloat, context: CGContext) {
+func drawBackground(offset: CGFloat, context: CGContext, canvasSize: CGSize) {
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     let cgColors = [
         NSColor(calibratedRed: 0.96, green: 0.93, blue: 1.00, alpha: 1).cgColor,
@@ -107,7 +138,7 @@ func drawBackground(offset: CGFloat, context: CGContext) {
             width: 2100,
             height: 170
         )
-        let path = CGPath(roundedRect: flipped(rect), cornerWidth: 85, cornerHeight: 85, transform: nil)
+        let path = CGPath(roundedRect: flipped(rect, canvasSize: canvasSize), cornerWidth: 85, cornerHeight: 85, transform: nil)
         context.addPath(path)
         context.setFillColor(NSColor.white.withAlphaComponent(index.isMultiple(of: 2) ? 0.18 : 0.10).cgColor)
         context.fillPath()
@@ -291,11 +322,11 @@ func makeDeviceComposite(screenshotLayer: CGImage, bezelOverlay: CGImage, bezelS
     return croppedDevice
 }
 
-func render(_ shot: Shot) throws {
+func render(_ shot: Shot, profile: RenderProfile, outputDir: URL) throws {
     guard let context = CGContext(
         data: nil,
-        width: Int(canvasSize.width),
-        height: Int(canvasSize.height),
+        width: Int(profile.canvasSize.width),
+        height: Int(profile.canvasSize.height),
         bitsPerComponent: 8,
         bytesPerRow: 0,
         space: CGColorSpaceCreateDeviceRGB(),
@@ -304,16 +335,17 @@ func render(_ shot: Shot) throws {
         throw NSError(domain: "renderer", code: 1)
     }
 
-    drawBackground(offset: shot.backgroundOffset, context: context)
+    drawBackground(offset: shot.backgroundOffset, context: context, canvasSize: profile.canvasSize)
 
     drawText(
         shot.title,
-        rect: titleRect,
-        font: NSFont.systemFont(ofSize: 76, weight: .black),
+        rect: profile.titleRect,
+        font: NSFont.systemFont(ofSize: profile.titleFontSize, weight: .black),
         color: NSColor(calibratedRed: 0.09, green: 0.08, blue: 0.04, alpha: 1),
         context: context,
+        canvasSize: profile.canvasSize,
         alignment: .center,
-        lineHeight: 81
+        lineHeight: profile.titleLineHeight
     )
 
     guard let bezelImage = NSImage(contentsOf: bezelURL),
@@ -341,22 +373,25 @@ func render(_ shot: Shot) throws {
         visibleBounds: bezelAssets.visibleBounds
     )
 
-    context.draw(deviceComposite, in: flipped(deviceFrame))
+    context.draw(deviceComposite, in: flipped(profile.deviceFrame, canvasSize: profile.canvasSize))
 
     guard let image = context.makeImage() else {
         throw NSError(domain: "renderer", code: 3)
     }
 
     let bitmap = NSBitmapImageRep(cgImage: image)
-    bitmap.size = canvasSize
+    bitmap.size = profile.canvasSize
     guard let data = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "renderer", code: 4)
     }
     try data.write(to: outputDir.appendingPathComponent(shot.output), options: .atomic)
 }
 
-for shot in shots {
-    try render(shot)
+for profile in profiles {
+    let outputDir = inputDir.appendingPathComponent(profile.outputDirectoryName)
+    try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+    for shot in shots {
+        try render(shot, profile: profile, outputDir: outputDir)
+    }
+    print("Wrote \(Int(profile.canvasSize.width))x\(Int(profile.canvasSize.height)) screenshots to \(outputDir.path)")
 }
-
-print("Wrote framed screenshots to \(outputDir.path)")
