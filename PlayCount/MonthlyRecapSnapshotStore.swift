@@ -136,12 +136,27 @@ struct MonthlyRecap: Equatable {
     }
 }
 
+struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
+    let id: String
+    let capturedAt: Date
+    let counterSignature: String
+    let encodedSnapshot: Data
+}
+
+struct YearlyRecapMonthlyHighlight: Identifiable, Equatable {
+    let month: Date
+    let recap: MonthlyRecap
+
+    var id: Date { month }
+}
+
 final class MonthlyRecapSnapshotStore {
     fileprivate struct LibrarySnapshot: Codable {
         let capturedAt: Date
         let reason: RecapSnapshotReason?
         let appVersion: String?
         let scannedSongCount: Int?
+        let deviceIdentifier: String?
         let songs: [SongSnapshot]
     }
 
@@ -278,18 +293,42 @@ final class MonthlyRecapSnapshotStore {
 
     private let fileURL: URL
     private let calendar: Calendar
+    private let deviceIdentifier: String
     private let accessQueue = DispatchQueue(label: "com.playcount.monthly-recap-snapshots")
     private let retentionMonths = 18
     private let minimumSnapshotInterval: TimeInterval = 60 * 30
+    private var loadedSnapshots: StoredSnapshots?
 
-    init(fileManager: FileManager = .default, calendar: Calendar = .current) {
+    private static func localDeviceIdentifier() -> String {
+        let key = "PlayCountRecapSnapshotDeviceIdentifier"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+
+        let identifier = UUID().uuidString
+        UserDefaults.standard.set(identifier, forKey: key)
+        return identifier
+    }
+
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil,
+        calendar: Calendar = .current,
+        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier()
+    ) {
         self.calendar = calendar
+        self.deviceIdentifier = deviceIdentifier
 
-        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let directoryURL = baseURL.appendingPathComponent("PlayCount", isDirectory: true)
-        try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        fileURL = directoryURL.appendingPathComponent("monthly-recap-snapshots.json")
+        let resolvedDirectoryURL: URL
+        if let providedDirectoryURL = directoryURL {
+            resolvedDirectoryURL = providedDirectoryURL
+        } else {
+            let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            resolvedDirectoryURL = baseURL.appendingPathComponent("PlayCount", isDirectory: true)
+        }
+        try? fileManager.createDirectory(at: resolvedDirectoryURL, withIntermediateDirectories: true)
+        fileURL = resolvedDirectoryURL.appendingPathComponent("monthly-recap-snapshots.json")
     }
 
     func record(
@@ -306,7 +345,7 @@ final class MonthlyRecapSnapshotStore {
 
     func currentMonthRecap(at date: Date = Date()) -> MonthlyRecap {
         accessQueue.sync {
-            recap(for: date, snapshots: load().snapshots)
+            recap(for: date, snapshots: loadLocked().snapshots)
         }
     }
 
@@ -319,7 +358,7 @@ final class MonthlyRecapSnapshotStore {
         accessQueue.sync {
             recap(
                 for: date,
-                snapshots: load().snapshots,
+                snapshots: loadLocked().snapshots,
                 sourceSongs: sourceSongs,
                 sourceAlbums: sourceAlbums,
                 sourceArtists: sourceArtists
@@ -327,9 +366,29 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    func recaps(
+        forMonthsContaining dates: [Date],
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = []
+    ) -> [MonthlyRecap] {
+        accessQueue.sync {
+            let snapshots = loadLocked().snapshots
+            return dates.map {
+                recap(
+                    for: $0,
+                    snapshots: snapshots,
+                    sourceSongs: sourceSongs,
+                    sourceAlbums: sourceAlbums,
+                    sourceArtists: sourceArtists
+                )
+            }
+        }
+    }
+
     func availableMonthStarts(through date: Date = Date()) -> [Date] {
         accessQueue.sync {
-            let ordered = load().snapshots.sorted { $0.capturedAt < $1.capturedAt }
+            let ordered = loadLocked().snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let currentMonth = calendar.startOfMonth(containing: date)
 
             guard let firstSnapshot = ordered.first else {
@@ -345,9 +404,46 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    func syncPayloads() -> [RecapSnapshotSyncPayload] {
+        accessQueue.sync {
+            loadLocked().snapshots.compactMap(\.syncPayload)
+        }
+    }
+
+    @discardableResult
+    func mergeSyncPayloads(_ payloads: [RecapSnapshotSyncPayload], now: Date = Date()) -> Bool {
+        guard !payloads.isEmpty else { return false }
+
+        return accessQueue.sync {
+            var stored = loadLocked()
+            var snapshotsByID: [String: LibrarySnapshot] = [:]
+            for snapshot in stored.snapshots {
+                snapshotsByID[snapshot.syncIdentifier] = snapshot
+            }
+            var didChange = false
+
+            for payload in payloads {
+                guard let snapshot = LibrarySnapshot(syncPayload: payload) else { continue }
+                if snapshotsByID[snapshot.syncIdentifier] == nil {
+                    snapshotsByID[snapshot.syncIdentifier] = snapshot
+                    didChange = true
+                }
+            }
+
+            guard didChange else { return false }
+
+            stored.snapshots = retainedSnapshots(
+                from: snapshotsByID.values.sorted { $0.capturedAt < $1.capturedAt },
+                now: now
+            )
+            saveLocked(stored)
+            return true
+        }
+    }
+
     func debugSummary(at date: Date = Date()) -> String {
         accessQueue.sync {
-            let stored = load()
+            let stored = loadLocked()
             let ordered = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let recap = recap(for: date, snapshots: ordered)
             let monthStart = calendar.startOfMonth(containing: date)
@@ -389,19 +485,20 @@ final class MonthlyRecapSnapshotStore {
         at capturedAt: Date,
         reason: RecapSnapshotReason
     ) -> MonthlyRecap {
-        var stored = load()
+        var stored = loadLocked()
         let snapshot = LibrarySnapshot(
             capturedAt: capturedAt,
             reason: reason,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
             scannedSongCount: songs.count,
+            deviceIdentifier: deviceIdentifier,
             songs: songs.map(SongSnapshot.init(song:))
         )
 
         if shouldAppend(snapshot, after: stored.snapshots.last) {
             stored.snapshots.append(snapshot)
             stored.snapshots = retainedSnapshots(from: stored.snapshots, now: capturedAt)
-            save(stored)
+            saveLocked(stored)
         }
 
         return recap(for: capturedAt, snapshots: stored.snapshots, sourceSongs: songs, sourceAlbums: albums, sourceArtists: artists)
@@ -532,17 +629,21 @@ final class MonthlyRecapSnapshotStore {
         ordered: [LibrarySnapshot],
         monthStart: Date
     ) -> LibrarySnapshot {
-        if let beforeMonth = ordered.last(where: { $0.capturedAt < monthStart }) {
+        let earlierInMonth = inMonth.filter { $0.capturedAt < latest.capturedAt }
+
+        if let beforeMonth = ordered.last(where: { $0.capturedAt < monthStart && $0.isSameDevice(as: latest) }) {
             return beforeMonth
         }
 
-        let earlierInMonth = inMonth.filter { $0.capturedAt < latest.capturedAt }
-
-        if let firstDifferent = earlierInMonth.first(where: { $0.counterSignature != latest.counterSignature }) {
+        if let firstDifferent = earlierInMonth.first(where: { $0.isSameDevice(as: latest) && $0.counterSignature != latest.counterSignature }) {
             return firstDifferent
         }
 
-        return earlierInMonth.first ?? inMonth.first ?? latest
+        return earlierInMonth.first(where: { $0.isSameDevice(as: latest) })
+            ?? inMonth.first(where: { $0.isSameDevice(as: latest) })
+            ?? earlierInMonth.first
+            ?? inMonth.first
+            ?? latest
     }
 
     private func playDelta(for song: SongSnapshot, baseline: SongSnapshot?, baselineDate: Date) -> Int {
@@ -679,22 +780,33 @@ final class MonthlyRecapSnapshotStore {
         return lhs.playDelta > rhs.playDelta
     }
 
-    private func load() -> StoredSnapshots {
+    private func loadLocked() -> StoredSnapshots {
+        if let loadedSnapshots {
+            return loadedSnapshots
+        }
+
         guard let data = try? Data(contentsOf: fileURL) else {
-            return StoredSnapshots(schemaVersion: 1, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 1, snapshots: [])
+            loadedSnapshots = empty
+            return empty
         }
 
         do {
-            return try JSONDecoder.playCount.decode(StoredSnapshots.self, from: data)
+            let stored = try JSONDecoder.playCount.decode(StoredSnapshots.self, from: data)
+            loadedSnapshots = stored
+            return stored
         } catch {
-            return StoredSnapshots(schemaVersion: 1, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 1, snapshots: [])
+            loadedSnapshots = empty
+            return empty
         }
     }
 
-    private func save(_ stored: StoredSnapshots) {
+    private func saveLocked(_ stored: StoredSnapshots) {
         do {
             let data = try JSONEncoder.playCount.encode(stored)
             try data.write(to: fileURL, options: [.atomic])
+            loadedSnapshots = stored
         } catch {
             assertionFailure("Failed to save monthly recap snapshots: \(error)")
         }
@@ -712,6 +824,7 @@ final class MonthlyRecapSnapshotStore {
             reason: .manualRefresh,
             appVersion: "self-check",
             scannedSongCount: 3,
+            deviceIdentifier: "self-check",
             songs: [
                 debugSong(id: 1, title: "Former First", playCount: 100),
                 debugSong(id: 2, title: "Climber", playCount: 90),
@@ -724,6 +837,7 @@ final class MonthlyRecapSnapshotStore {
             reason: .foreground,
             appVersion: "self-check",
             scannedSongCount: 4,
+            deviceIdentifier: "self-check",
             songs: [
                 debugSong(id: 1, title: "Former First", playCount: 101),
                 debugSong(id: 2, title: "Climber", playCount: 105),
@@ -810,6 +924,47 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             .map { "\($0.id):\($0.playCount):\($0.skipCount)" }
             .joined(separator: "|")
     }
+
+    func isSameDevice(as snapshot: Self) -> Bool {
+        guard let deviceIdentifier, let otherDeviceIdentifier = snapshot.deviceIdentifier else {
+            return true
+        }
+        return deviceIdentifier == otherDeviceIdentifier
+    }
+
+    var syncIdentifier: String {
+        let milliseconds = Int64((capturedAt.timeIntervalSince1970 * 1_000).rounded())
+        let hash = Self.stableHash("\(milliseconds)|\(deviceIdentifier ?? "unknown")|\(counterSignature)")
+        return "\(milliseconds)-\(String(hash, radix: 16))"
+    }
+
+    var syncPayload: RecapSnapshotSyncPayload? {
+        guard let data = try? JSONEncoder.playCount.encode(self) else { return nil }
+        return RecapSnapshotSyncPayload(
+            id: syncIdentifier,
+            capturedAt: capturedAt,
+            counterSignature: counterSignature,
+            encodedSnapshot: data
+        )
+    }
+
+    init?(syncPayload: RecapSnapshotSyncPayload) {
+        guard let snapshot = try? JSONDecoder.playCount.decode(Self.self, from: syncPayload.encodedSnapshot),
+              snapshot.syncIdentifier == syncPayload.id,
+              snapshot.counterSignature == syncPayload.counterSignature else {
+            return nil
+        }
+        self = snapshot
+    }
+
+    private static func stableHash(_ value: String) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return hash
+    }
 }
 
 private extension JSONEncoder {
@@ -829,7 +984,7 @@ private extension JSONDecoder {
     }
 }
 
-private extension Calendar {
+extension Calendar {
     func startOfMonth(containing date: Date) -> Date {
         let components = dateComponents([.year, .month], from: date)
         return self.date(from: components) ?? startOfDay(for: date)

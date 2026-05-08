@@ -124,15 +124,25 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private let fetchLimit: Int
     private lazy var mediaLibrary = MPMediaLibrary.default()
     private lazy var musicPlayer = MPMusicPlayerController.systemMusicPlayer
-    private let snapshotStore = MonthlyRecapSnapshotStore()
+    private let snapshotStore: MonthlyRecapSnapshotStore
+    private let recapCloudSyncService: RecapCloudSyncService?
     private var notificationObservers: [NSObjectProtocol] = []
     private var progressTimer: AnyCancellable?
     private var lastPlaybackDrivenRefresh: Date = .distantPast
     private var pendingSnapshotReason: RecapSnapshotReason?
     private let playbackRefreshInterval: TimeInterval = 20
+    private var recapCache: [Date: MonthlyRecap] = [:]
+    private var yearlyRecapCache: [Int: MonthlyRecap] = [:]
 
-    init(fetchLimit: Int = 0) {
+    init(
+        fetchLimit: Int = 0,
+        snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
+        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(),
+        startsAutomatically: Bool = true
+    ) {
         self.fetchLimit = fetchLimit
+        self.snapshotStore = snapshotStore
+        self.recapCloudSyncService = recapCloudSyncService
 
         #if DEBUG
         if Self.isScreenshotModeEnabled {
@@ -147,6 +157,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         monthlyRecap = snapshotStore.currentMonthRecap()
         availableRecapMonths = snapshotStore.availableMonthStarts()
 
+        guard startsAutomatically else {
+            return
+        }
+
         mediaLibrary.beginGeneratingLibraryChangeNotifications()
         musicPlayer.beginGeneratingPlaybackNotifications()
         configureObservers()
@@ -155,6 +169,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         if authorizationStatus == .authorized {
             refreshTopItems()
         }
+        scheduleRecapCloudSync()
     }
 
     deinit {
@@ -261,6 +276,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }.value
 
         await MainActor.run {
+            self.invalidateRecapCaches()
             self.librarySongs = result.0
             self.libraryAlbums = result.1
             self.libraryArtists = result.2
@@ -268,6 +284,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
             self.applySortAndLimit()
             self.hasLoadedInitialSnapshot = true
+            self.scheduleRecapCloudSync()
         }
 
         return true
@@ -280,12 +297,94 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
         #endif
 
+        let monthStart = Calendar.current.startOfMonth(containing: date)
+        if let cached = recapCache[monthStart] {
+            return cached
+        }
+
         return snapshotStore.recap(
             forMonthContaining: date,
             sourceSongs: librarySongs + topSongs,
             sourceAlbums: libraryAlbums + topAlbums,
             sourceArtists: libraryArtists + topArtists
+        ).caching(in: &recapCache, for: monthStart)
+    }
+
+    func recaps(forMonthsContaining dates: [Date]) -> [MonthlyRecap] {
+        let monthStarts = dates.map { Calendar.current.startOfMonth(containing: $0) }
+        let missingMonths = monthStarts.filter { recapCache[$0] == nil }
+
+        if !missingMonths.isEmpty {
+            let recaps = snapshotStore.recaps(
+                forMonthsContaining: missingMonths,
+                sourceSongs: librarySongs + topSongs,
+                sourceAlbums: libraryAlbums + topAlbums,
+                sourceArtists: libraryArtists + topArtists
+            )
+
+            for (monthStart, recap) in zip(missingMonths, recaps) {
+                recapCache[monthStart] = recap
+            }
+        }
+
+        return monthStarts.map { recapCache[$0] ?? .empty(for: $0) }
+    }
+
+    func yearlyRecap(for year: Int) -> MonthlyRecap {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return Self.screenshotRecap(from: Self.screenshotSongs)
+        }
+        #endif
+
+        if let cached = yearlyRecapCache[year] {
+            return cached
+        }
+
+        let recap = Self.yearlyRecap(
+            for: year,
+            months: months(in: year),
+            monthlyRecaps: recaps(forMonthsContaining: months(in: year)),
+            fallbackMonth: monthlyRecap.monthStart,
+            fallbackRecap: monthlyRecap
         )
+        yearlyRecapCache[year] = recap
+        return recap
+    }
+
+    func yearlyMonthlyHighlights(for year: Int) -> [YearlyRecapMonthlyHighlight] {
+        let months = months(in: year)
+        return zip(months, recaps(forMonthsContaining: months))
+            .map { YearlyRecapMonthlyHighlight(month: $0.0, recap: $0.1) }
+            .filter { $0.recap.hasActivity }
+    }
+
+    private func months(in year: Int) -> [Date] {
+        let source = availableRecapMonths.isEmpty ? [monthlyRecap.monthStart] : availableRecapMonths
+        return Array(Set(source.map { Calendar.current.startOfMonth(containing: $0) }))
+            .filter { Calendar.current.component(.year, from: $0) == year }
+            .sorted()
+    }
+
+    private func invalidateRecapCaches() {
+        recapCache.removeAll()
+        yearlyRecapCache.removeAll()
+    }
+
+    private func scheduleRecapCloudSync() {
+        guard let recapCloudSyncService else { return }
+
+        Task { [snapshotStore, recapCloudSyncService] in
+            let didMergeRemote = await recapCloudSyncService.sync(snapshotStore: snapshotStore)
+            guard didMergeRemote else { return }
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.invalidateRecapCaches()
+                self.monthlyRecap = self.recap(forMonthContaining: Date())
+                self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
+            }
+        }
     }
 
     func recapDebugSummary() -> String {
@@ -344,6 +443,209 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         """
     }
 
+    private static func yearlyRecap(
+        for year: Int,
+        months: [Date],
+        monthlyRecaps: [MonthlyRecap],
+        fallbackMonth: Date,
+        fallbackRecap: MonthlyRecap
+    ) -> MonthlyRecap {
+        let calendar = Calendar.current
+        guard let firstMonth = months.first else {
+            return fallbackRecap
+        }
+
+        let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? fallbackMonth
+
+        var songs: [UInt64: RankedSongAggregate] = [:]
+        var albums: [String: RankedGroupAggregate] = [:]
+        var artists: [String: RankedGroupAggregate] = [:]
+        var movement: [UInt64: MovementSongAggregate] = [:]
+        var newSongIDs: [UInt64] = []
+
+        for recap in monthlyRecaps {
+            var mergedSongIDsForMonth: Set<UInt64> = []
+
+            for song in recap.topSongs {
+                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+                mergedSongIDsForMonth.insert(song.id)
+            }
+
+            for song in recap.topNewSongs {
+                if !mergedSongIDsForMonth.contains(song.id) {
+                    songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+                    mergedSongIDsForMonth.insert(song.id)
+                }
+                if !newSongIDs.contains(song.id) {
+                    newSongIDs.append(song.id)
+                }
+            }
+
+            for group in recap.topAlbums {
+                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for group in recap.topArtists {
+                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for song in recap.biggestGainers {
+                movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
+            }
+        }
+
+        let rankedSongs = songs.values
+            .map(\.rankedSong)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedAlbums = albums.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedArtists = artists.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let biggestGainers = movement.values
+            .map(\.movementSong)
+            .sorted { $0.rankChange > $1.rankChange }
+
+        let newSongs = newSongIDs.compactMap { id in
+            songs[id]?.rankedSong
+        }
+        .sorted { $0.playDelta > $1.playDelta }
+
+        return MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: monthlyRecaps.map(\.generatedAt).max() ?? Date(),
+            lastCaptureReason: monthlyRecaps.last?.lastCaptureReason,
+            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
+            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
+            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
+            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
+            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
+            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
+            topSongs: rankedSongs,
+            topArtists: rankedArtists,
+            topAlbums: rankedAlbums,
+            biggestGainers: biggestGainers,
+            topNewSongs: newSongs
+        )
+    }
+
+    private struct RankedSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let albumTitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var skipDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(song: MonthlyRecap.RankedSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            albumTitle = song.albumTitle
+            artwork = song.artwork
+            playDelta = 0
+            skipDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ song: MonthlyRecap.RankedSong) {
+            playDelta += song.playDelta
+            skipDelta += song.skipDelta
+            listeningDuration += song.listeningDuration
+        }
+
+        var rankedSong: MonthlyRecap.RankedSong {
+            MonthlyRecap.RankedSong(
+                id: id,
+                title: title,
+                artist: artist,
+                albumTitle: albumTitle,
+                playDelta: playDelta,
+                skipDelta: skipDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct RankedGroupAggregate {
+        let id: String
+        let title: String
+        let subtitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(group: MonthlyRecap.RankedGroup) {
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            artwork = group.artwork
+            playDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ group: MonthlyRecap.RankedGroup) {
+            playDelta += group.playDelta
+            listeningDuration += group.listeningDuration
+        }
+
+        var rankedGroup: MonthlyRecap.RankedGroup {
+            MonthlyRecap.RankedGroup(
+                id: id,
+                title: title,
+                subtitle: subtitle,
+                playDelta: playDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct MovementSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let currentRank: Int
+        let previousRank: Int
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var rankChange: Int
+
+        init(song: MonthlyRecap.MovementSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            currentRank = song.currentRank
+            previousRank = song.previousRank ?? song.currentRank
+            artwork = song.artwork
+            playDelta = 0
+            rankChange = 0
+        }
+
+        mutating func merge(_ song: MonthlyRecap.MovementSong) {
+            playDelta += song.playDelta
+            rankChange = max(rankChange, song.rankChange)
+        }
+
+        var movementSong: MonthlyRecap.MovementSong {
+            MonthlyRecap.MovementSong(
+                id: id,
+                title: title,
+                artist: artist,
+                playDelta: playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: artwork
+            )
+        }
+    }
+
     private func refreshTopItems(snapshotReason: RecapSnapshotReason) {
         let currentStatus = MPMediaLibrary.authorizationStatus()
         if authorizationStatus != currentStatus {
@@ -373,6 +675,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             let recap = self.snapshotStore.record(songs: songs, albums: albums, artists: artists, at: Date(), reason: snapshotReason)
 
             DispatchQueue.main.async {
+                self.invalidateRecapCaches()
                 self.librarySongs = songs
                 self.libraryAlbums = albums
                 self.libraryArtists = artists
@@ -382,6 +685,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.applySortAndLimit()
                 self.isLoading = false
                 self.hasLoadedInitialSnapshot = true
+                self.scheduleRecapCloudSync()
 
                 if songs.isEmpty && albums.isEmpty && artists.isEmpty {
                     self.errorMessage = "We couldn't find any listening data in your media library."
@@ -978,6 +1282,13 @@ extension MediaLibraryManager {
                 lhs.playCount == rhs.playCount &&
                 lhs.song?.id == rhs.song?.id
         }
+    }
+}
+
+private extension MonthlyRecap {
+    func caching(in cache: inout [Date: MonthlyRecap], for monthStart: Date) -> MonthlyRecap {
+        cache[monthStart] = self
+        return self
     }
 }
 

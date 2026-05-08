@@ -13,20 +13,32 @@ import BackgroundTasks
 struct PlayCountApp: App {
     
     private var mediaLibraryManager: MediaLibraryManager
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
     
     init() {
-        let mediaManager = MediaLibraryManager.shared
+        let mediaManager: MediaLibraryManager
+        if Self.isRunningTests {
+            mediaManager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        } else {
+            mediaManager = MediaLibraryManager.shared
+        }
         mediaLibraryManager = mediaManager
         
         AppDependencyManager.shared.add(dependency: mediaManager)
-        RecapNotificationScheduler.shared.configure()
+        if !Self.isRunningTests {
+            RecapNotificationScheduler.shared.configure()
+        }
     }
     
     var body: some Scene {
         WindowGroup {
             ContentView(libraryManager: mediaLibraryManager)
                 .task {
-                    RecapBackgroundRefreshScheduler.schedule()
+                    if !Self.isRunningTests {
+                        RecapBackgroundRefreshScheduler.schedule()
+                    }
                 }
         }
         .backgroundTask(.appRefresh(RecapBackgroundRefreshScheduler.identifier)) {

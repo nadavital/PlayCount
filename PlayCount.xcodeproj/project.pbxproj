@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		50FF36952DA594AB00E9F5CD /* PlayCount.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlayCount.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A01C0012DD0000000000001 /* PlayCountTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlayCountTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -29,10 +30,22 @@
 			path = PlayCount;
 			sourceTree = "<group>";
 		};
+		7A01C0022DD0000000000002 /* PlayCountTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PlayCountTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		50FF36922DA594AB00E9F5CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A01C0052DD0000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -46,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				50FF36972DA594AB00E9F5CD /* PlayCount */,
+				7A01C0022DD0000000000002 /* PlayCountTests */,
 				50FF36962DA594AB00E9F5CD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				50FF36952DA594AB00E9F5CD /* PlayCount.app */,
+				7A01C0012DD0000000000001 /* PlayCountTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,7 +98,40 @@
 			productReference = 50FF36952DA594AB00E9F5CD /* PlayCount.app */;
 			productType = "com.apple.product-type.application";
 		};
+		7A01C0032DD0000000000003 /* PlayCountTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A01C00A2DD000000000000A /* Build configuration list for PBXNativeTarget "PlayCountTests" */;
+			buildPhases = (
+				7A01C0042DD0000000000004 /* Sources */,
+				7A01C0052DD0000000000005 /* Frameworks */,
+				7A01C0062DD0000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7A01C0092DD0000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7A01C0022DD0000000000002 /* PlayCountTests */,
+			);
+			name = PlayCountTests;
+			packageProductDependencies = (
+			);
+			productName = PlayCountTests;
+			productReference = 7A01C0012DD0000000000001 /* PlayCountTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		7A01C0082DD0000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 50FF368D2DA594AB00E9F5CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 50FF36942DA594AB00E9F5CD;
+			remoteInfo = PlayCount;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		50FF368D2DA594AB00E9F5CD /* Project object */ = {
@@ -95,6 +143,10 @@
 				TargetAttributes = {
 					50FF36942DA594AB00E9F5CD = {
 						CreatedOnToolsVersion = 16.3;
+					};
+					7A01C0032DD0000000000003 = {
+						CreatedOnToolsVersion = 16.3;
+						TestTargetID = 50FF36942DA594AB00E9F5CD;
 					};
 				};
 			};
@@ -113,12 +165,20 @@
 			projectRoot = "";
 			targets = (
 				50FF36942DA594AB00E9F5CD /* PlayCount */,
+				7A01C0032DD0000000000003 /* PlayCountTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		50FF36932DA594AB00E9F5CD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A01C0062DD0000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +195,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A01C0042DD0000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7A01C0092DD0000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 50FF36942DA594AB00E9F5CD /* PlayCount */;
+			targetProxy = 7A01C0082DD0000000000008 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		50FF369E2DA594AD00E9F5CD /* Debug */ = {
@@ -266,6 +341,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 202605070000;
@@ -299,6 +375,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 202605070000;
@@ -325,6 +402,54 @@
 			};
 			name = Release;
 		};
+		7A01C00B2DD000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCountTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PlayCount.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PlayCount";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		7A01C00C2DD000000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCountTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PlayCount.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PlayCount";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -342,6 +467,15 @@
 			buildConfigurations = (
 				50FF36A12DA594AD00E9F5CD /* Debug */,
 				50FF36A22DA594AD00E9F5CD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A01C00A2DD000000000000A /* Build configuration list for PBXNativeTarget "PlayCountTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A01C00B2DD000000000000B /* Debug */,
+				7A01C00C2DD000000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

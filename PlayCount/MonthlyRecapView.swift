@@ -16,7 +16,7 @@ struct MonthlyRecapView: View {
 
     private var recap: MonthlyRecap {
         if isShowingYearAggregate {
-            return yearlyRecap(for: selectedRecapYear)
+            return manager.yearlyRecap(for: selectedRecapYear)
         }
         return recapForMonth(selectedMonthStartOrCurrent)
     }
@@ -84,203 +84,6 @@ struct MonthlyRecapView: View {
         let calendar = Calendar.current
         return availableMonthStarts.filter {
             calendar.component(.year, from: $0) == year
-        }
-    }
-
-    private func yearlyRecap(for year: Int) -> MonthlyRecap {
-        let calendar = Calendar.current
-        let months = months(in: year)
-        guard let firstMonth = months.first else {
-            return recapForMonth(selectedMonthStartOrCurrent)
-        }
-
-        let monthlyRecaps = months.map(recapForMonth)
-        let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? firstMonth
-
-        var songs: [UInt64: RankedSongAggregate] = [:]
-        var albums: [String: RankedGroupAggregate] = [:]
-        var artists: [String: RankedGroupAggregate] = [:]
-        var movement: [UInt64: MovementSongAggregate] = [:]
-        var newSongIDs: [UInt64] = []
-
-        for recap in monthlyRecaps {
-            var mergedSongIDsForMonth: Set<UInt64> = []
-
-            for song in recap.topSongs {
-                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                mergedSongIDsForMonth.insert(song.id)
-            }
-            for song in recap.topNewSongs {
-                if !mergedSongIDsForMonth.contains(song.id) {
-                    songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                    mergedSongIDsForMonth.insert(song.id)
-                }
-                if !newSongIDs.contains(song.id) {
-                    newSongIDs.append(song.id)
-                }
-            }
-            for group in recap.topAlbums {
-                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
-            }
-            for group in recap.topArtists {
-                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
-            }
-            for song in recap.biggestGainers {
-                movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
-            }
-        }
-
-        let rankedSongs = songs.values
-            .map(\.rankedSong)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let rankedAlbums = albums.values
-            .map(\.rankedGroup)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let rankedArtists = artists.values
-            .map(\.rankedGroup)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let biggestGainers = movement.values
-            .map(\.movementSong)
-            .sorted { $0.rankChange > $1.rankChange }
-
-        let newSongs = newSongIDs.compactMap { id in
-            songs[id]?.rankedSong
-        }
-        .sorted { $0.playDelta > $1.playDelta }
-
-        return MonthlyRecap(
-            monthStart: monthStart,
-            generatedAt: Date(),
-            lastCaptureReason: .manualRefresh,
-            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
-            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
-            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
-            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
-            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
-            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
-            topSongs: rankedSongs,
-            topArtists: rankedArtists,
-            topAlbums: rankedAlbums,
-            biggestGainers: biggestGainers,
-            topNewSongs: newSongs
-        )
-    }
-
-    private struct RankedSongAggregate {
-        let id: UInt64
-        let title: String
-        let artist: String
-        let albumTitle: String
-        let artwork: MPMediaItemArtwork?
-        var playDelta: Int
-        var skipDelta: Int
-        var listeningDuration: TimeInterval
-
-        init(song: MonthlyRecap.RankedSong) {
-            id = song.id
-            title = song.title
-            artist = song.artist
-            albumTitle = song.albumTitle
-            artwork = song.artwork
-            playDelta = 0
-            skipDelta = 0
-            listeningDuration = 0
-        }
-
-        mutating func merge(_ song: MonthlyRecap.RankedSong) {
-            playDelta += song.playDelta
-            skipDelta += song.skipDelta
-            listeningDuration += song.listeningDuration
-        }
-
-        var rankedSong: MonthlyRecap.RankedSong {
-            MonthlyRecap.RankedSong(
-                id: id,
-                title: title,
-                artist: artist,
-                albumTitle: albumTitle,
-                playDelta: playDelta,
-                skipDelta: skipDelta,
-                listeningDuration: listeningDuration,
-                artwork: artwork
-            )
-        }
-    }
-
-    private struct RankedGroupAggregate {
-        let id: String
-        let title: String
-        let subtitle: String
-        let artwork: MPMediaItemArtwork?
-        var playDelta: Int
-        var listeningDuration: TimeInterval
-
-        init(group: MonthlyRecap.RankedGroup) {
-            id = group.id
-            title = group.title
-            subtitle = group.subtitle
-            artwork = group.artwork
-            playDelta = 0
-            listeningDuration = 0
-        }
-
-        mutating func merge(_ group: MonthlyRecap.RankedGroup) {
-            playDelta += group.playDelta
-            listeningDuration += group.listeningDuration
-        }
-
-        var rankedGroup: MonthlyRecap.RankedGroup {
-            MonthlyRecap.RankedGroup(
-                id: id,
-                title: title,
-                subtitle: subtitle,
-                playDelta: playDelta,
-                listeningDuration: listeningDuration,
-                artwork: artwork
-            )
-        }
-    }
-
-    private struct MovementSongAggregate {
-        let id: UInt64
-        let title: String
-        let artist: String
-        let currentRank: Int
-        let previousRank: Int
-        let artwork: MPMediaItemArtwork?
-        var playDelta: Int
-        var rankChange: Int
-
-        init(song: MonthlyRecap.MovementSong) {
-            id = song.id
-            title = song.title
-            artist = song.artist
-            currentRank = song.currentRank
-            previousRank = song.previousRank ?? song.currentRank + song.rankChange
-            artwork = song.artwork
-            playDelta = 0
-            rankChange = 0
-        }
-
-        mutating func merge(_ song: MonthlyRecap.MovementSong) {
-            playDelta += song.playDelta
-            rankChange += song.rankChange
-        }
-
-        var movementSong: MonthlyRecap.MovementSong {
-            MonthlyRecap.MovementSong(
-                id: id,
-                title: title,
-                artist: artist,
-                playDelta: playDelta,
-                rankChange: rankChange,
-                currentRank: currentRank,
-                previousRank: previousRank,
-                artwork: artwork
-            )
         }
     }
 
@@ -764,9 +567,8 @@ struct MonthlyRecapView: View {
     }
 
     private var yearlyMonthlyHighlights: [YearlyMonthlyHighlight] {
-        selectedYearMonths
-            .map { YearlyMonthlyHighlight(month: $0, recap: recapForMonth($0)) }
-            .filter { $0.recap.hasActivity }
+        manager.yearlyMonthlyHighlights(for: selectedRecapYear)
+            .map { YearlyMonthlyHighlight(month: $0.month, recap: $0.recap) }
     }
 
     private var hasYearlyMonthlyHighlights: Bool {
