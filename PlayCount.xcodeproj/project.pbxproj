@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		50FF36952DA594AB00E9F5CD /* PlayCount.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlayCount.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A02C0012DD1000000000001 /* PlayCount iPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayCount iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A01C0012DD0000000000001 /* PlayCountTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlayCountTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -19,6 +20,14 @@
 			);
 			target = 50FF36942DA594AB00E9F5CD /* PlayCount */;
 		};
+		7A02C0062DD1000000000006 /* Exceptions for "PlayCount" folder in "PlayCount iPad" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				PlayCountIcon.icon,
+			);
+			target = 7A02C0042DD1000000000004 /* PlayCount iPad */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +35,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				50FF36A52DA594AD00E9F5CD /* Exceptions for "PlayCount" folder in "PlayCount" target */,
+				7A02C0062DD1000000000006 /* Exceptions for "PlayCount" folder in "PlayCount iPad" target */,
 			);
 			path = PlayCount;
 			sourceTree = "<group>";
@@ -39,6 +49,13 @@
 
 /* Begin PBXFrameworksBuildPhase section */
 		50FF36922DA594AB00E9F5CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A02C0032DD1000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -68,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				50FF36952DA594AB00E9F5CD /* PlayCount.app */,
+				7A02C0012DD1000000000001 /* PlayCount iPad.app */,
 				7A01C0012DD0000000000001 /* PlayCountTests.xctest */,
 			);
 			name = Products;
@@ -96,6 +114,28 @@
 			);
 			productName = playCount;
 			productReference = 50FF36952DA594AB00E9F5CD /* PlayCount.app */;
+			productType = "com.apple.product-type.application";
+		};
+		7A02C0042DD1000000000004 /* PlayCount iPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A02C00A2DD100000000000A /* Build configuration list for PBXNativeTarget "PlayCount iPad" */;
+			buildPhases = (
+				7A02C0022DD1000000000002 /* Sources */,
+				7A02C0032DD1000000000003 /* Frameworks */,
+				7A02C0052DD1000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				50FF36972DA594AB00E9F5CD /* PlayCount */,
+			);
+			name = "PlayCount iPad";
+			packageProductDependencies = (
+			);
+			productName = "PlayCount iPad";
+			productReference = 7A02C0012DD1000000000001 /* PlayCount iPad.app */;
 			productType = "com.apple.product-type.application";
 		};
 		7A01C0032DD0000000000003 /* PlayCountTests */ = {
@@ -144,6 +184,9 @@
 					50FF36942DA594AB00E9F5CD = {
 						CreatedOnToolsVersion = 16.3;
 					};
+					7A02C0042DD1000000000004 = {
+						CreatedOnToolsVersion = 16.3;
+					};
 					7A01C0032DD0000000000003 = {
 						CreatedOnToolsVersion = 16.3;
 						TestTargetID = 50FF36942DA594AB00E9F5CD;
@@ -165,6 +208,7 @@
 			projectRoot = "";
 			targets = (
 				50FF36942DA594AB00E9F5CD /* PlayCount */,
+				7A02C0042DD1000000000004 /* PlayCount iPad */,
 				7A01C0032DD0000000000003 /* PlayCountTests */,
 			);
 		};
@@ -172,6 +216,13 @@
 
 /* Begin PBXResourcesBuildPhase section */
 		50FF36932DA594AB00E9F5CD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A02C0052DD1000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -189,6 +240,13 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		50FF36912DA594AB00E9F5CD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A02C0022DD1000000000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -402,6 +460,74 @@
 			};
 			name = Release;
 		};
+		7A02C00B2DD100000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 202605070000;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PlayCount/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCount.iPad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		7A02C00C2DD100000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CLANG_USE_OPTIMIZATION_PROFILE = YES;
+				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 202605070000;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PlayCount/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCount.iPad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
 		7A01C00B2DD000000000000B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -467,6 +593,15 @@
 			buildConfigurations = (
 				50FF36A12DA594AD00E9F5CD /* Debug */,
 				50FF36A22DA594AD00E9F5CD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A02C00A2DD100000000000A /* Build configuration list for PBXNativeTarget "PlayCount iPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A02C00B2DD100000000000B /* Debug */,
+				7A02C00C2DD100000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

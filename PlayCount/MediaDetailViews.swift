@@ -1297,7 +1297,7 @@ private enum MediaDetailFormatters {
     }()
 }
 
-private extension Int {
+extension Int {
     var detailFormatted: String {
         MediaDetailFormatters.playCount.string(from: NSNumber(value: self)) ?? "\(self)"
     }
