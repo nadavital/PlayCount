@@ -2,9 +2,41 @@ import SwiftUI
 import MediaPlayer
 import CoreImage.CIFilterBuiltins
 
+struct RecapPeriodBreakdown: Identifiable {
+    let id: String
+    let title: String
+    let songs: [MonthlyRecap.RankedSong]
+}
+
+struct RecapPeriodSummary: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let playDelta: Int
+    let listeningDuration: TimeInterval
+    let artwork: MPMediaItemArtwork?
+}
+
 struct RecapDrilldownContext {
     let monthTitle: String
     let songs: [MonthlyRecap.RankedSong]
+    let songSectionTitle: String
+    let songsSectionTitle: String
+    let periodBreakdowns: [RecapPeriodBreakdown]
+
+    init(
+        monthTitle: String,
+        songs: [MonthlyRecap.RankedSong],
+        songSectionTitle: String = "This Month",
+        songsSectionTitle: String = "Top This Month",
+        periodBreakdowns: [RecapPeriodBreakdown] = []
+    ) {
+        self.monthTitle = monthTitle
+        self.songs = songs
+        self.songSectionTitle = songSectionTitle
+        self.songsSectionTitle = songsSectionTitle
+        self.periodBreakdowns = periodBreakdowns
+    }
 
     func rankedSong(for song: TopSong) -> MonthlyRecap.RankedSong? {
         songs.first { $0.id == song.id }
@@ -27,7 +59,72 @@ struct RecapDrilldownContext {
         }
     }
 
+    func periodSummaries(for song: TopSong) -> [RecapPeriodSummary] {
+        periodBreakdowns.compactMap { period in
+            guard let periodSong = period.songs.first(where: {
+                $0.id == song.id ||
+                    ($0.title.recapDetailMatchKey == song.title.recapDetailMatchKey &&
+                     $0.artist.recapDetailMatchKey == song.artist.recapDetailMatchKey)
+            }) else {
+                return nil
+            }
+
+            return RecapPeriodSummary(
+                id: "\(period.id)-\(song.id)",
+                title: period.title,
+                subtitle: periodSong.artist,
+                playDelta: periodSong.playDelta,
+                listeningDuration: periodSong.listeningDuration,
+                artwork: periodSong.artwork ?? song.artwork
+            )
+        }
+    }
+
+    func periodSummaries(for album: TopAlbum) -> [RecapPeriodSummary] {
+        periodBreakdowns.compactMap { period in
+            let songs = sortedSongs(period.songs) {
+                $0.albumTitle.recapDetailMatchKey == album.title.recapDetailMatchKey &&
+                    (album.artist.isEmpty || $0.artist.recapDetailMatchKey == album.artist.recapDetailMatchKey)
+            }
+            guard !songs.isEmpty else { return nil }
+
+            return RecapPeriodSummary(
+                id: "\(period.id)-\(album.id)",
+                title: period.title,
+                subtitle: songs.first?.title ?? album.artist,
+                playDelta: songs.reduce(0) { $0 + $1.playDelta },
+                listeningDuration: songs.reduce(0) { $0 + $1.listeningDuration },
+                artwork: songs.first?.artwork ?? album.artwork
+            )
+        }
+    }
+
+    func periodSummaries(for artist: TopArtist) -> [RecapPeriodSummary] {
+        periodBreakdowns.compactMap { period in
+            let songs = sortedSongs(period.songs) {
+                $0.artist.recapDetailMatchKey == artist.name.recapDetailMatchKey
+            }
+            guard !songs.isEmpty else { return nil }
+
+            return RecapPeriodSummary(
+                id: "\(period.id)-\(artist.id)",
+                title: period.title,
+                subtitle: songs.first?.title ?? "Top song",
+                playDelta: songs.reduce(0) { $0 + $1.playDelta },
+                listeningDuration: songs.reduce(0) { $0 + $1.listeningDuration },
+                artwork: songs.first?.artwork ?? artist.artwork
+            )
+        }
+    }
+
     private func sortedMonthlySongs(matching predicate: (MonthlyRecap.RankedSong) -> Bool) -> [MonthlyRecap.RankedSong] {
+        sortedSongs(songs, matching: predicate)
+    }
+
+    private func sortedSongs(
+        _ songs: [MonthlyRecap.RankedSong],
+        matching predicate: (MonthlyRecap.RankedSong) -> Bool
+    ) -> [MonthlyRecap.RankedSong] {
         songs
             .filter(predicate)
             .sorted {
@@ -68,7 +165,15 @@ struct SongInfoView: View {
                     .frame(maxWidth: .infinity)
 
                 if let monthlySong = recapContext?.rankedSong(for: song) {
-                    MonthlyDetailSongSection(monthTitle: recapContext?.monthTitle ?? "This Month", song: monthlySong)
+                    MonthlyDetailSongSection(
+                        title: recapContext?.songSectionTitle ?? "This Month",
+                        periodTitle: recapContext?.monthTitle ?? "This Month",
+                        song: monthlySong
+                    )
+                }
+
+                if let periodSummaries = recapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
+                    RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
             }
             .padding(.horizontal, 24)
@@ -131,12 +236,16 @@ struct AlbumInfoView: View {
 
                 if let recapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
-                        title: "Top This Month",
+                        title: recapContext.songsSectionTitle,
                         subtitle: recapContext.monthTitle,
                         songs: monthlySongs,
                         manager: manager,
                         recapContext: recapContext
                     )
+                }
+
+                if let periodSummaries = recapContext?.periodSummaries(for: album), !periodSummaries.isEmpty {
+                    RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -233,12 +342,16 @@ struct ArtistInfoView: View {
 
                     if let recapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
-                            title: "Top This Month",
+                            title: recapContext.songsSectionTitle,
                             subtitle: recapContext.monthTitle,
                             songs: monthlySongs,
                             manager: manager,
                             recapContext: recapContext
                         )
+                    }
+
+                    if let periodSummaries = recapContext?.periodSummaries(for: artist), !periodSummaries.isEmpty {
+                        RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                     }
 
                     VStack(alignment: .leading, spacing: 16) {
@@ -815,15 +928,16 @@ private struct AlbumTrackRow: View {
 }
 
 private struct MonthlyDetailSongSection: View {
-    let monthTitle: String
+    let title: String
+    let periodTitle: String
     let song: MonthlyRecap.RankedSong
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("This Month")
+            Text(title)
                 .font(.title3.weight(.semibold))
 
-            MonthlyDetailSongDeltaRow(song: song, subtitle: monthTitle)
+            MonthlyDetailSongDeltaRow(song: song, subtitle: periodTitle)
                 .padding(.vertical, 12)
                 .padding(.horizontal, 16)
                 .background(
@@ -893,6 +1007,74 @@ private struct MonthlyDetailSongsSection: View {
                 $0.title.recapDetailMatchKey == song.title.recapDetailMatchKey &&
                     $0.artist.recapDetailMatchKey == song.artist.recapDetailMatchKey
             }
+    }
+}
+
+private struct RecapDetailPeriodBreakdownSection: View {
+    let title: String
+    let summaries: [RecapPeriodSummary]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+
+            LazyVStack(spacing: 0) {
+                ForEach(summaries) { summary in
+                    RecapDetailPeriodBreakdownRow(summary: summary)
+
+                    if summary.id != summaries.last?.id {
+                        Divider()
+                            .overlay(Color.primary.opacity(0.1))
+                            .padding(.leading, 70)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+    }
+}
+
+private struct RecapDetailPeriodBreakdownRow: View {
+    let summary: RecapPeriodSummary
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ArtworkView(
+                artwork: summary.artwork,
+                size: CGSize(width: 46, height: 46),
+                cornerRadius: 9
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.title)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Text(summary.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(summary.listeningDuration.formattedListeningMinutes)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 10)
+
+            MetricBadge(text: "+\(summary.playDelta)")
+        }
+        .padding(.vertical, 10)
     }
 }
 
