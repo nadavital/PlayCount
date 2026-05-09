@@ -335,6 +335,210 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(iPadRecap.topNewSongs.first?.playDelta, 12)
     }
 
+    func testLegacyPhoneBaselineBridgesToCurrentPhoneStreamForConsistentRecap() {
+        let phoneStore = makeStore(named: "current-phone")
+        let iPadStore = makeStore(named: "polluted-ipad")
+        let targetStore = makeStore(named: "target-consistent")
+        let legacyBaselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let currentPhoneBaselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let sabrinaDate = date(year: 2026, month: 5, day: 6, hour: 8)
+
+        let legacyBaseline = recapFixtureSongs(
+            climberPlayCount: 10,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        let currentPhoneBaseline = recapFixtureSongs(
+            climberPlayCount: 25,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        var latestPhoneSongs = recapFixtureSongs(
+            climberPlayCount: 45,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        latestPhoneSongs.append(song(
+            id: 9_001,
+            title: "Sabrina New Song",
+            playCount: 12,
+            dateAdded: sabrinaDate
+        ))
+
+        _ = phoneStore.debugRecordLegacySnapshot(
+            songs: legacyBaseline,
+            at: legacyBaselineDate,
+            reason: .manualRefresh
+        )
+        _ = phoneStore.record(
+            songs: currentPhoneBaseline,
+            at: currentPhoneBaselineDate,
+            reason: .foreground
+        )
+        let phoneRecap = phoneStore.record(
+            songs: latestPhoneSongs,
+            at: latestDate,
+            reason: .foreground
+        )
+
+        _ = iPadStore.record(
+            songs: [song(id: 50_001, title: "Inflated iPad Song", playCount: 0)],
+            at: legacyBaselineDate,
+            reason: .manualRefresh
+        )
+        _ = iPadStore.record(
+            songs: [song(id: 50_001, title: "Inflated iPad Song", playCount: 9_000)],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(phoneRecap.totalPlayDelta, 47)
+        XCTAssertEqual(phoneRecap.topNewSongs.first?.title, "Sabrina New Song")
+        XCTAssertEqual(phoneRecap.biggestGainers.first?.title, "Climber")
+
+        XCTAssertTrue(targetStore.mergeSyncPayloads(
+            iPadStore.syncPayloads() + phoneStore.localSyncPayloads(),
+            now: latestDate
+        ))
+
+        let targetRecap = targetStore.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(targetRecap.totalPlayDelta, phoneRecap.totalPlayDelta)
+        XCTAssertEqual(targetRecap.totalListeningDuration, phoneRecap.totalListeningDuration)
+        XCTAssertEqual(targetRecap.topSongs.map(\.title), phoneRecap.topSongs.map(\.title))
+        XCTAssertEqual(targetRecap.biggestGainers.map(\.title), phoneRecap.biggestGainers.map(\.title))
+        XCTAssertEqual(targetRecap.topNewSongs.map(\.title), phoneRecap.topNewSongs.map(\.title))
+    }
+
+    func testCanonicalRecapIsIndependentOfPayloadMergeOrder() {
+        let phoneStore = makeStore(named: "phone-order")
+        let iPadStore = makeStore(named: "ipad-order")
+        let firstTargetStore = makeStore(named: "target-order-first")
+        let secondTargetStore = makeStore(named: "target-order-second")
+        let legacyBaselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let currentPhoneBaselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let sabrinaDate = date(year: 2026, month: 5, day: 6, hour: 8)
+
+        _ = phoneStore.debugRecordLegacySnapshot(
+            songs: recapFixtureSongs(
+                climberPlayCount: 10,
+                otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+            ),
+            at: legacyBaselineDate,
+            reason: .manualRefresh
+        )
+        _ = phoneStore.record(
+            songs: recapFixtureSongs(
+                climberPlayCount: 25,
+                otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+            ),
+            at: currentPhoneBaselineDate,
+            reason: .foreground
+        )
+        var latestPhoneSongs = recapFixtureSongs(
+            climberPlayCount: 45,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        latestPhoneSongs.append(song(
+            id: 9_001,
+            title: "Sabrina New Song",
+            playCount: 12,
+            dateAdded: sabrinaDate
+        ))
+        _ = phoneStore.record(songs: latestPhoneSongs, at: latestDate, reason: .foreground)
+
+        _ = iPadStore.record(
+            songs: [song(id: 50_001, title: "Inflated iPad Song", playCount: 0)],
+            at: legacyBaselineDate,
+            reason: .manualRefresh
+        )
+        _ = iPadStore.record(
+            songs: [song(id: 50_001, title: "Inflated iPad Song", playCount: 9_000)],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let phonePayloads = phoneStore.localSyncPayloads()
+        let iPadPayloads = iPadStore.syncPayloads()
+        XCTAssertTrue(firstTargetStore.mergeSyncPayloads(phonePayloads + iPadPayloads, now: latestDate))
+        XCTAssertTrue(secondTargetStore.mergeSyncPayloads(iPadPayloads + phonePayloads, now: latestDate))
+
+        let firstRecap = firstTargetStore.recap(forMonthContaining: latestDate)
+        let secondRecap = secondTargetStore.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(firstRecap, secondRecap)
+        XCTAssertEqual(firstRecap.totalPlayDelta, 47)
+        XCTAssertEqual(firstRecap.topNewSongs.first?.title, "Sabrina New Song")
+        XCTAssertEqual(firstRecap.biggestGainers.first?.title, "Climber")
+    }
+
+    func testDuplicateTrimmedBaselineDoesNotOverrideFullBaselineCopy() {
+        let targetStore = makeStore(named: "full-plus-trimmed-target")
+        let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let baselineSongs = recapFixtureSongs(
+            climberPlayCount: 1,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        let trimmedBaselineSongs = Array(baselineSongs.prefix(5))
+        let latestSongs = baselineSongs.map { baselineSong -> TopSong in
+            guard baselineSong.id == 100 else { return baselineSong }
+            return song(id: baselineSong.id, title: baselineSong.title, playCount: 85)
+        }
+
+        _ = targetStore.debugRecordLegacySnapshot(
+            songs: baselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = targetStore.debugRecordLegacySnapshot(
+            songs: trimmedBaselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh,
+            scannedSongCount: baselineSongs.count,
+            aggregateSongs: baselineSongs
+        )
+        _ = targetStore.record(songs: latestSongs, at: latestDate, reason: .foreground)
+
+        let recap = targetStore.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(recap.topSongs.first?.title, "Climber")
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 84)
+        XCTAssertEqual(recap.biggestGainers.first?.title, "Climber")
+    }
+
+    func testNoisyExistingCounterChurnDoesNotDominateRankings() {
+        let store = makeStore(named: "noisy-existing-deltas")
+        let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let newSongDate = date(year: 2026, month: 5, day: 6, hour: 8)
+        let fillerSongs = (4...22).map { index in
+            song(id: UInt64(index), title: "Stable Catalog Song \(index)", playCount: 1)
+        }
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "Counter Churn Song", playCount: 100),
+                song(id: 2, title: "Counter Drop Song", playCount: 500)
+            ] + fillerSongs,
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "Counter Churn Song", playCount: 300),
+                song(id: 2, title: "Counter Drop Song", playCount: 324),
+                song(id: 3, title: "Sabrina New Song", playCount: 12, dateAdded: newSongDate)
+            ] + fillerSongs,
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let recap = store.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(recap.totalPlayDelta, 36)
+        XCTAssertEqual(recap.topSongs.first?.title, "Sabrina New Song")
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 12)
+        XCTAssertEqual(recap.topNewSongs.first?.title, "Sabrina New Song")
+        XCTAssertTrue(recap.biggestGainers.isEmpty)
+    }
+
     func testBatchRecapsReuseOneSnapshotLoadPath() {
         let store = makeStore(named: "batch")
         let aprilBaseline = date(year: 2026, month: 4, day: 1)
@@ -388,6 +592,14 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             artistPersistentID: 20,
             trackNumber: 1
         )
+    }
+
+    private func recapFixtureSongs(climberPlayCount: Int, otherPlayCounts: [Int]) -> [TopSong] {
+        var songs = otherPlayCounts.enumerated().map { index, playCount in
+            song(id: UInt64(index + 1), title: "Catalog Song \(index + 1)", playCount: playCount)
+        }
+        songs.append(song(id: 100, title: "Climber", playCount: climberPlayCount))
+        return songs
     }
 
     private func date(year: Int, month: Int, day: Int, hour: Int = 12) -> Date {

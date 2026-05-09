@@ -207,6 +207,7 @@ final class MonthlyRecapSnapshotStore {
     private struct RecapCandidate {
         let recap: MonthlyRecap
         let rankingCoverage: Double
+        let sourceSnapshotCount: Int
     }
 
     private struct StoredSnapshots: Codable {
@@ -423,6 +424,38 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    #if DEBUG
+    func debugRecordLegacySnapshot(
+        songs: [TopSong],
+        at capturedAt: Date,
+        reason: RecapSnapshotReason,
+        scannedSongCount: Int? = nil,
+        aggregateSongs: [TopSong]? = nil
+    ) -> MonthlyRecap {
+        accessQueue.sync {
+            let aggregateSourceSongs = aggregateSongs ?? songs
+            var stored = loadLocked()
+            let snapshot = LibrarySnapshot(
+                capturedAt: capturedAt,
+                reason: reason,
+                appVersion: "debug-legacy",
+                scannedSongCount: scannedSongCount ?? songs.count,
+                deviceIdentifier: nil,
+                aggregateCounters: Self.aggregateCounters(from: aggregateSourceSongs, capturedAt: capturedAt, calendar: calendar),
+                songs: songs.map(SongSnapshot.init(song:))
+            )
+
+            if shouldAppend(snapshot, after: stored.snapshots.last) {
+                stored.snapshots.append(snapshot)
+                stored.snapshots = retainedSnapshots(from: stored.snapshots, now: capturedAt)
+                saveLocked(stored)
+            }
+
+            return recap(for: capturedAt, snapshots: stored.snapshots, sourceSongs: songs)
+        }
+    }
+    #endif
+
     func availableMonthStarts(through date: Date = Date()) -> [Date] {
         accessQueue.sync {
             let ordered = loadLocked().snapshots.sorted { $0.capturedAt < $1.capturedAt }
@@ -460,7 +493,10 @@ final class MonthlyRecapSnapshotStore {
             let localSnapshots = stored.snapshots.filter {
                 $0.belongsToLocalDevice(currentDeviceIdentifier: deviceIdentifier)
             }
-            let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(for: localSnapshots)
+            let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
+                for: localSnapshots,
+                currentDeviceIdentifier: deviceIdentifier
+            )
             return localSnapshots.compactMap { snapshot in
                 snapshot.syncPayload(prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [])
             }
@@ -637,9 +673,14 @@ final class MonthlyRecapSnapshotStore {
         return didChange
     }
 
-    private func syncPrioritySongIDsBySnapshotKey(for snapshots: [LibrarySnapshot]) -> [String: Set<UInt64>] {
+    private func syncPrioritySongIDsBySnapshotKey(
+        for snapshots: [LibrarySnapshot],
+        currentDeviceIdentifier: String
+    ) -> [String: Set<UInt64>] {
         var priorityIDsBySnapshotKey: [String: Set<UInt64>] = [:]
-        let streams = Dictionary(grouping: snapshots.sorted { $0.capturedAt < $1.capturedAt }, by: \.deviceSyncKey)
+        let streams = Dictionary(grouping: snapshots.sorted { $0.capturedAt < $1.capturedAt }) {
+            $0.logicalDeviceKey(fallbackDeviceIdentifier: currentDeviceIdentifier)
+        }.mapValues(canonicalSnapshots)
 
         for streamSnapshots in streams.values {
             let snapshotsByMonth = Dictionary(grouping: streamSnapshots) {
@@ -713,19 +754,19 @@ final class MonthlyRecapSnapshotStore {
         sourceArtists: [TopArtist] = []
     ) -> MonthlyRecap {
         let ordered = snapshots.sorted { $0.capturedAt < $1.capturedAt }
-        let deviceStreams = Dictionary(grouping: ordered, by: \.deviceSyncKey)
+        let deviceStreams = recapCandidateStreams(from: ordered)
 
         guard deviceStreams.count > 1 else {
             return recapCandidateForDeviceStream(
                 for: date,
-                snapshots: ordered,
+                snapshots: deviceStreams.first ?? ordered,
                 sourceSongs: sourceSongs,
                 sourceAlbums: sourceAlbums,
                 sourceArtists: sourceArtists
             ).recap
         }
 
-        return deviceStreams.values
+        return deviceStreams
             .map {
                 recapCandidateForDeviceStream(
                     for: date,
@@ -739,6 +780,50 @@ final class MonthlyRecapSnapshotStore {
             .first?.recap ?? .empty(for: date, calendar: calendar)
     }
 
+    private func recapCandidateStreams(from ordered: [LibrarySnapshot]) -> [[LibrarySnapshot]] {
+        let deviceIdentifiers = Set(ordered.compactMap(\.deviceIdentifier))
+        guard !deviceIdentifiers.isEmpty else {
+            return ordered.isEmpty ? [] : [ordered]
+        }
+
+        return deviceIdentifiers.map { deviceIdentifier in
+            canonicalSnapshots(ordered.filter {
+                $0.deviceIdentifier == nil || $0.deviceIdentifier == deviceIdentifier
+            })
+        }
+        .filter { !$0.isEmpty }
+        .sorted {
+            if $0.count != $1.count {
+                return $0.count > $1.count
+            }
+
+            return ($0.last?.capturedAt ?? .distantPast) > ($1.last?.capturedAt ?? .distantPast)
+        }
+    }
+
+    private func canonicalSnapshots(_ snapshots: [LibrarySnapshot]) -> [LibrarySnapshot] {
+        var snapshotsByMoment: [String: LibrarySnapshot] = [:]
+        for snapshot in snapshots {
+            let key = snapshot.recapMomentKey
+            guard let existing = snapshotsByMoment[key] else {
+                snapshotsByMoment[key] = snapshot
+                continue
+            }
+
+            if snapshot.isRicherRecapSource(than: existing) {
+                snapshotsByMoment[key] = snapshot
+            }
+        }
+
+        return snapshotsByMoment.values.sorted {
+            if $0.capturedAt != $1.capturedAt {
+                return $0.capturedAt < $1.capturedAt
+            }
+
+            return $0.songs.count > $1.songs.count
+        }
+    }
+
     private func recapCandidateForDeviceStream(
         for date: Date,
         snapshots ordered: [LibrarySnapshot],
@@ -750,13 +835,18 @@ final class MonthlyRecapSnapshotStore {
         let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? date
 
         guard let latest = ordered.last(where: { $0.capturedAt < monthEnd }) else {
-            return RecapCandidate(recap: .empty(for: date, calendar: calendar), rankingCoverage: 0)
+            return RecapCandidate(
+                recap: .empty(for: date, calendar: calendar),
+                rankingCoverage: 0,
+                sourceSnapshotCount: 0
+            )
         }
 
         let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
         let baseline = baselineSnapshot(for: latest, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
         let baselineByID = Dictionary(uniqueKeysWithValues: baseline.songs.map { ($0.id, $0) })
         let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs, sourceAlbums: sourceAlbums, sourceArtists: sourceArtists)
+        let aggregateDeltas = aggregateDeltas(latest: latest, baseline: baseline)
 
         let deltas = latest.songs.compactMap { song -> SongDelta? in
             let baselineSong = baselineByID[song.id]
@@ -767,7 +857,13 @@ final class MonthlyRecapSnapshotStore {
             return SongDelta(latest: song, playDelta: playDelta, skipDelta: skipDelta)
         }
 
-        let playDeltas = deltas.filter { $0.playDelta > 0 }
+        let playDeltas = rankingDeltas(
+            from: deltas.filter { $0.playDelta > 0 },
+            baselineByID: baselineByID,
+            monthStart: monthStart,
+            monthEnd: monthEnd,
+            aggregatePlayDelta: aggregateDeltas?.playDelta
+        )
 
         let topSongs = playDeltas
             .sorted(by: compareDeltas)
@@ -805,16 +901,19 @@ final class MonthlyRecapSnapshotStore {
             guard let dateAdded = song.dateAdded else { return false }
             return dateAdded >= monthStart && dateAdded < monthEnd
         }.count
-        let aggregateDeltas = aggregateDeltas(latest: latest, baseline: baseline)
         let totalListeningDuration = aggregateDeltas?.listeningDuration ?? deltas.reduce(0) { $0 + $1.listeningDuration }
-        let songLevelPlayDelta = deltas.reduce(0) { $0 + $1.playDelta }
+        let songLevelPlayDelta = playDeltas.reduce(0) { $0 + $1.playDelta }
         let expectedPlayDelta = aggregateDeltas?.playDelta ?? songLevelPlayDelta
         let rankingCoverage = expectedPlayDelta > 0
             ? min(1, Double(songLevelPlayDelta) / Double(expectedPlayDelta))
             : 1
 
         guard isPlausibleListeningDuration(totalListeningDuration, monthStart: monthStart, baseline: baseline, latest: latest) else {
-            return RecapCandidate(recap: .empty(for: date, calendar: calendar), rankingCoverage: 0)
+            return RecapCandidate(
+                recap: .empty(for: date, calendar: calendar),
+                rankingCoverage: 0,
+                sourceSnapshotCount: 0
+            )
         }
 
         return RecapCandidate(
@@ -834,7 +933,8 @@ final class MonthlyRecapSnapshotStore {
                 biggestGainers: biggestGainers,
                 topNewSongs: topNewSongs
             ),
-            rankingCoverage: rankingCoverage
+            rankingCoverage: rankingCoverage,
+            sourceSnapshotCount: inMonth.count
         )
     }
 
@@ -853,6 +953,33 @@ final class MonthlyRecapSnapshotStore {
         )
     }
 
+    private func rankingDeltas(
+        from deltas: [SongDelta],
+        baselineByID: [UInt64: SongSnapshot],
+        monthStart: Date,
+        monthEnd: Date,
+        aggregatePlayDelta: Int?
+    ) -> [SongDelta] {
+        guard let aggregatePlayDelta, aggregatePlayDelta > 0 else {
+            return deltas
+        }
+
+        let existingSongPlayDelta = deltas.reduce(0) { total, delta in
+            baselineByID[delta.latest.id] == nil ? total : total + delta.playDelta
+        }
+        guard existingSongPlayDelta > aggregatePlayDelta * 2 else {
+            return deltas
+        }
+
+        return deltas.filter { delta in
+            guard baselineByID[delta.latest.id] == nil,
+                  let dateAdded = delta.latest.dateAdded else {
+                return false
+            }
+            return dateAdded >= monthStart && dateAdded < monthEnd
+        }
+    }
+
     private func isHigherPriorityCandidate(_ lhs: RecapCandidate, than rhs: RecapCandidate) -> Bool {
         let lhsRecap = lhs.recap
         let rhsRecap = rhs.recap
@@ -863,6 +990,10 @@ final class MonthlyRecapSnapshotStore {
 
         if abs(lhs.rankingCoverage - rhs.rankingCoverage) >= 0.25 {
             return lhs.rankingCoverage > rhs.rankingCoverage
+        }
+
+        if lhs.sourceSnapshotCount != rhs.sourceSnapshotCount {
+            return lhs.sourceSnapshotCount > rhs.sourceSnapshotCount
         }
 
         return isHigherPriorityRecap(lhsRecap, than: rhsRecap)
@@ -1253,8 +1384,27 @@ private extension MonthlyRecapSnapshotStore.SongSnapshot {
 }
 
 private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
-    var deviceSyncKey: String {
-        deviceIdentifier ?? "unknown"
+    func logicalDeviceKey(fallbackDeviceIdentifier: String) -> String {
+        deviceIdentifier ?? fallbackDeviceIdentifier
+    }
+
+    var recapMomentKey: String {
+        let milliseconds = Int64((capturedAt.timeIntervalSince1970 * 1_000).rounded())
+        let aggregateSignature: String
+        if let aggregateCounters {
+            aggregateSignature = [
+                aggregateCounters.playCount,
+                aggregateCounters.skipCount,
+                Int((aggregateCounters.listeningDuration * 1_000).rounded()),
+                aggregateCounters.monthNewSongCount
+            ]
+            .map(String.init)
+            .joined(separator: ":")
+        } else {
+            aggregateSignature = counterSignature
+        }
+
+        return "\(milliseconds)|\(aggregateSignature)"
     }
 
     var syncPayloadKey: String {
@@ -1276,6 +1426,24 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             return true
         }
         return deviceIdentifier == otherDeviceIdentifier
+    }
+
+    func isRicherRecapSource(than snapshot: Self) -> Bool {
+        if songs.count != snapshot.songs.count {
+            return songs.count > snapshot.songs.count
+        }
+
+        let scannedSongCount = scannedSongCount ?? songs.count
+        let otherScannedSongCount = snapshot.scannedSongCount ?? snapshot.songs.count
+        if scannedSongCount != otherScannedSongCount {
+            return scannedSongCount > otherScannedSongCount
+        }
+
+        if (deviceIdentifier != nil) != (snapshot.deviceIdentifier != nil) {
+            return deviceIdentifier != nil
+        }
+
+        return capturedAt > snapshot.capturedAt
     }
 
     var syncIdentifier: String {
