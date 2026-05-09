@@ -133,11 +133,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private let playbackRefreshInterval: TimeInterval = 20
     private var recapCache: [Date: MonthlyRecap] = [:]
     private var yearlyRecapCache: [Int: MonthlyRecap] = [:]
+    private var isRecapCloudSyncInFlight = false
 
     init(
         fetchLimit: Int = 0,
         snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
-        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(),
+        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(
+            uploadsEnabled: UIDevice.current.userInterfaceIdiom != .pad
+        ),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
@@ -250,6 +253,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self?.refreshForRecap(reason: .delayedForeground)
             }
         }
+    }
+
+    func syncRecapFromCloud() {
+        scheduleRecapCloudSync()
     }
 
     @discardableResult
@@ -372,14 +379,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func scheduleRecapCloudSync() {
-        guard let recapCloudSyncService else { return }
+        guard let recapCloudSyncService, !isRecapCloudSyncInFlight else { return }
+        isRecapCloudSyncInFlight = true
 
-        Task { [snapshotStore, recapCloudSyncService] in
-            let didMergeRemote = await recapCloudSyncService.sync(snapshotStore: snapshotStore)
-            guard didMergeRemote else { return }
+        Task { [weak self, snapshotStore, recapCloudSyncService] in
+            _ = await recapCloudSyncService.sync(snapshotStore: snapshotStore)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                self.isRecapCloudSyncInFlight = false
                 self.invalidateRecapCaches()
                 self.monthlyRecap = self.recap(forMonthContaining: Date())
                 self.availableRecapMonths = self.snapshotStore.availableMonthStarts()

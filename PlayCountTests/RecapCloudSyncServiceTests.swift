@@ -33,7 +33,34 @@ final class RecapCloudSyncServiceTests: XCTestCase {
 
         XCTAssertTrue(didMerge)
         XCTAssertEqual(localStore.syncPayloads().count, 3)
-        XCTAssertEqual(client.savedPayloads.count, 3)
+        XCTAssertEqual(client.savedPayloads.count, 1)
+        XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
+    }
+
+    func testSyncCanMergeRemoteWithoutUploadingLocalSnapshots() async {
+        let remoteStore = makeStore(named: "remote-read-only")
+        let localStore = makeStore(named: "local-read-only")
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let remoteDate = date(year: 2026, month: 5, day: 3)
+
+        _ = remoteStore.record(
+            songs: [song(id: 1, title: "Remote", playCount: 1)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = remoteStore.record(
+            songs: [song(id: 1, title: "Remote", playCount: 5)],
+            at: remoteDate,
+            reason: .foreground
+        )
+
+        let client = FakeRecapCloudSyncClient(remotePayloads: remoteStore.syncPayloads())
+        let service = RecapCloudSyncService(client: client, uploadsEnabled: false)
+
+        let didMerge = await service.sync(snapshotStore: localStore)
+
+        XCTAssertTrue(didMerge)
+        XCTAssertTrue(client.savedPayloads.isEmpty)
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 

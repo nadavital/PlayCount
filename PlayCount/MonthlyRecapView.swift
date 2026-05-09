@@ -389,6 +389,7 @@ struct MonthlyRecapView: View {
         }
         .scrollIndicators(.hidden)
         .refreshable {
+            manager.syncRecapFromCloud()
             manager.refreshForRecapSequence(reason: .manualRefresh)
         }
         .background(RecapBackground(artwork: heroArtwork))
@@ -401,6 +402,7 @@ struct MonthlyRecapView: View {
         .animation(.smooth(duration: 0.26), value: selectedMonthStartOrCurrent)
         .simultaneousGesture(monthSwipeGesture)
         .onAppear {
+            manager.syncRecapFromCloud()
             syncSelectedMonthIfNeeded()
         }
         .onChange(of: manager.availableRecapMonths) { _, _ in

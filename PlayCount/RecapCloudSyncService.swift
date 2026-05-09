@@ -9,18 +9,25 @@ protocol RecapCloudSyncClient {
 
 final class RecapCloudSyncService {
     private let client: RecapCloudSyncClient
+    private let uploadsEnabled: Bool
 
-    init(client: RecapCloudSyncClient) {
+    init(client: RecapCloudSyncClient, uploadsEnabled: Bool = true) {
         self.client = client
+        self.uploadsEnabled = uploadsEnabled
     }
 
-    static func live() -> RecapCloudSyncService {
-        RecapCloudSyncService(client: CloudKitRecapSyncClient())
+    static func live(uploadsEnabled: Bool = true) -> RecapCloudSyncService {
+        RecapCloudSyncService(client: CloudKitRecapSyncClient(), uploadsEnabled: uploadsEnabled)
     }
 
     @discardableResult
     func sync(snapshotStore: MonthlyRecapSnapshotStore) async -> Bool {
-        guard await client.isAvailable() else { return false }
+        guard await client.isAvailable() else {
+            #if DEBUG
+            print("Recap CloudKit sync skipped: account unavailable")
+            #endif
+            return false
+        }
 
         do {
             let remotePayloads: [RecapSnapshotSyncPayload]
@@ -32,9 +39,24 @@ final class RecapCloudSyncService {
                 }
                 remotePayloads = []
             }
+            #if DEBUG
+            print("Recap CloudKit sync fetched \(remotePayloads.count) remote payloads")
+            #endif
             let didMergeRemote = snapshotStore.mergeSyncPayloads(remotePayloads)
-            let localPayloads = snapshotStore.syncPayloads()
-            try await client.saveSnapshotPayloads(localPayloads)
+            if uploadsEnabled {
+                let localPayloads = snapshotStore.localSyncPayloads()
+                #if DEBUG
+                print("Recap CloudKit sync saving \(localPayloads.count) local payloads; didMergeRemote=\(didMergeRemote)")
+                #endif
+                try await client.saveSnapshotPayloads(localPayloads)
+            } else {
+                #if DEBUG
+                print("Recap CloudKit sync upload skipped; didMergeRemote=\(didMergeRemote)")
+                #endif
+            }
+            #if DEBUG
+            print("Recap CloudKit sync finished")
+            #endif
             return didMergeRemote
         } catch {
             #if DEBUG
@@ -55,36 +77,73 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         static let capturedAt = "capturedAt"
         static let counterSignature = "counterSignature"
         static let payload = "payload"
+        static let payloadIDs = "payloadIDs"
     }
+
+    private static let containerIdentifier = "iCloud.com.nadavavital.PlayCount"
+    private static let recordZoneName = "RecapSnapshots"
+    private static let recordZoneID = CKRecordZone.ID(
+        zoneName: recordZoneName,
+        ownerName: CKCurrentUserDefaultName
+    )
 
     private let container: CKContainer
     private let database: CKDatabase
     private let recordType = "RecapSnapshot"
+    private let manifestRecordType = "RecapSnapshotManifest"
+    private let manifestRecordName = "current"
+    private let fetchBatchSize = 10
+    private let saveBatchSize = 10
 
-    init(container: CKContainer = .default()) {
+    init(container: CKContainer = CKContainer(identifier: containerIdentifier)) {
         self.container = container
         database = container.privateCloudDatabase
     }
 
     func isAvailable() async -> Bool {
         await withCheckedContinuation { continuation in
-            container.accountStatus { status, _ in
+            container.accountStatus { status, error in
+                #if DEBUG
+                if let error {
+                    print("Recap CloudKit account status error: \(error)")
+                } else {
+                    print("Recap CloudKit account status: \(status.rawValue)")
+                }
+                #endif
                 continuation.resume(returning: status == .available)
             }
         }
     }
 
     func fetchSnapshotPayloads() async throws -> [RecapSnapshotSyncPayload] {
-        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
-        query.sortDescriptors = [NSSortDescriptor(key: Field.capturedAt, ascending: true)]
-        return try await fetchPayloads(query: query)
+        do {
+            try await saveRecordZoneIfNeeded()
+            let payloadIDs = try await fetchManifestPayloadIDs()
+            let manifestPayloads = payloadIDs.isEmpty ? [] : try await fetchPayloadRecords(payloadIDs: payloadIDs)
+            let zonePayloads = try await fetchPayloadsFromZone(zoneID: Self.recordZoneID)
+            return Self.mergedPayloads(manifestPayloads + zonePayloads)
+                .sorted { $0.capturedAt < $1.capturedAt }
+        } catch {
+            guard Self.isMissingZoneError(error) || Self.isMissingManifestError(error) else { throw error }
+            #if DEBUG
+            print("Recap CloudKit sync manifest unavailable: \(error)")
+            #endif
+            try await saveRecordZoneIfNeeded()
+            return []
+        }
     }
 
     func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload]) async throws {
         guard !payloads.isEmpty else { return }
+        try await saveRecordZoneIfNeeded()
 
-        let records = payloads.map { payload in
-            let recordID = CKRecord.ID(recordName: payload.id)
+        var seenPayloadIDs = Set<String>()
+        let uniquePayloads = payloads.filter { payload in
+            seenPayloadIDs.insert(payload.id).inserted
+        }
+
+        let records = uniquePayloads.map { payload in
+            let recordID = CKRecord.ID(recordName: payload.id, zoneID: Self.recordZoneID)
             let record = CKRecord(recordType: recordType, recordID: recordID)
             record[Field.capturedAt] = payload.capturedAt as NSDate
             record[Field.counterSignature] = payload.counterSignature as NSString
@@ -92,66 +151,194 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             return record
         }
 
-        for chunk in records.chunked(into: 100) {
+        for chunk in records.chunked(into: saveBatchSize) {
             try await modify(recordsToSave: chunk)
         }
+
+        var manifestPayloadIDs = OrderedUniqueStrings()
+        let existingPayloadIDs = (try? await fetchManifestPayloadIDs()) ?? []
+        manifestPayloadIDs.append(contentsOf: existingPayloadIDs)
+        manifestPayloadIDs.append(contentsOf: uniquePayloads.map(\.id))
+        try await saveManifest(payloadIDs: manifestPayloadIDs.values)
     }
 
-    private func fetchPayloads(query: CKQuery) async throws -> [RecapSnapshotSyncPayload] {
+    private func fetchPayloadsFromZone(zoneID: CKRecordZone.ID) async throws -> [RecapSnapshotSyncPayload] {
+        let accumulator = PayloadAccumulator()
+        try await fetchPayloadsFromZone(
+            zoneID: zoneID,
+            previousServerChangeToken: nil,
+            into: accumulator
+        )
+        return accumulator.values
+    }
+
+    private func fetchPayloadsFromZone(
+        zoneID: CKRecordZone.ID,
+        previousServerChangeToken: CKServerChangeToken?,
+        into payloads: PayloadAccumulator
+    ) async throws {
+        let fetchChangesResult: (CKServerChangeToken?, Bool) = try await withCheckedThrowingContinuation { continuation in
+            let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+            configuration.previousServerChangeToken = previousServerChangeToken
+            configuration.desiredKeys = [Field.capturedAt, Field.counterSignature, Field.payload]
+
+            let operation = CKFetchRecordZoneChangesOperation(
+                recordZoneIDs: [zoneID],
+                configurationsByRecordZoneID: [zoneID: configuration]
+            )
+            operation.recordChangedBlock = { record in
+                guard record.recordType == self.recordType,
+                      let payload = Self.payload(from: record) else {
+                    return
+                }
+                payloads.append(payload)
+            }
+
+            var nextToken: CKServerChangeToken?
+            var moreComing = false
+            var zoneError: Error?
+            operation.recordZoneFetchCompletionBlock = { _, serverChangeToken, _, zoneMoreComing, error in
+                zoneError = error
+                nextToken = serverChangeToken
+                moreComing = zoneMoreComing
+            }
+            operation.fetchRecordZoneChangesCompletionBlock = { error in
+                if let error = zoneError ?? error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: (nextToken, moreComing))
+                }
+            }
+
+            operation.qualityOfService = .utility
+            database.add(operation)
+        }
+
+        if fetchChangesResult.1, let nextToken = fetchChangesResult.0 {
+            try await fetchPayloadsFromZone(
+                zoneID: zoneID,
+                previousServerChangeToken: nextToken,
+                into: payloads
+            )
+        }
+    }
+
+    private func fetchManifestPayloadIDs() async throws -> [String] {
+        let recordID = CKRecord.ID(recordName: manifestRecordName, zoneID: Self.recordZoneID)
+        let record = try await fetchRecord(withID: recordID)
+        guard let data = (record[Field.payloadIDs] as? Data) ?? (record[Field.payloadIDs] as? NSData).map({ $0 as Data }) else {
+            #if DEBUG
+            print("Recap CloudKit manifest has no payload IDs")
+            #endif
+            return []
+        }
+        let ids = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+        #if DEBUG
+        print("Recap CloudKit manifest fetched \(ids.count) payload IDs")
+        #endif
+        return ids
+    }
+
+    private func fetchPayloadRecords(payloadIDs: [String]) async throws -> [RecapSnapshotSyncPayload] {
+        var allPayloads: [RecapSnapshotSyncPayload] = []
+        for chunk in payloadIDs.chunked(into: fetchBatchSize) {
+            let recordIDs = chunk.map { CKRecord.ID(recordName: $0, zoneID: Self.recordZoneID) }
+            allPayloads.append(contentsOf: try await fetchPayloadRecords(recordIDs: recordIDs))
+        }
+        return allPayloads
+    }
+
+    private func fetchPayloadRecords(recordIDs: [CKRecord.ID]) async throws -> [RecapSnapshotSyncPayload] {
         try await withCheckedThrowingContinuation { continuation in
             let payloads = PayloadAccumulator()
-            fetchPayloads(query: query, cursor: nil, into: payloads) { result in
+            let operation = CKFetchRecordsOperation(recordIDs: recordIDs)
+            operation.desiredKeys = [Field.capturedAt, Field.counterSignature, Field.payload]
+            operation.perRecordResultBlock = { _, result in
+                switch result {
+                case .success(let record):
+                    guard let payload = Self.payload(from: record) else {
+                        return
+                    }
+                    payloads.append(payload)
+                case .failure:
+                    return
+                }
+            }
+            operation.fetchRecordsResultBlock = { result in
                 continuation.resume(with: result.map { payloads.values })
             }
+            operation.qualityOfService = .utility
+            database.add(operation)
         }
     }
 
-    private func fetchPayloads(
-        query: CKQuery,
-        cursor: CKQueryOperation.Cursor?,
-        into payloads: PayloadAccumulator,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        let operation: CKQueryOperation
-        if let cursor {
-            operation = CKQueryOperation(cursor: cursor)
-        } else {
-            operation = CKQueryOperation(query: query)
-        }
-
-        operation.desiredKeys = [Field.capturedAt, Field.counterSignature, Field.payload]
-        operation.resultsLimit = CKQueryOperation.maximumResults
-        operation.recordMatchedBlock = { _, result in
-            guard case .success(let record) = result,
-                  let payload = Self.payload(from: record) else {
-                return
-            }
-            payloads.append(payload)
-        }
-        operation.queryResultBlock = { [weak self] result in
-            switch result {
-            case .success(let nextCursor):
-                if let nextCursor, let self {
-                    self.fetchPayloads(query: query, cursor: nextCursor, into: payloads, completion: completion)
+    private func fetchRecord(withID recordID: CKRecord.ID) async throws -> CKRecord {
+        try await withCheckedThrowingContinuation { continuation in
+            database.fetch(withRecordID: recordID) { record, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let record {
+                    continuation.resume(returning: record)
                 } else {
-                    completion(.success(()))
+                    continuation.resume(throwing: CKError(.unknownItem))
                 }
-            case .failure(let error):
-                completion(.failure(error))
             }
         }
-
-        operation.qualityOfService = .utility
-        database.add(operation)
     }
 
     private func modify(recordsToSave records: [CKRecord]) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
             operation.savePolicy = .allKeys
             operation.qualityOfService = .utility
+            let errors = CloudKitRecordSaveErrors()
+            operation.perRecordSaveBlock = { recordID, result in
+                if case .failure(let error) = result {
+                    errors.append(recordID: recordID, error: error)
+                }
+            }
             operation.modifyRecordsResultBlock = { result in
-                continuation.resume(with: result)
+                switch result {
+                case .success:
+                    if let error = errors.error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            database.add(operation)
+        }
+    }
+
+    private func saveManifest(payloadIDs: [String]) async throws {
+        let recordID = CKRecord.ID(recordName: manifestRecordName, zoneID: Self.recordZoneID)
+        let record = CKRecord(recordType: manifestRecordType, recordID: recordID)
+        record[Field.payloadIDs] = try JSONEncoder().encode(payloadIDs) as NSData
+        try await modify(recordsToSave: [record])
+        #if DEBUG
+        print("Recap CloudKit manifest saved \(payloadIDs.count) payload IDs")
+        #endif
+    }
+
+    private func saveRecordZoneIfNeeded() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let zone = CKRecordZone(zoneID: Self.recordZoneID)
+            let operation = CKModifyRecordZonesOperation(recordZonesToSave: [zone], recordZoneIDsToDelete: nil)
+            operation.qualityOfService = .utility
+            operation.modifyRecordZonesResultBlock = { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case .failure(let error):
+                    if Self.isZoneAlreadyExistsError(error) {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
             database.add(operation)
         }
@@ -174,6 +361,37 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             encodedSnapshot: data
         )
     }
+
+    private static func mergedPayloads(_ payloads: [RecapSnapshotSyncPayload]) -> [RecapSnapshotSyncPayload] {
+        var payloadsByID: [String: RecapSnapshotSyncPayload] = [:]
+        for payload in payloads {
+            payloadsByID[payload.id] = payload
+        }
+        return Array(payloadsByID.values)
+    }
+
+    private static func isMissingZoneError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        if ckError.code == .zoneNotFound || ckError.code == .unknownItem {
+            return true
+        }
+        return ckError.partialErrorsByItemID?.values.contains { isMissingZoneError($0) } == true
+    }
+
+    private static func isMissingManifestError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        if ckError.code == .unknownItem {
+            return true
+        }
+        return ckError.partialErrorsByItemID?.values.contains { isMissingManifestError($0) } == true
+    }
+
+    private static func isZoneAlreadyExistsError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        return ckError.code == .serverRecordChanged || ckError.partialErrorsByItemID?.values.contains {
+            isZoneAlreadyExistsError($0)
+        } == true
+    }
 }
 
 private final class PayloadAccumulator {
@@ -190,6 +408,46 @@ private final class PayloadAccumulator {
         lock.lock()
         storage.append(payload)
         lock.unlock()
+    }
+}
+
+private final class CloudKitRecordSaveErrors {
+    private let lock = NSLock()
+    private var failures: [(CKRecord.ID, Error)] = []
+
+    var error: Error? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !failures.isEmpty else { return nil }
+        return CloudKitPartialRecordSaveError(failures: failures)
+    }
+
+    func append(recordID: CKRecord.ID, error: Error) {
+        lock.lock()
+        failures.append((recordID, error))
+        lock.unlock()
+    }
+}
+
+private struct CloudKitPartialRecordSaveError: LocalizedError {
+    let failures: [(CKRecord.ID, Error)]
+
+    var errorDescription: String? {
+        guard let first = failures.first else {
+            return "CloudKit record save failed."
+        }
+        return "CloudKit failed to save \(failures.count) recap snapshot record(s). First failure \(first.0.recordName): \(first.1)"
+    }
+}
+
+private struct OrderedUniqueStrings {
+    private var seen = Set<String>()
+    private(set) var values: [String] = []
+
+    mutating func append(contentsOf strings: [String]) {
+        for string in strings where seen.insert(string).inserted {
+            values.append(string)
+        }
     }
 }
 
