@@ -208,6 +208,7 @@ final class MonthlyRecapSnapshotStore {
         let recap: MonthlyRecap
         let rankingCoverage: Double
         let sourceSnapshotCount: Int
+        let isLocalDeviceStream: Bool
     }
 
     private struct StoredSnapshots: Codable {
@@ -330,6 +331,7 @@ final class MonthlyRecapSnapshotStore {
     private let fileURL: URL
     private let calendar: Calendar
     private let deviceIdentifier: String
+    private let prefersSyncedRecapSource: Bool
     private let accessQueue = DispatchQueue(label: "com.playcount.monthly-recap-snapshots")
     private let retentionMonths = 18
     private let minimumSnapshotInterval: TimeInterval = 60 * 30
@@ -352,10 +354,12 @@ final class MonthlyRecapSnapshotStore {
         fileManager: FileManager = .default,
         directoryURL: URL? = nil,
         calendar: Calendar = .current,
-        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier()
+        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier(),
+        prefersSyncedRecapSource: Bool = false
     ) {
         self.calendar = calendar
         self.deviceIdentifier = deviceIdentifier
+        self.prefersSyncedRecapSource = prefersSyncedRecapSource
 
         let resolvedDirectoryURL: URL
         if let providedDirectoryURL = directoryURL {
@@ -860,7 +864,8 @@ final class MonthlyRecapSnapshotStore {
             return RecapCandidate(
                 recap: .empty(for: date, calendar: calendar),
                 rankingCoverage: 0,
-                sourceSnapshotCount: 0
+                sourceSnapshotCount: 0,
+                isLocalDeviceStream: false
             )
         }
 
@@ -934,7 +939,8 @@ final class MonthlyRecapSnapshotStore {
             return RecapCandidate(
                 recap: .empty(for: date, calendar: calendar),
                 rankingCoverage: 0,
-                sourceSnapshotCount: 0
+                sourceSnapshotCount: 0,
+                isLocalDeviceStream: ordered.contains { $0.deviceIdentifier == deviceIdentifier }
             )
         }
 
@@ -956,7 +962,8 @@ final class MonthlyRecapSnapshotStore {
                 topNewSongs: topNewSongs
             ),
             rankingCoverage: rankingCoverage,
-            sourceSnapshotCount: inMonth.count
+            sourceSnapshotCount: inMonth.count,
+            isLocalDeviceStream: ordered.contains { $0.deviceIdentifier == deviceIdentifier }
         )
     }
 
@@ -1008,6 +1015,15 @@ final class MonthlyRecapSnapshotStore {
 
         if lhsRecap.hasActivity != rhsRecap.hasActivity {
             return lhsRecap.hasActivity
+        }
+
+        if prefersSyncedRecapSource,
+           lhs.isLocalDeviceStream != rhs.isLocalDeviceStream {
+            let lhsIsSyncedActivity = !lhs.isLocalDeviceStream && lhsRecap.hasActivity
+            let rhsIsSyncedActivity = !rhs.isLocalDeviceStream && rhsRecap.hasActivity
+            if lhsIsSyncedActivity != rhsIsSyncedActivity {
+                return lhsIsSyncedActivity
+            }
         }
 
         if abs(lhs.rankingCoverage - rhs.rankingCoverage) >= 0.25 {

@@ -137,14 +137,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     init(
         fetchLimit: Int = 0,
-        snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
+        snapshotStore: MonthlyRecapSnapshotStore? = nil,
         recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(
             uploadsEnabled: UIDevice.current.userInterfaceIdiom != .pad
         ),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
-        self.snapshotStore = snapshotStore
+        self.snapshotStore = snapshotStore ?? MonthlyRecapSnapshotStore(
+            prefersSyncedRecapSource: UIDevice.current.userInterfaceIdiom == .pad
+        )
         self.recapCloudSyncService = recapCloudSyncService
 
         #if DEBUG
@@ -157,8 +159,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         #endif
 
         authorizationStatus = MPMediaLibrary.authorizationStatus()
-        monthlyRecap = snapshotStore.currentMonthRecap()
-        availableRecapMonths = snapshotStore.availableMonthStarts()
+        monthlyRecap = self.snapshotStore.currentMonthRecap()
+        availableRecapMonths = self.snapshotStore.availableMonthStarts()
 
         guard startsAutomatically else {
             return

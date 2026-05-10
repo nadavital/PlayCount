@@ -264,6 +264,47 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertLessThan(iPadRecap.topSongs.count, baselineSongs.count)
     }
 
+    func testSyncedRecapSourceWinsOverLocalReadOnlyStream() {
+        let phoneStore = makeStore(named: "phone-synced-source")
+        let iPadStore = makeStore(named: "ipad-read-only-source", prefersSyncedRecapSource: true)
+        let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let phoneLatestDate = date(year: 2026, month: 5, day: 10, hour: 6)
+        let iPadBaselineDate = date(year: 2026, month: 5, day: 8, hour: 21)
+        let iPadLatestDate = date(year: 2026, month: 5, day: 10, hour: 6)
+        let largeSuffix = String(repeating: "x", count: 1_000)
+        let phoneBaselineSongs = (1...1_200).map {
+            song(id: UInt64($0), title: "Phone Song \($0) \(largeSuffix)", playCount: 100)
+        }
+        let phoneLatestSongs = phoneBaselineSongs.enumerated().map { index, baselineSong in
+            let extraPlay = index < 379 ? 1 : 0
+            return song(
+                id: baselineSong.id,
+                title: baselineSong.title,
+                playCount: baselineSong.playCount + extraPlay
+            )
+        }
+        let iPadBaselineSongs = (1...1_200).map {
+            song(id: UInt64(10_000 + $0), title: "iPad Song \($0)", playCount: 100)
+        }
+        let iPadLatestSongs = iPadBaselineSongs.enumerated().map { index, baselineSong in
+            let extraPlay = index < 65 ? 1 : 0
+            return song(
+                id: baselineSong.id,
+                title: baselineSong.title,
+                playCount: baselineSong.playCount + extraPlay
+            )
+        }
+
+        _ = phoneStore.record(songs: phoneBaselineSongs, at: baselineDate, reason: .manualRefresh)
+        _ = phoneStore.record(songs: phoneLatestSongs, at: phoneLatestDate, reason: .foreground)
+        XCTAssertTrue(iPadStore.mergeSyncPayloads(phoneStore.localSyncPayloads(), now: phoneLatestDate))
+        _ = iPadStore.record(songs: iPadBaselineSongs, at: iPadBaselineDate, reason: .manualRefresh)
+        _ = iPadStore.record(songs: iPadLatestSongs, at: iPadLatestDate, reason: .foreground)
+
+        let recap = iPadStore.recap(forMonthContaining: iPadLatestDate)
+        XCTAssertEqual(recap.totalPlayDelta, 379)
+    }
+
     func testTrimmedLocalSyncPayloadPreservesChangedSongRankings() {
         let phoneStore = makeStore(named: "phone-large-ranking")
         let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
@@ -627,13 +668,14 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recaps.map(\.totalPlayDelta), [5, 2])
     }
 
-    private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
+    private func makeStore(named name: String, prefersSyncedRecapSource: Bool = false) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)
         return MonthlyRecapSnapshotStore(
             directoryURL: directory,
             calendar: Calendar(identifier: .gregorian),
-            deviceIdentifier: name
+            deviceIdentifier: name,
+            prefersSyncedRecapSource: prefersSyncedRecapSource
         )
     }
 
