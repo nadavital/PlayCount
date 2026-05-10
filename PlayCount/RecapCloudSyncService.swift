@@ -42,28 +42,16 @@ final class RecapCloudSyncService {
             #if DEBUG
             print("Recap CloudKit sync fetched \(remotePayloads.count) remote payloads")
             #endif
-            var preMergeLocalPayloads: [RecapSnapshotSyncPayload] = []
-            if uploadsEnabled {
-                preMergeLocalPayloads = snapshotStore.localSyncPayloads()
-                #if DEBUG
-                print("Recap CloudKit sync saving \(preMergeLocalPayloads.count) local payloads before merge")
-                #endif
-                try await client.saveSnapshotPayloads(preMergeLocalPayloads)
-            }
-
             let didMergeRemote = snapshotStore.mergeSyncPayloads(remotePayloads)
             if uploadsEnabled {
-                let localPayloads = snapshotStore.localSyncPayloads()
-                if localPayloads != preMergeLocalPayloads {
-                    #if DEBUG
-                    print("Recap CloudKit sync saving \(localPayloads.count) local payloads after merge; didMergeRemote=\(didMergeRemote)")
-                    #endif
-                    try await client.saveSnapshotPayloads(localPayloads)
-                } else {
-                    #if DEBUG
-                    print("Recap CloudKit sync upload unchanged after merge; didMergeRemote=\(didMergeRemote)")
-                    #endif
-                }
+                let uploadPayloads = Self.uploadPayloads(
+                    localPayloads: snapshotStore.syncPayloads(),
+                    remotePayloads: remotePayloads
+                )
+                #if DEBUG
+                print("Recap CloudKit sync saving \(uploadPayloads.count) merged payloads; didMergeRemote=\(didMergeRemote)")
+                #endif
+                try await client.saveSnapshotPayloads(uploadPayloads)
             } else {
                 #if DEBUG
                 print("Recap CloudKit sync upload skipped; didMergeRemote=\(didMergeRemote)")
@@ -78,6 +66,26 @@ final class RecapCloudSyncService {
             print("Recap CloudKit sync failed: \(error)")
             #endif
             return false
+        }
+    }
+
+    private static func uploadPayloads(
+        localPayloads: [RecapSnapshotSyncPayload],
+        remotePayloads: [RecapSnapshotSyncPayload]
+    ) -> [RecapSnapshotSyncPayload] {
+        var payloadsByID: [String: RecapSnapshotSyncPayload] = [:]
+        for payload in remotePayloads {
+            payloadsByID[payload.id] = payload
+        }
+        for payload in localPayloads {
+            payloadsByID[payload.id] = payload
+        }
+
+        return payloadsByID.values.sorted {
+            if $0.capturedAt != $1.capturedAt {
+                return $0.capturedAt < $1.capturedAt
+            }
+            return $0.id < $1.id
         }
     }
 

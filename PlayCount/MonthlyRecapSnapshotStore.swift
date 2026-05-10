@@ -208,7 +208,13 @@ final class MonthlyRecapSnapshotStore {
         let recap: MonthlyRecap
         let rankingCoverage: Double
         let sourceSnapshotCount: Int
-        let isLocalDeviceStream: Bool
+
+        var hasRankingEvidence: Bool {
+            recap.totalPlayDelta == 0 ||
+                !recap.topSongs.isEmpty ||
+                !recap.topArtists.isEmpty ||
+                !recap.topAlbums.isEmpty
+        }
     }
 
     private struct StoredSnapshots: Codable {
@@ -331,7 +337,6 @@ final class MonthlyRecapSnapshotStore {
     private let fileURL: URL
     private let calendar: Calendar
     private let deviceIdentifier: String
-    private let prefersSyncedRecapSource: Bool
     private let accessQueue = DispatchQueue(label: "com.playcount.monthly-recap-snapshots")
     private let retentionMonths = 18
     private let minimumSnapshotInterval: TimeInterval = 60 * 30
@@ -354,12 +359,10 @@ final class MonthlyRecapSnapshotStore {
         fileManager: FileManager = .default,
         directoryURL: URL? = nil,
         calendar: Calendar = .current,
-        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier(),
-        prefersSyncedRecapSource: Bool = false
+        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier()
     ) {
         self.calendar = calendar
         self.deviceIdentifier = deviceIdentifier
-        self.prefersSyncedRecapSource = prefersSyncedRecapSource
 
         let resolvedDirectoryURL: URL
         if let providedDirectoryURL = directoryURL {
@@ -488,7 +491,7 @@ final class MonthlyRecapSnapshotStore {
             if didChange {
                 saveLocked(stored)
             }
-            return stored.snapshots.compactMap(\.syncPayload)
+            return stored.snapshots.sortedForSyncPayloads().compactMap(\.syncPayload).uniquedByID()
         }
     }
 
@@ -509,9 +512,10 @@ final class MonthlyRecapSnapshotStore {
                 for: localSnapshots,
                 currentDeviceIdentifier: deviceIdentifier
             )
-            return localSnapshots.compactMap { snapshot in
+            return localSnapshots.sortedForSyncPayloads().compactMap { snapshot in
                 snapshot.syncPayload(prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [])
             }
+            .uniquedByID()
         }
     }
 
@@ -538,7 +542,7 @@ final class MonthlyRecapSnapshotStore {
             guard didChange else { return false }
 
             stored.snapshots = retainedCanonicalSnapshots(
-                from: snapshotsByID.values.sorted { $0.capturedAt < $1.capturedAt },
+                from: Array(snapshotsByID.values).sortedForSyncPayloads(),
                 now: now
             )
             saveLocked(stored)
@@ -828,26 +832,20 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private func canonicalSnapshots(_ snapshots: [LibrarySnapshot]) -> [LibrarySnapshot] {
-        var snapshotsByMoment: [String: LibrarySnapshot] = [:]
+        var canonical: [LibrarySnapshot] = []
         for snapshot in snapshots {
-            let key = snapshot.recapMomentKey
-            guard let existing = snapshotsByMoment[key] else {
-                snapshotsByMoment[key] = snapshot
+            guard let existingIndex = canonical.firstIndex(where: { snapshot.isDuplicateRecapMoment(of: $0) }) else {
+                canonical.append(snapshot)
                 continue
             }
 
+            let existing = canonical[existingIndex]
             if snapshot.isRicherRecapSource(than: existing) {
-                snapshotsByMoment[key] = snapshot
+                canonical[existingIndex] = snapshot
             }
         }
 
-        return snapshotsByMoment.values.sorted {
-            if $0.capturedAt != $1.capturedAt {
-                return $0.capturedAt < $1.capturedAt
-            }
-
-            return $0.songs.count > $1.songs.count
-        }
+        return canonical.sortedForSyncPayloads()
     }
 
     private func recapCandidateForDeviceStream(
@@ -864,8 +862,7 @@ final class MonthlyRecapSnapshotStore {
             return RecapCandidate(
                 recap: .empty(for: date, calendar: calendar),
                 rankingCoverage: 0,
-                sourceSnapshotCount: 0,
-                isLocalDeviceStream: false
+                sourceSnapshotCount: 0
             )
         }
 
@@ -939,8 +936,7 @@ final class MonthlyRecapSnapshotStore {
             return RecapCandidate(
                 recap: .empty(for: date, calendar: calendar),
                 rankingCoverage: 0,
-                sourceSnapshotCount: 0,
-                isLocalDeviceStream: ordered.contains { $0.deviceIdentifier == deviceIdentifier }
+                sourceSnapshotCount: 0
             )
         }
 
@@ -962,8 +958,7 @@ final class MonthlyRecapSnapshotStore {
                 topNewSongs: topNewSongs
             ),
             rankingCoverage: rankingCoverage,
-            sourceSnapshotCount: inMonth.count,
-            isLocalDeviceStream: ordered.contains { $0.deviceIdentifier == deviceIdentifier }
+            sourceSnapshotCount: inMonth.count
         )
     }
 
@@ -1017,13 +1012,18 @@ final class MonthlyRecapSnapshotStore {
             return lhsRecap.hasActivity
         }
 
-        if prefersSyncedRecapSource,
-           lhs.isLocalDeviceStream != rhs.isLocalDeviceStream {
-            let lhsIsSyncedActivity = !lhs.isLocalDeviceStream && lhsRecap.hasActivity
-            let rhsIsSyncedActivity = !rhs.isLocalDeviceStream && rhsRecap.hasActivity
-            if lhsIsSyncedActivity != rhsIsSyncedActivity {
-                return lhsIsSyncedActivity
-            }
+        let lhsHasRankingEvidence = lhs.hasRankingEvidence
+        let rhsHasRankingEvidence = rhs.hasRankingEvidence
+        if lhsHasRankingEvidence != rhsHasRankingEvidence {
+            return lhsHasRankingEvidence
+        }
+
+        if lhsRecap.totalPlayDelta != rhsRecap.totalPlayDelta {
+            return lhsRecap.totalPlayDelta > rhsRecap.totalPlayDelta
+        }
+
+        if lhsRecap.totalListeningDuration != rhsRecap.totalListeningDuration {
+            return lhsRecap.totalListeningDuration > rhsRecap.totalListeningDuration
         }
 
         if abs(lhs.rankingCoverage - rhs.rankingCoverage) >= 0.25 {
@@ -1445,6 +1445,18 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
         return "\(milliseconds)|\(aggregateSignature)"
     }
 
+    func isDuplicateRecapMoment(of snapshot: Self) -> Bool {
+        guard recapMomentKey == snapshot.recapMomentKey else {
+            return false
+        }
+
+        if let deviceIdentifier, let otherDeviceIdentifier = snapshot.deviceIdentifier {
+            return deviceIdentifier == otherDeviceIdentifier
+        }
+
+        return true
+    }
+
     var syncPayloadKey: String {
         "\(capturedAt.timeIntervalSince1970)|\(deviceIdentifier ?? "unknown")|\(counterSignature)"
     }
@@ -1565,6 +1577,37 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             hash &*= 1_099_511_628_211
         }
         return hash
+    }
+}
+
+private extension Array where Element == MonthlyRecapSnapshotStore.LibrarySnapshot {
+    func sortedForSyncPayloads() -> [Element] {
+        sorted {
+            if $0.capturedAt != $1.capturedAt {
+                return $0.capturedAt < $1.capturedAt
+            }
+
+            let lhsDeviceIdentifier = $0.deviceIdentifier ?? ""
+            let rhsDeviceIdentifier = $1.deviceIdentifier ?? ""
+            if lhsDeviceIdentifier != rhsDeviceIdentifier {
+                return lhsDeviceIdentifier < rhsDeviceIdentifier
+            }
+
+            if $0.songs.count != $1.songs.count {
+                return $0.songs.count > $1.songs.count
+            }
+
+            return $0.syncIdentifier < $1.syncIdentifier
+        }
+    }
+}
+
+private extension Array where Element == RecapSnapshotSyncPayload {
+    func uniquedByID() -> [Element] {
+        var seenIDs = Set<String>()
+        return filter { payload in
+            seenIDs.insert(payload.id).inserted
+        }
     }
 }
 

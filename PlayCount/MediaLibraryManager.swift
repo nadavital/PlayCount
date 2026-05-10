@@ -137,16 +137,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     init(
         fetchLimit: Int = 0,
-        snapshotStore: MonthlyRecapSnapshotStore? = nil,
-        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(
-            uploadsEnabled: UIDevice.current.userInterfaceIdiom != .pad
-        ),
+        snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
+        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
-        self.snapshotStore = snapshotStore ?? MonthlyRecapSnapshotStore(
-            prefersSyncedRecapSource: UIDevice.current.userInterfaceIdiom == .pad
-        )
+        self.snapshotStore = snapshotStore
         self.recapCloudSyncService = recapCloudSyncService
 
         #if DEBUG

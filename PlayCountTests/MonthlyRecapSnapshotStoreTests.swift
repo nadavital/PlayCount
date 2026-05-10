@@ -264,9 +264,9 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertLessThan(iPadRecap.topSongs.count, baselineSongs.count)
     }
 
-    func testSyncedRecapSourceWinsOverLocalReadOnlyStream() {
+    func testHigherUserRecapTotalsWinOverLaterLowerDeviceBaseline() {
         let phoneStore = makeStore(named: "phone-synced-source")
-        let iPadStore = makeStore(named: "ipad-read-only-source", prefersSyncedRecapSource: true)
+        let iPadStore = makeStore(named: "ipad-user-source")
         let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
         let phoneLatestDate = date(year: 2026, month: 5, day: 10, hour: 6)
         let iPadBaselineDate = date(year: 2026, month: 5, day: 8, hour: 21)
@@ -668,14 +668,13 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recaps.map(\.totalPlayDelta), [5, 2])
     }
 
-    private func makeStore(named name: String, prefersSyncedRecapSource: Bool = false) -> MonthlyRecapSnapshotStore {
+    private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)
         return MonthlyRecapSnapshotStore(
             directoryURL: directory,
             calendar: Calendar(identifier: .gregorian),
-            deviceIdentifier: name,
-            prefersSyncedRecapSource: prefersSyncedRecapSource
+            deviceIdentifier: name
         )
     }
 

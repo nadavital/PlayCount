@@ -33,7 +33,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
 
         XCTAssertTrue(didMerge)
         XCTAssertEqual(localStore.syncPayloads().count, 3)
-        XCTAssertEqual(client.savedPayloads.count, 1)
+        XCTAssertEqual(client.savedPayloads.count, 3)
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
@@ -64,9 +64,56 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
-    func testSyncUploadsLocalPayloadsBeforeMergingRemoteSnapshots() async {
-        let remoteStore = makeStore(named: "remote-premerge")
-        let localStore = makeStore(named: "local-premerge")
+    func testBothDevicesCanUploadWithoutReplacingManifestWithLocalOnlySnapshots() async {
+        let phoneStore = makeStore(named: "phone-uploader")
+        let iPadStore = makeStore(named: "ipad-uploader")
+        let baselineDate = date(year: 2026, month: 5, day: 5)
+        let phoneLatestDate = date(year: 2026, month: 5, day: 9)
+        let iPadLatestDate = date(year: 2026, month: 5, day: 10)
+
+        _ = phoneStore.record(
+            songs: [song(id: 1, title: "Phone", playCount: 100)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = phoneStore.record(
+            songs: [song(id: 1, title: "Phone", playCount: 140)],
+            at: phoneLatestDate,
+            reason: .foreground
+        )
+        _ = iPadStore.record(
+            songs: [song(id: 2, title: "iPad", playCount: 100)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = iPadStore.record(
+            songs: [song(id: 2, title: "iPad", playCount: 165)],
+            at: iPadLatestDate,
+            reason: .foreground
+        )
+
+        let phoneInitialClient = FakeRecapCloudSyncClient(remotePayloads: [])
+        _ = await RecapCloudSyncService(client: phoneInitialClient).sync(snapshotStore: phoneStore)
+        XCTAssertEqual(phoneInitialClient.savedPayloads.count, 2)
+
+        let iPadClient = FakeRecapCloudSyncClient(remotePayloads: phoneInitialClient.savedPayloads)
+        _ = await RecapCloudSyncService(client: iPadClient).sync(snapshotStore: iPadStore)
+        XCTAssertEqual(iPadClient.savedPayloads.count, 4)
+
+        let phoneSecondClient = FakeRecapCloudSyncClient(remotePayloads: iPadClient.savedPayloads)
+        _ = await RecapCloudSyncService(client: phoneSecondClient).sync(snapshotStore: phoneStore)
+        XCTAssertEqual(phoneSecondClient.savedPayloads.count, 4)
+
+        XCTAssertEqual(
+            phoneStore.recap(forMonthContaining: iPadLatestDate).totalPlayDelta,
+            iPadStore.recap(forMonthContaining: iPadLatestDate).totalPlayDelta
+        )
+        XCTAssertEqual(phoneStore.recap(forMonthContaining: iPadLatestDate).totalPlayDelta, 65)
+    }
+
+    func testSyncUploadsMergedManifestPayloadsAfterMergingRemoteSnapshots() async {
+        let remoteStore = makeStore(named: "remote-merged-manifest")
+        let localStore = makeStore(named: "local-merged-manifest")
         let baselineDate = date(year: 2026, month: 5, day: 1)
         let localDate = date(year: 2026, month: 5, day: 3)
         let remoteDate = date(year: 2026, month: 5, day: 5)
@@ -91,14 +138,50 @@ final class RecapCloudSyncServiceTests: XCTestCase {
             at: localDate,
             reason: .foreground
         )
-        let originalLocalPayloads = localStore.localSyncPayloads()
 
         let client = FakeRecapCloudSyncClient(remotePayloads: remoteStore.syncPayloads())
         let service = RecapCloudSyncService(client: client)
 
         _ = await service.sync(snapshotStore: localStore)
 
-        XCTAssertEqual(client.savedPayloadCalls.first, originalLocalPayloads)
+        XCTAssertEqual(client.savedPayloadCalls.count, 1)
+        XCTAssertEqual(
+            Set(client.savedPayloadCalls.first?.map(\.id) ?? []),
+            Set((remoteStore.syncPayloads() + localStore.syncPayloads()).map(\.id))
+        )
+        XCTAssertEqual(client.savedPayloads.count, 4)
+    }
+
+    func testSyncPreservesRemotePayloadsThatLocalCompactionWouldDrop() async {
+        let fullSourceStore = makeStore(named: "full-remote-preserved")
+        let trimmedSourceStore = makeStore(named: "trimmed-remote-preserved")
+        let localStore = makeStore(named: "local-remote-preserved")
+        let baselineDate = date(year: 2026, month: 5, day: 5)
+        let baselineSongs = (0..<12).map { index in
+            song(id: UInt64(100 + index), title: "Song \(index)", playCount: 20 - index)
+        }
+        let trimmedBaselineSongs = Array(baselineSongs.prefix(5))
+
+        _ = fullSourceStore.record(
+            songs: baselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = trimmedSourceStore.debugRecordLegacySnapshot(
+            songs: trimmedBaselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh,
+            scannedSongCount: baselineSongs.count,
+            aggregateSongs: baselineSongs
+        )
+
+        let remotePayloads = fullSourceStore.syncPayloads() + trimmedSourceStore.syncPayloads()
+        let client = FakeRecapCloudSyncClient(remotePayloads: remotePayloads)
+
+        _ = await RecapCloudSyncService(client: client).sync(snapshotStore: localStore)
+
+        XCTAssertEqual(localStore.syncPayloads().count, 1)
+        XCTAssertEqual(Set(client.savedPayloads.map(\.id)), Set(remotePayloads.map(\.id)))
     }
 
     func testSyncDoesNothingWhenICloudIsUnavailable() async {
