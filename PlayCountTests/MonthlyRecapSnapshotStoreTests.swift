@@ -503,6 +503,68 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.biggestGainers.first?.title, "Climber")
     }
 
+    func testLocalSyncPayloadsCanonicalizeDuplicateSnapshotMoments() {
+        let store = makeStore(named: "canonical-local-sync")
+        let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let baselineSongs = recapFixtureSongs(
+            climberPlayCount: 1,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        let trimmedBaselineSongs = Array(baselineSongs.prefix(5))
+        let latestSongs = baselineSongs.map { baselineSong -> TopSong in
+            guard baselineSong.id == 100 else { return baselineSong }
+            return song(id: baselineSong.id, title: baselineSong.title, playCount: 85)
+        }
+
+        _ = store.debugRecordLegacySnapshot(
+            songs: baselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.debugRecordLegacySnapshot(
+            songs: trimmedBaselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh,
+            scannedSongCount: baselineSongs.count,
+            aggregateSongs: baselineSongs
+        )
+        _ = store.record(songs: latestSongs, at: latestDate, reason: .foreground)
+
+        XCTAssertEqual(store.localSyncPayloads().count, 2)
+    }
+
+    func testMergeSyncPayloadsCanonicalizesDuplicateSnapshotMoments() {
+        let fullSourceStore = makeStore(named: "full-source")
+        let trimmedSourceStore = makeStore(named: "trimmed-source")
+        let targetStore = makeStore(named: "canonical-merge-target")
+        let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)
+        let baselineSongs = recapFixtureSongs(
+            climberPlayCount: 1,
+            otherPlayCounts: [100, 92, 84, 76, 68, 60, 52, 44, 36, 28]
+        )
+        let trimmedBaselineSongs = Array(baselineSongs.prefix(5))
+
+        _ = fullSourceStore.record(
+            songs: baselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = trimmedSourceStore.debugRecordLegacySnapshot(
+            songs: trimmedBaselineSongs,
+            at: baselineDate,
+            reason: .manualRefresh,
+            scannedSongCount: baselineSongs.count,
+            aggregateSongs: baselineSongs
+        )
+
+        XCTAssertTrue(targetStore.mergeSyncPayloads(
+            fullSourceStore.syncPayloads() + trimmedSourceStore.syncPayloads(),
+            now: baselineDate
+        ))
+        XCTAssertEqual(targetStore.syncPayloads().count, 1)
+    }
+
     func testNoisyExistingCounterChurnDoesNotDominateRankings() {
         let store = makeStore(named: "noisy-existing-deltas")
         let baselineDate = date(year: 2026, month: 5, day: 5, hour: 8)

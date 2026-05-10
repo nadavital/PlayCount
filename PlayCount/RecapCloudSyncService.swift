@@ -42,13 +42,28 @@ final class RecapCloudSyncService {
             #if DEBUG
             print("Recap CloudKit sync fetched \(remotePayloads.count) remote payloads")
             #endif
+            var preMergeLocalPayloads: [RecapSnapshotSyncPayload] = []
+            if uploadsEnabled {
+                preMergeLocalPayloads = snapshotStore.localSyncPayloads()
+                #if DEBUG
+                print("Recap CloudKit sync saving \(preMergeLocalPayloads.count) local payloads before merge")
+                #endif
+                try await client.saveSnapshotPayloads(preMergeLocalPayloads)
+            }
+
             let didMergeRemote = snapshotStore.mergeSyncPayloads(remotePayloads)
             if uploadsEnabled {
                 let localPayloads = snapshotStore.localSyncPayloads()
-                #if DEBUG
-                print("Recap CloudKit sync saving \(localPayloads.count) local payloads; didMergeRemote=\(didMergeRemote)")
-                #endif
-                try await client.saveSnapshotPayloads(localPayloads)
+                if localPayloads != preMergeLocalPayloads {
+                    #if DEBUG
+                    print("Recap CloudKit sync saving \(localPayloads.count) local payloads after merge; didMergeRemote=\(didMergeRemote)")
+                    #endif
+                    try await client.saveSnapshotPayloads(localPayloads)
+                } else {
+                    #if DEBUG
+                    print("Recap CloudKit sync upload unchanged after merge; didMergeRemote=\(didMergeRemote)")
+                    #endif
+                }
             } else {
                 #if DEBUG
                 print("Recap CloudKit sync upload skipped; didMergeRemote=\(didMergeRemote)")
@@ -120,9 +135,20 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             try await saveRecordZoneIfNeeded()
             let payloadIDs = try await fetchManifestPayloadIDs()
             let manifestPayloads = payloadIDs.isEmpty ? [] : try await fetchPayloadRecords(payloadIDs: payloadIDs)
+            if !payloadIDs.isEmpty {
+                return Self.resolvedFetchedPayloads(
+                    manifestPayloadIDs: payloadIDs,
+                    manifestPayloads: manifestPayloads,
+                    zonePayloads: []
+                )
+            }
+
             let zonePayloads = try await fetchPayloadsFromZone(zoneID: Self.recordZoneID)
-            return Self.mergedPayloads(manifestPayloads + zonePayloads)
-                .sorted { $0.capturedAt < $1.capturedAt }
+            return Self.resolvedFetchedPayloads(
+                manifestPayloadIDs: payloadIDs,
+                manifestPayloads: manifestPayloads,
+                zonePayloads: zonePayloads
+            )
         } catch {
             guard Self.isMissingZoneError(error) || Self.isMissingManifestError(error) else { throw error }
             #if DEBUG
@@ -155,11 +181,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             try await modify(recordsToSave: chunk)
         }
 
-        var manifestPayloadIDs = OrderedUniqueStrings()
-        let existingPayloadIDs = (try? await fetchManifestPayloadIDs()) ?? []
-        manifestPayloadIDs.append(contentsOf: existingPayloadIDs)
-        manifestPayloadIDs.append(contentsOf: uniquePayloads.map(\.id))
-        try await saveManifest(payloadIDs: manifestPayloadIDs.values)
+        try await saveManifest(payloadIDs: Self.manifestPayloadIDs(for: uniquePayloads))
     }
 
     private func fetchPayloadsFromZone(zoneID: CKRecordZone.ID) async throws -> [RecapSnapshotSyncPayload] {
@@ -368,6 +390,22 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             payloadsByID[payload.id] = payload
         }
         return Array(payloadsByID.values)
+    }
+
+    static func manifestPayloadIDs(for payloads: [RecapSnapshotSyncPayload]) -> [String] {
+        var manifestPayloadIDs = OrderedUniqueStrings()
+        manifestPayloadIDs.append(contentsOf: payloads.map(\.id))
+        return manifestPayloadIDs.values
+    }
+
+    static func resolvedFetchedPayloads(
+        manifestPayloadIDs: [String],
+        manifestPayloads: [RecapSnapshotSyncPayload],
+        zonePayloads: [RecapSnapshotSyncPayload]
+    ) -> [RecapSnapshotSyncPayload] {
+        let sourcePayloads = manifestPayloadIDs.isEmpty ? zonePayloads : manifestPayloads
+        return Self.mergedPayloads(sourcePayloads)
+            .sorted { $0.capturedAt < $1.capturedAt }
     }
 
     private static func isMissingZoneError(_ error: Error) -> Bool {

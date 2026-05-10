@@ -447,7 +447,7 @@ final class MonthlyRecapSnapshotStore {
 
             if shouldAppend(snapshot, after: stored.snapshots.last) {
                 stored.snapshots.append(snapshot)
-                stored.snapshots = retainedSnapshots(from: stored.snapshots, now: capturedAt)
+                stored.snapshots = retainedCanonicalSnapshots(from: stored.snapshots, now: capturedAt)
                 saveLocked(stored)
             }
 
@@ -477,7 +477,11 @@ final class MonthlyRecapSnapshotStore {
     func syncPayloads() -> [RecapSnapshotSyncPayload] {
         accessQueue.sync {
             var stored = loadLocked()
-            if backfillAggregateCounters(in: &stored) {
+            var didChange = backfillAggregateCounters(in: &stored)
+            if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
+                didChange = true
+            }
+            if didChange {
                 saveLocked(stored)
             }
             return stored.snapshots.compactMap(\.syncPayload)
@@ -487,12 +491,16 @@ final class MonthlyRecapSnapshotStore {
     func localSyncPayloads() -> [RecapSnapshotSyncPayload] {
         accessQueue.sync {
             var stored = loadLocked()
-            if backfillAggregateCounters(in: &stored) {
+            var didChange = backfillAggregateCounters(in: &stored)
+            if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
+                didChange = true
+            }
+            if didChange {
                 saveLocked(stored)
             }
-            let localSnapshots = stored.snapshots.filter {
+            let localSnapshots = canonicalSnapshots(stored.snapshots.filter {
                 $0.belongsToLocalDevice(currentDeviceIdentifier: deviceIdentifier)
-            }
+            })
             let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
                 for: localSnapshots,
                 currentDeviceIdentifier: deviceIdentifier
@@ -525,7 +533,7 @@ final class MonthlyRecapSnapshotStore {
 
             guard didChange else { return false }
 
-            stored.snapshots = retainedSnapshots(
+            stored.snapshots = retainedCanonicalSnapshots(
                 from: snapshotsByID.values.sorted { $0.capturedAt < $1.capturedAt },
                 now: now
             )
@@ -591,7 +599,7 @@ final class MonthlyRecapSnapshotStore {
 
         if shouldAppend(snapshot, after: stored.snapshots.last) {
             stored.snapshots.append(snapshot)
-            stored.snapshots = retainedSnapshots(from: stored.snapshots, now: capturedAt)
+            stored.snapshots = retainedCanonicalSnapshots(from: stored.snapshots, now: capturedAt)
             saveLocked(stored)
         }
 
@@ -613,6 +621,20 @@ final class MonthlyRecapSnapshotStore {
             return snapshots
         }
         return snapshots.filter { $0.capturedAt >= cutoff }
+    }
+
+    private func retainedCanonicalSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
+        canonicalSnapshots(retainedSnapshots(from: snapshots, now: now))
+    }
+
+    private func compactRetainedCanonicalSnapshots(in stored: inout StoredSnapshots, now: Date) -> Bool {
+        let snapshots = retainedCanonicalSnapshots(from: stored.snapshots, now: now)
+        let existingIDs = stored.snapshots.map(\.syncIdentifier)
+        let compactedIDs = snapshots.map(\.syncIdentifier)
+        guard existingIDs != compactedIDs else { return false }
+
+        stored.snapshots = snapshots
+        return true
     }
 
     private static func aggregateCounters(
