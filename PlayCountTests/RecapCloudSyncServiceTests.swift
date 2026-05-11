@@ -34,6 +34,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertTrue(didMerge)
         XCTAssertEqual(localStore.syncPayloads().count, 3)
         XCTAssertEqual(client.savedPayloads.count, 3)
+        XCTAssertTrue(client.savedPayloads.allSatisfy { $0.encodedRecaps != nil })
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
@@ -99,6 +100,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         let iPadClient = FakeRecapCloudSyncClient(remotePayloads: phoneInitialClient.savedPayloads)
         _ = await RecapCloudSyncService(client: iPadClient).sync(snapshotStore: iPadStore)
         XCTAssertEqual(iPadClient.savedPayloads.count, 4)
+        XCTAssertTrue(iPadClient.savedPayloads.contains { $0.encodedRecaps != nil })
 
         let phoneSecondClient = FakeRecapCloudSyncClient(remotePayloads: iPadClient.savedPayloads)
         _ = await RecapCloudSyncService(client: phoneSecondClient).sync(snapshotStore: phoneStore)
@@ -251,6 +253,16 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertEqual(
             CloudKitRecapSyncClient.manifestPayloadIDs(for: payloads),
             ["current-a", "current-b"]
+        )
+    }
+
+    func testMergedManifestPayloadIDsPreserveNewerRemoteManifestEntries() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.mergedManifestPayloadIDs(
+                existingPayloadIDs: ["older-a", "newer-phone", "older-a"],
+                uploadPayloadIDs: ["older-a", "ipad-local"]
+            ),
+            ["older-a", "newer-phone", "ipad-local"]
         )
     }
 

@@ -32,6 +32,101 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(targetRecap.topSongs.first?.playDelta, 4)
     }
 
+    func testSyncedRecapSummaryKeepsRankedListsConsistentAcrossDevices() {
+        let phoneStore = makeStore(named: "summary-phone")
+        let iPadStore = makeStore(named: "summary-ipad")
+        let baselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+
+        _ = phoneStore.record(
+            songs: [
+                song(id: 1, title: "Phone Favorite", playCount: 10),
+                song(id: 2, title: "Phone Runner Up", playCount: 20)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = phoneStore.record(
+            songs: [
+                song(id: 1, title: "Phone Favorite", playCount: 17),
+                song(id: 2, title: "Phone Runner Up", playCount: 25)
+            ],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        _ = iPadStore.record(
+            songs: [song(id: 3, title: "iPad Local", playCount: 30)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = iPadStore.record(
+            songs: [song(id: 3, title: "iPad Local", playCount: 42)],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let phonePayloads = phoneStore.localSyncPayloads()
+        XCTAssertFalse(phonePayloads.isEmpty)
+        XCTAssertTrue(phonePayloads.allSatisfy { $0.encodedRecaps != nil })
+        XCTAssertTrue(iPadStore.mergeSyncPayloads(phonePayloads, now: latestDate))
+
+        let recap = iPadStore.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(recap.totalPlayDelta, 12)
+        XCTAssertEqual(recap.playedSongCount, 2)
+        XCTAssertEqual(recap.topSongs.map(\.title), ["Phone Favorite", "Phone Runner Up"])
+    }
+
+    func testSyncedRecapSummaryWinsWhenLocalDeviceHasDifferentEqualQualityRankings() {
+        let phoneStore = makeStore(named: "equal-summary-phone")
+        let iPadStore = makeStore(named: "equal-summary-ipad")
+        let baselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let phoneLatestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let iPadLatestDate = date(year: 2026, month: 5, day: 8, hour: 9)
+
+        _ = phoneStore.record(
+            songs: [
+                song(id: 1, title: "Phone Favorite", playCount: 10),
+                song(id: 2, title: "Phone Runner Up", playCount: 20)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = phoneStore.record(
+            songs: [
+                song(id: 1, title: "Phone Favorite", playCount: 17),
+                song(id: 2, title: "Phone Runner Up", playCount: 25)
+            ],
+            at: phoneLatestDate,
+            reason: .foreground
+        )
+
+        _ = iPadStore.record(
+            songs: [
+                song(id: 3, title: "iPad Favorite", playCount: 30),
+                song(id: 4, title: "iPad Runner Up", playCount: 40)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = iPadStore.record(
+            songs: [
+                song(id: 3, title: "iPad Favorite", playCount: 37),
+                song(id: 4, title: "iPad Runner Up", playCount: 45)
+            ],
+            at: iPadLatestDate,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(iPadStore.recap(forMonthContaining: iPadLatestDate).topSongs.first?.title, "iPad Favorite")
+        XCTAssertTrue(iPadStore.mergeSyncPayloads(phoneStore.localSyncPayloads(), now: iPadLatestDate))
+
+        let recap = iPadStore.recap(forMonthContaining: iPadLatestDate)
+        XCTAssertEqual(recap.totalPlayDelta, 12)
+        XCTAssertEqual(recap.playedSongCount, 2)
+        XCTAssertEqual(recap.topSongs.map(\.title), ["Phone Favorite", "Phone Runner Up"])
+    }
+
     func testSyncedPhoneRecapWinsOverLaterEmptyLocalDeviceSnapshot() {
         let phoneStore = makeStore(named: "phone")
         let baselineDate = date(year: 2026, month: 4, day: 30, hour: 23)
@@ -261,6 +356,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(sourceRecap.totalPlayDelta, 1_200)
         XCTAssertEqual(iPadRecap.totalPlayDelta, sourceRecap.totalPlayDelta)
         XCTAssertEqual(iPadRecap.totalListeningDuration, sourceRecap.totalListeningDuration)
+        XCTAssertEqual(iPadRecap.playedSongCount, sourceRecap.playedSongCount)
         XCTAssertLessThan(iPadRecap.topSongs.count, baselineSongs.count)
     }
 

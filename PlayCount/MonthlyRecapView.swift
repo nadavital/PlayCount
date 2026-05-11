@@ -1197,7 +1197,7 @@ private struct RecapSummaryBar: View {
             RecapSummaryItem(title: "Time", value: recap.totalListeningDuration.formattedListeningMinutes, systemImage: "clock.fill")
             Divider()
                 .padding(.vertical, 8)
-            RecapSummaryItem(title: "Songs", value: "\(recap.topSongs.count)", systemImage: "music.note")
+            RecapSummaryItem(title: "Songs", value: "\(recap.playedSongCount)", systemImage: "music.note")
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
