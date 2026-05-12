@@ -1,4 +1,3 @@
-import CoreImage.CIFilterBuiltins
 import MediaPlayer
 import SwiftUI
 
@@ -9,6 +8,9 @@ struct MonthlyRecapView: View {
     @State private var monthTransitionEdge: Edge = .trailing
     @State private var monthDragOffset: CGFloat = 0
     @State private var isUsingYearlyBreakdownStrip = false
+    @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
+    @State private var cachedArtworkHighlightsSignature = ""
+    @State private var hasScheduledInitialCloudSync = false
 
     #if DEBUG
     @State private var reminderStatusMessage: String?
@@ -185,27 +187,59 @@ struct MonthlyRecapView: View {
         return result
     }
 
-    private var heroArtwork: MPMediaItemArtwork? {
-        artworkHighlights.first
+    private var artworkHighlightsSignature: String {
+        let recapSongIDs = (recap.topSongs.prefix(6).map(\.id) + recap.topNewSongs.prefix(6).map(\.id))
+            .map { String($0) }
+            .joined(separator: ",")
+        let libraryAlbumIDs = manager.topAlbums.prefix(6).map { String($0.id) }.joined(separator: ",")
+        let librarySongIDs = manager.topSongs.prefix(6).map { String($0.id) }.joined(separator: ",")
+        return [
+            String(recap.monthStart.timeIntervalSinceReferenceDate),
+            String(recap.generatedAt.timeIntervalSinceReferenceDate),
+            recapSongIDs,
+            librarySongIDs,
+            libraryAlbumIDs
+        ].joined(separator: "|")
+    }
+
+    private var recapBackgroundPalette: RecapBackgroundPalette {
+        var seed = UInt64(recap.monthStart.timeIntervalSinceReferenceDate.rounded())
+        seed = seed &* 1_099_511_628_211 &+ UInt64(max(recap.totalPlayDelta, 0))
+        seed = seed &* 1_099_511_628_211 &+ UInt64(recap.playedSongCount)
+        for id in recap.topSongs.prefix(3).map(\.id) + recap.topNewSongs.prefix(3).map(\.id) {
+            seed = seed &* 1_099_511_628_211 &+ id
+        }
+        return RecapBackgroundPalette(seed: seed)
+    }
+
+    private func updateCachedArtworkHighlightsIfNeeded() {
+        let signature = artworkHighlightsSignature
+        guard signature != cachedArtworkHighlightsSignature else { return }
+        cachedArtworkHighlights = artworkHighlights
+        cachedArtworkHighlightsSignature = signature
+    }
+
+    private func scheduleInitialCloudSyncIfNeeded() {
+        guard !hasScheduledInitialCloudSync else { return }
+        hasScheduledInitialCloudSync = true
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            manager.syncRecapFromCloud()
+        }
     }
 
     private func resolvedArtwork(for song: MonthlyRecap.RankedSong) -> MPMediaItemArtwork? {
         song.artwork
-            ?? allLibrarySongs.first(where: { $0.id == song.id })?.artwork
-            ?? allLibrarySongs.first(where: {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            })?.artwork
+            ?? manager.song(withPersistentID: song.id)?.artwork
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)?.artwork
             ?? albumArtwork(title: song.albumTitle, artist: song.artist)
     }
 
     private func resolvedArtwork(for song: MonthlyRecap.MovementSong) -> MPMediaItemArtwork? {
         song.artwork
-            ?? allLibrarySongs.first(where: { $0.id == song.id })?.artwork
-            ?? allLibrarySongs.first(where: {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            })?.artwork
+            ?? manager.song(withPersistentID: song.id)?.artwork
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)?.artwork
     }
 
     private func resolvedArtwork(for group: MonthlyRecap.RankedGroup, systemImage: String) -> MPMediaItemArtwork? {
@@ -221,19 +255,13 @@ struct MonthlyRecapView: View {
     }
 
     private func resolvedTopSong(for song: MonthlyRecap.RankedSong) -> TopSong? {
-        allLibrarySongs.first { $0.id == song.id }
-            ?? allLibrarySongs.first {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 
     private func resolvedTopSong(for song: MonthlyRecap.MovementSong) -> TopSong? {
-        allLibrarySongs.first { $0.id == song.id }
-            ?? allLibrarySongs.first {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 
     private func resolvedTopAlbum(for group: MonthlyRecap.RankedGroup) -> TopAlbum? {
@@ -242,10 +270,7 @@ struct MonthlyRecapView: View {
             return album
         }
 
-        return allLibraryAlbums.first {
-            $0.title.normalizedRecapArtworkKey == group.title.normalizedRecapArtworkKey &&
-                $0.artist.normalizedRecapArtworkKey == group.subtitle.normalizedRecapArtworkKey
-        }
+        return manager.album(matchingTitle: group.title, artist: group.subtitle)
     }
 
     private func resolvedTopArtist(for group: MonthlyRecap.RankedGroup) -> TopArtist? {
@@ -254,41 +279,15 @@ struct MonthlyRecapView: View {
             return artist
         }
 
-        return allLibraryArtists.first {
-            $0.name.normalizedRecapArtworkKey == group.title.normalizedRecapArtworkKey
-        }
-    }
-
-    private var allLibrarySongs: [TopSong] {
-        manager.librarySongs + manager.topSongs
-    }
-
-    private var allLibraryAlbums: [TopAlbum] {
-        manager.libraryAlbums + manager.topAlbums
-    }
-
-    private var allLibraryArtists: [TopArtist] {
-        manager.libraryArtists + manager.topArtists
+        return manager.artist(matchingName: group.title)
     }
 
     private func albumArtwork(title: String, artist: String) -> MPMediaItemArtwork? {
-        allLibraryAlbums.first(where: {
-            $0.title.normalizedRecapArtworkKey == title.normalizedRecapArtworkKey &&
-                $0.artist.normalizedRecapArtworkKey == artist.normalizedRecapArtworkKey
-        })?.artwork
-            ?? allLibrarySongs.first(where: {
-                $0.albumTitle.normalizedRecapArtworkKey == title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == artist.normalizedRecapArtworkKey
-            })?.artwork
+        manager.artworkForAlbum(title: title, artist: artist)
     }
 
     private func artistArtwork(name: String) -> MPMediaItemArtwork? {
-        allLibraryArtists.first(where: {
-            $0.name.normalizedRecapArtworkKey == name.normalizedRecapArtworkKey
-        })?.artwork
-            ?? allLibrarySongs.first(where: {
-                $0.artist.normalizedRecapArtworkKey == name.normalizedRecapArtworkKey
-            })?.artwork
+        manager.artworkForArtist(name: name)
     }
 
     private func appendUniqueArtwork(
@@ -297,22 +296,17 @@ struct MonthlyRecapView: View {
         seen: inout Set<String>,
         result: inout [MPMediaItemArtwork]
     ) {
-        guard result.count < 4,
+        guard result.count < 6,
               let artwork,
               !key.isEmpty else {
             return
         }
 
-        let visualKey = artwork.recapVisualDedupKey
-        guard !seen.contains(key),
-              visualKey.map({ !seen.contains($0) }) ?? true else {
+        guard !seen.contains(key) else {
             return
         }
 
         seen.insert(key)
-        if let visualKey {
-            seen.insert(visualKey)
-        }
         result.append(artwork)
     }
 
@@ -329,7 +323,7 @@ struct MonthlyRecapView: View {
                     RecapHeroPoster(
                         monthTitle: monthTitle,
                         recap: recap,
-                        artworks: artworkHighlights,
+                        artworks: cachedArtworkHighlights,
                         leadingSong: recap.topSongs.first,
                         leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:)),
                         selectedYear: selectedRecapYear,
@@ -341,36 +335,7 @@ struct MonthlyRecapView: View {
                     )
 
                     if recap.hasActivity {
-                        if isShowingYearAggregate {
-                            if !recap.topSongs.isEmpty {
-                                topSongsSection
-                            }
-                            if !recap.topAlbums.isEmpty {
-                                topAlbumsSection
-                            }
-                            if !recap.topArtists.isEmpty {
-                                topArtistsSection
-                            }
-                            if hasYearlyMonthlyHighlights {
-                                yearlyMonthlyBreakdownSection
-                            }
-                        } else {
-                            if !recap.biggestGainers.isEmpty {
-                                biggestGainersSection
-                            }
-                            if !recap.topNewSongs.isEmpty {
-                                topNewSongsSection
-                            }
-                            if !recap.topSongs.isEmpty {
-                                topSongsSection
-                            }
-                            if !recap.topAlbums.isEmpty {
-                                topAlbumsSection
-                            }
-                            if !recap.topArtists.isEmpty {
-                                topArtistsSection
-                            }
-                        }
+                        recapSections
                     } else {
                         baselineSection
                     }
@@ -382,6 +347,8 @@ struct MonthlyRecapView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
                 .padding(.bottom, 36)
+                .frame(maxWidth: 1120, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .top)
                 .offset(x: monthDragDisplayOffset)
                 .id(selectedMonthStartOrCurrent)
                 .transition(monthContentTransition)
@@ -392,7 +359,7 @@ struct MonthlyRecapView: View {
             manager.syncRecapFromCloud()
             manager.refreshForRecapSequence(reason: .manualRefresh)
         }
-        .background(RecapBackground(artwork: heroArtwork))
+        .background(RecapBackground(palette: recapBackgroundPalette))
         .overlay(alignment: .topTrailing) {
             floatingYearPicker
                 .padding(.top, 8)
@@ -401,9 +368,12 @@ struct MonthlyRecapView: View {
         .toolbar(.hidden, for: .navigationBar)
         .animation(.smooth(duration: 0.26), value: selectedMonthStartOrCurrent)
         .simultaneousGesture(monthSwipeGesture)
+        .task(id: artworkHighlightsSignature) {
+            updateCachedArtworkHighlightsIfNeeded()
+        }
         .onAppear {
-            manager.syncRecapFromCloud()
             syncSelectedMonthIfNeeded()
+            scheduleInitialCloudSyncIfNeeded()
         }
         .onChange(of: manager.availableRecapMonths) { _, _ in
             syncSelectedMonthIfNeeded()
@@ -412,6 +382,54 @@ struct MonthlyRecapView: View {
             syncSelectedMonthIfNeeded()
         }
     }
+
+    @ViewBuilder
+    private var recapSections: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
+                rankingSections
+            }
+
+            if isShowingYearAggregate, hasYearlyMonthlyHighlights {
+                yearlyMonthlyBreakdownSection
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var rankingSections: some View {
+        if isShowingYearAggregate {
+            if !recap.topSongs.isEmpty {
+                topSongsSection
+            }
+            if !recap.topAlbums.isEmpty {
+                topAlbumsSection
+            }
+            if !recap.topArtists.isEmpty {
+                topArtistsSection
+            }
+        } else {
+            if !recap.biggestGainers.isEmpty {
+                biggestGainersSection
+            }
+            if !recap.topNewSongs.isEmpty {
+                topNewSongsSection
+            }
+            if !recap.topSongs.isEmpty {
+                topSongsSection
+            }
+            if !recap.topAlbums.isEmpty {
+                topAlbumsSection
+            }
+            if !recap.topArtists.isEmpty {
+                topArtistsSection
+            }
+        }
+    }
+
+    private static let rankingColumns: [GridItem] = [
+        GridItem(.adaptive(minimum: 320, maximum: 540), spacing: 18, alignment: .top)
+    ]
 
     @ViewBuilder
     private var floatingYearPicker: some View {
@@ -897,6 +915,7 @@ struct MonthlyRecapView: View {
         formatter.dateFormat = "LLLL"
         return formatter
     }()
+
 }
 
 private struct RecapHeroPoster: View {
@@ -914,33 +933,134 @@ private struct RecapHeroPoster: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            RecapArtworkStack(artworks: artworks)
-                .frame(maxWidth: .infinity)
+            RecapArtworkCollage(artworks: artworks)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text(monthTitle)
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.72)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                RecapPeriodStrip(
-                    selectedYear: selectedYear,
-                    months: months,
-                    isYearSelected: isYearSelected,
-                    selectedMonthStart: selectedMonthStart,
-                    onSelectYear: onSelectYear,
-                    onSelectMonth: onSelectMonth
-                )
-
-                RecapSummaryBar(recap: recap)
-            }
+            titleBlock
+            RecapSummaryBar(recap: recap)
 
             if let leadingSong {
                 RecapHeroSpotlight(song: leadingSong, artwork: leadingSongArtwork)
             }
         }
         .padding(.top, 4)
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(monthTitle)
+                .font(.system(size: 42, weight: .bold, design: .rounded))
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            RecapPeriodStrip(
+                selectedYear: selectedYear,
+                months: months,
+                isYearSelected: isYearSelected,
+                selectedMonthStart: selectedMonthStart,
+                onSelectYear: onSelectYear,
+                onSelectMonth: onSelectMonth
+            )
+        }
+    }
+}
+
+private struct RecapArtworkCollage: View {
+    let artworks: [MPMediaItemArtwork]
+
+    var body: some View {
+        if artworks.isEmpty {
+            emptyArtwork
+        } else {
+            ZStack {
+                ForEach(Array(sideArtworks.enumerated()), id: \.offset) { index, artwork in
+                    ArtworkView(
+                        artwork: artwork,
+                        size: sideArtworkSize(for: index),
+                        cornerRadius: sideArtworkCornerRadius(for: index)
+                    )
+                    .rotationEffect(.degrees(sideArtworkRotation(for: index)))
+                    .offset(sideArtworkOffset(for: index))
+                    .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 8)
+                    .zIndex(Double(index))
+                }
+
+                if let mainArtwork = artworks.first {
+                    ArtworkView(
+                        artwork: mainArtwork,
+                        size: CGSize(width: 196, height: 196),
+                        cornerRadius: 28
+                    )
+                    .rotationEffect(.degrees(-1.5))
+                    .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 16)
+                    .zIndex(20)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 282)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Recap album artwork collage")
+        }
+    }
+
+    private var sideArtworks: [MPMediaItemArtwork] {
+        Array(artworks.dropFirst().prefix(5))
+    }
+
+    private func sideArtworkSize(for index: Int) -> CGSize {
+        switch index {
+        case 0, 1:
+            return CGSize(width: 132, height: 132)
+        case 2, 3:
+            return CGSize(width: 112, height: 112)
+        default:
+            return CGSize(width: 96, height: 96)
+        }
+    }
+
+    private func sideArtworkCornerRadius(for index: Int) -> CGFloat {
+        index < 2 ? 18 : 16
+    }
+
+    private func sideArtworkRotation(for index: Int) -> Double {
+        switch index {
+        case 0: return -12
+        case 1: return 11
+        case 2: return 7
+        case 3: return -8
+        default: return 4
+        }
+    }
+
+    private func sideArtworkOffset(for index: Int) -> CGSize {
+        switch index {
+        case 0:
+            return CGSize(width: -146, height: 52)
+        case 1:
+            return CGSize(width: 146, height: 58)
+        case 2:
+            return CGSize(width: -258, height: 8)
+        case 3:
+            return CGSize(width: 258, height: 14)
+        default:
+            return CGSize(width: 0, height: 120)
+        }
+    }
+
+    private var emptyArtwork: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.thinMaterial)
+                .frame(width: 172, height: 172)
+                .overlay {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 42, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 242)
     }
 }
 
@@ -1002,153 +1122,6 @@ private struct RecapPeriodStrip: View {
         formatter.dateFormat = "LLL"
         return formatter
     }()
-}
-
-private struct RecapArtworkStack: View {
-    let artworks: [MPMediaItemArtwork]
-    @State private var isAnimated = false
-    @State private var topArtworkID = 0
-
-    var body: some View {
-        ZStack {
-            if let mainArtwork = artworks.first {
-                ZStack {
-                    ForEach(Array(sideArtworks.enumerated()), id: \.element.id) { index, sideArtwork in
-                        Button {
-                            bringArtworkToTop(sideArtwork.id)
-                        } label: {
-                            ArtworkView(
-                                artwork: sideArtwork.artwork,
-                                size: CGSize(width: sideArtworkSize(for: index), height: sideArtworkSize(for: index)),
-                                cornerRadius: 18
-                            )
-                        }
-                        .buttonStyle(RecapArtworkButtonStyle())
-                        .shadow(color: .black.opacity(0.17), radius: 13, x: 0, y: 9)
-                        .rotationEffect(.degrees(sideArtworkRotation(for: index) + (isAnimated ? sideAnimationRotation(for: index) : 0)))
-                        .offset(sideArtworkOffset(for: index, animated: isAnimated))
-                        .zIndex(zIndex(for: sideArtwork.id, defaultZIndex: Double(index)))
-                        .accessibilityLabel("Bring album cover forward")
-                    }
-
-                    Button {
-                        bringArtworkToTop(0)
-                    } label: {
-                        ArtworkView(
-                            artwork: mainArtwork,
-                            size: CGSize(width: 212, height: 212),
-                            cornerRadius: 28
-                        )
-                    }
-                    .buttonStyle(RecapArtworkButtonStyle())
-                    .shadow(color: .black.opacity(0.26), radius: 26, x: 0, y: 18)
-                    .rotationEffect(.degrees(-1.5 + (isAnimated ? 0.45 : 0)))
-                    .scaleEffect(isAnimated ? 1.015 : 1)
-                    .zIndex(zIndex(for: 0, defaultZIndex: 20))
-                    .accessibilityLabel("Bring main album cover forward")
-                }
-            } else {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.thinMaterial)
-                    .frame(width: 172, height: 172)
-                    .overlay {
-                        Image(systemName: "music.note")
-                            .font(.system(size: 42, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-            }
-        }
-        .frame(height: 314)
-        .task {
-            guard !isAnimated else { return }
-            withAnimation(.easeInOut(duration: 4.6).repeatForever(autoreverses: true)) {
-                isAnimated = true
-            }
-        }
-        .onChange(of: artworks.count) { _, newCount in
-            guard newCount > 0 else {
-                topArtworkID = 0
-                return
-            }
-            if !artworks.indices.contains(topArtworkID) {
-                topArtworkID = 0
-            }
-        }
-    }
-
-    private struct SideArtwork: Identifiable {
-        let id: Int
-        let artwork: MPMediaItemArtwork
-    }
-
-    private struct RecapArtworkButtonStyle: ButtonStyle {
-        func makeBody(configuration: Configuration) -> some View {
-            configuration.label
-        }
-    }
-
-    private var sideArtworks: [SideArtwork] {
-        artworks.enumerated()
-            .dropFirst()
-            .prefix(3)
-            .map { SideArtwork(id: $0.offset, artwork: $0.element) }
-    }
-
-    private func bringArtworkToTop(_ id: Int) {
-        guard artworks.indices.contains(id) else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            topArtworkID = id
-        }
-    }
-
-    private func zIndex(for id: Int, defaultZIndex: Double) -> Double {
-        id == topArtworkID ? 40 : defaultZIndex
-    }
-
-    private func sideArtworkRotation(for index: Int) -> Double {
-        switch index {
-        case 0: return -12
-        case 1: return 11
-        default: return 4
-        }
-    }
-
-    private func sideAnimationRotation(for index: Int) -> Double {
-        switch index {
-        case 0: return -1.4
-        case 1: return 1.2
-        default: return -0.8
-        }
-    }
-
-    private func sideArtworkOffset(for index: Int, animated: Bool) -> CGSize {
-        let float = animated ? sideFloat(for: index) : .zero
-        switch index {
-        case 0:
-            return CGSize(width: -126 + float.width, height: 72 + float.height)
-        case 1:
-            return CGSize(width: 126 + float.width, height: 76 + float.height)
-        default:
-            return CGSize(width: float.width, height: 118 + float.height)
-        }
-    }
-
-    private func sideFloat(for index: Int) -> CGSize {
-        switch index {
-        case 0:
-            return CGSize(width: -5, height: 5)
-        case 1:
-            return CGSize(width: 5, height: -4)
-        default:
-            return CGSize(width: 0, height: 6)
-        }
-    }
-
-    private func sideArtworkSize(for index: Int) -> CGFloat {
-        index == 2 ? 96 : 112
-    }
 }
 
 private struct RecapHeroSpotlight: View {
@@ -1313,12 +1286,8 @@ private struct RecapFullSongsView: View {
     }
 
     private func resolvedTopSong(for song: MonthlyRecap.RankedSong) -> TopSong? {
-        let allSongs = manager.librarySongs + manager.topSongs
-        return allSongs.first { $0.id == song.id }
-            ?? allSongs.first {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 }
 
@@ -1362,11 +1331,7 @@ private struct RecapFullGroupsView: View {
             return album
         }
 
-        let allAlbums = manager.libraryAlbums + manager.topAlbums
-        return allAlbums.first {
-            $0.title.normalizedRecapArtworkKey == group.title.normalizedRecapArtworkKey &&
-                $0.artist.normalizedRecapArtworkKey == group.subtitle.normalizedRecapArtworkKey
-        }
+        return manager.album(matchingTitle: group.title, artist: group.subtitle)
     }
 
     private func resolvedTopArtist(for group: MonthlyRecap.RankedGroup) -> TopArtist? {
@@ -1375,10 +1340,7 @@ private struct RecapFullGroupsView: View {
             return artist
         }
 
-        let allArtists = manager.libraryArtists + manager.topArtists
-        return allArtists.first {
-            $0.name.normalizedRecapArtworkKey == group.title.normalizedRecapArtworkKey
-        }
+        return manager.artist(matchingName: group.title)
     }
 }
 
@@ -1409,12 +1371,8 @@ private struct RecapFullMovementView: View {
     }
 
     private func resolvedTopSong(for song: MonthlyRecap.MovementSong) -> TopSong? {
-        let allSongs = manager.librarySongs + manager.topSongs
-        return allSongs.first { $0.id == song.id }
-            ?? allSongs.first {
-                $0.title.normalizedRecapArtworkKey == song.title.normalizedRecapArtworkKey &&
-                    $0.artist.normalizedRecapArtworkKey == song.artist.normalizedRecapArtworkKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 }
 
@@ -1496,29 +1454,6 @@ private struct RecapStatTile: View {
         .frame(minHeight: 86)
         .padding(10)
         .recapTileSurface(cornerRadius: 16, tintOpacity: 0.08)
-    }
-}
-
-private struct RecapMiniInsight: View {
-    let title: String
-    let value: String
-    let systemImage: String
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.subheadline)
-                .foregroundStyle(Color.accentColor)
-            Text(value)
-                .font(.headline.weight(.bold))
-                .monospacedDigit()
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.06)
     }
 }
 
@@ -1775,7 +1710,7 @@ private struct RecapTileSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .glassEffect(.clear.tint(Color.accentColor.opacity(tintOpacity * 0.45)), in: .rect(cornerRadius: cornerRadius))
+                .glassEffect(.regular.tint(Color.accentColor.opacity(tintOpacity)), in: .rect(cornerRadius: cornerRadius))
         } else {
             content
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -1793,126 +1728,51 @@ private extension View {
     }
 }
 
+private struct RecapBackgroundPalette {
+    let primary: Color
+    let secondary: Color
+    let tertiary: Color
+
+    init(seed: UInt64) {
+        let hue = Double(seed % 360) / 360.0
+        primary = Color(hue: hue, saturation: 0.58, brightness: 0.94)
+        secondary = Color(hue: (hue + 0.13).truncatingRemainder(dividingBy: 1), saturation: 0.52, brightness: 0.96)
+        tertiary = Color(hue: (hue + 0.58).truncatingRemainder(dividingBy: 1), saturation: 0.42, brightness: 0.92)
+    }
+}
+
 private struct RecapBackground: View {
-    let artwork: MPMediaItemArtwork?
+    let palette: RecapBackgroundPalette
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
-            if let gradientColors {
-                LinearGradient(
-                    colors: gradientColors,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            } else {
-                Color(.systemGroupedBackground)
-            }
-
+            LinearGradient(
+                colors: [
+                    palette.primary.opacity(primaryOpacity),
+                    palette.secondary.opacity(secondaryOpacity),
+                    palette.tertiary.opacity(tertiaryOpacity),
+                    Color(.systemGroupedBackground)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
             Color(.systemBackground)
-                .opacity(0.18)
+                .opacity(colorScheme == .dark ? 0.18 : 0.30)
         }
         .ignoresSafeArea()
     }
 
-    private var gradientColors: [Color]? {
-        guard let components = artwork?.recapAverageColorComponents() else {
-            return nil
-        }
-
-        return [
-            Color(
-                red: darken(components.0, amount: 0.45),
-                green: darken(components.1, amount: 0.45),
-                blue: darken(components.2, amount: 0.45)
-            ),
-            Color(
-                red: boost(components.0, amount: 0.18),
-                green: boost(components.1, amount: 0.18),
-                blue: boost(components.2, amount: 0.18)
-            ),
-            Color(.systemGroupedBackground)
-        ]
+    private var primaryOpacity: Double {
+        colorScheme == .dark ? 0.42 : 0.38
     }
 
-    private func darken(_ component: Double, amount: Double) -> Double {
-        max(component * (1 - amount), 0)
+    private var secondaryOpacity: Double {
+        colorScheme == .dark ? 0.34 : 0.30
     }
 
-    private func boost(_ component: Double, amount: Double) -> Double {
-        min(component + (1 - component) * amount, 1)
-    }
-}
-
-private enum RecapColorCalculator {
-    static let context = CIContext(options: [.workingColorSpace: NSNull()])
-    static let cache = NSCache<NSString, RecapArtworkColorBox>()
-}
-
-private final class RecapArtworkColorBox {
-    let components: (Double, Double, Double)
-
-    init(_ components: (Double, Double, Double)) {
-        self.components = components
-    }
-}
-
-private extension MPMediaItemArtwork {
-    var recapVisualDedupKey: String? {
-        guard let components = recapAverageColorComponents(maxDimension: 36) else {
-            return nil
-        }
-
-        let red = Int((components.0 * 24).rounded())
-        let green = Int((components.1 * 24).rounded())
-        let blue = Int((components.2 * 24).rounded())
-        return "visual-\(red)-\(green)-\(blue)"
-    }
-
-    func recapAverageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
-        let pixelDimension = Int((maxDimension * UIScreen.main.scale).rounded(.up))
-        let cacheKey = "\(ObjectIdentifier(self))-\(pixelDimension)" as NSString
-
-        if let cached = RecapColorCalculator.cache.object(forKey: cacheKey) {
-            return cached.components
-        }
-
-        let targetSize = CGSize(width: maxDimension, height: maxDimension)
-        guard let image = image(at: targetSize),
-              let inputImage = CIImage(image: image) else {
-            return nil
-        }
-
-        let extent = inputImage.extent
-        guard extent.width > 0, extent.height > 0 else {
-            return nil
-        }
-
-        let filter = CIFilter.areaAverage()
-        filter.inputImage = inputImage
-        filter.extent = extent
-
-        guard let outputImage = filter.outputImage else {
-            return nil
-        }
-
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        RecapColorCalculator.context.render(
-            outputImage,
-            toBitmap: &bitmap,
-            rowBytes: 4,
-            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-            format: .RGBA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
-
-        let components = (
-            Double(bitmap[0]) / 255.0,
-            Double(bitmap[1]) / 255.0,
-            Double(bitmap[2]) / 255.0
-        )
-
-        RecapColorCalculator.cache.setObject(RecapArtworkColorBox(components), forKey: cacheKey)
-        return components
+    private var tertiaryOpacity: Double {
+        colorScheme == .dark ? 0.30 : 0.22
     }
 }
 
