@@ -5,11 +5,47 @@ struct iPadLibraryView: View {
         case dashboard
         case recap
         case search
+
+        static var screenshotInitialTab: Self {
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
+               arguments.indices.contains(index + 1) {
+                switch arguments[index + 1].lowercased() {
+                case "recap":
+                    return .recap
+                case "search":
+                    return .search
+                default:
+                    return .dashboard
+                }
+            }
+            #endif
+
+            return .dashboard
+        }
+
+        static var screenshotPresentsNowPlaying: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotNowPlayingDetail")
+            #else
+            false
+            #endif
+        }
+
+        static var isScreenshotModeEnabled: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
+                ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
+            #else
+            false
+            #endif
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.colorScheme) private var colorScheme
-    @State private var selectedTab: LibraryTab = .dashboard
+    @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
 
     var body: some View {
@@ -56,9 +92,26 @@ struct iPadLibraryView: View {
             }
             .environment(\.colorScheme, colorScheme)
         }
-        .sheet(item: $presentedNowPlayingSong) { song in
+        .fullScreenCover(item: $presentedNowPlayingSong) { song in
             NavigationStack {
-                SongInfoView(song: song, manager: manager)
+                SongInfoView(song: song, manager: manager, reservesBottomAccessorySpace: false)
+                    .toolbar {
+                        if !LibraryTab.isScreenshotModeEnabled {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") {
+                                    presentedNowPlayingSong = nil
+                                }
+                            }
+                        }
+                    }
+                    .toolbar(LibraryTab.isScreenshotModeEnabled ? .hidden : .visible, for: .navigationBar)
+            }
+        }
+        .task {
+            guard LibraryTab.screenshotPresentsNowPlaying else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            if let song = manager.nowPlayingState?.song {
+                presentedNowPlayingSong = song
             }
         }
         .onChange(of: manager.nowPlayingState) { _, state in
@@ -146,11 +199,16 @@ private struct iPadAllTimeDashboardView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
-            .padding(.bottom, 36)
+            .padding(.bottom, 120)
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .bottom) {
+            Color.clear
+                .frame(height: 84)
+                .allowsHitTesting(false)
+        }
     }
 
     private var showsEmptyState: Bool {
@@ -177,7 +235,7 @@ private struct iPadAllTimeDashboardView: View {
             title: "Top Songs",
             systemImage: "music.note.list",
             totalCount: manager.topSongs.count,
-            visibleCount: 6
+            visibleCount: 12
         ) {
             TopSongsView(
                 songs: manager.topSongs,
@@ -187,7 +245,7 @@ private struct iPadAllTimeDashboardView: View {
             )
             .navigationTitle("Top Songs")
         } content: {
-            ForEach(Array(manager.topSongs.prefix(6).enumerated()), id: \.element.id) { index, song in
+            ForEach(Array(manager.topSongs.prefix(12).enumerated()), id: \.element.id) { index, song in
                 NavigationLink {
                     SongInfoView(song: song, manager: manager)
                 } label: {
@@ -203,7 +261,7 @@ private struct iPadAllTimeDashboardView: View {
             title: "Top Albums",
             systemImage: "rectangle.stack.fill",
             totalCount: manager.topAlbums.count,
-            visibleCount: 6
+            visibleCount: 12
         ) {
             TopAlbumsView(
                 albums: manager.topAlbums,
@@ -213,7 +271,7 @@ private struct iPadAllTimeDashboardView: View {
             )
             .navigationTitle("Top Albums")
         } content: {
-            ForEach(Array(manager.topAlbums.prefix(6).enumerated()), id: \.element.id) { index, album in
+            ForEach(Array(manager.topAlbums.prefix(12).enumerated()), id: \.element.id) { index, album in
                 NavigationLink {
                     AlbumInfoView(album: album, manager: manager)
                 } label: {
@@ -229,7 +287,7 @@ private struct iPadAllTimeDashboardView: View {
             title: "Top Artists",
             systemImage: "person.2.fill",
             totalCount: manager.topArtists.count,
-            visibleCount: 6
+            visibleCount: 12
         ) {
             TopArtistsView(
                 artists: manager.topArtists,
@@ -239,7 +297,7 @@ private struct iPadAllTimeDashboardView: View {
             )
             .navigationTitle("Top Artists")
         } content: {
-            ForEach(Array(manager.topArtists.prefix(6).enumerated()), id: \.element.id) { index, artist in
+            ForEach(Array(manager.topArtists.prefix(12).enumerated()), id: \.element.id) { index, artist in
                 NavigationLink {
                     ArtistInfoView(artist: artist, manager: manager)
                 } label: {

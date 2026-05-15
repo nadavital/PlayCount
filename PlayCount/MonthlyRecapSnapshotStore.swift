@@ -144,19 +144,22 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
     let counterSignature: String
     let encodedSnapshot: Data
     let encodedRecaps: Data?
+    let encodedYearlyRecaps: Data?
 
     init(
         id: String,
         capturedAt: Date,
         counterSignature: String,
         encodedSnapshot: Data,
-        encodedRecaps: Data? = nil
+        encodedRecaps: Data? = nil,
+        encodedYearlyRecaps: Data? = nil
     ) {
         self.id = id
         self.capturedAt = capturedAt
         self.counterSignature = counterSignature
         self.encodedSnapshot = encodedSnapshot
         self.encodedRecaps = encodedRecaps
+        self.encodedYearlyRecaps = encodedYearlyRecaps
     }
 }
 
@@ -165,6 +168,212 @@ struct YearlyRecapMonthlyHighlight: Identifiable, Equatable {
     let recap: MonthlyRecap
 
     var id: Date { month }
+}
+
+extension MonthlyRecap {
+    static func yearly(
+        for year: Int,
+        months: [Date],
+        monthlyRecaps: [MonthlyRecap],
+        fallbackMonth: Date,
+        fallbackRecap: MonthlyRecap
+    ) -> MonthlyRecap {
+        let calendar = Calendar.current
+        guard let firstMonth = months.first else {
+            return fallbackRecap
+        }
+
+        let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? fallbackMonth
+
+        var songs: [UInt64: RankedSongAggregate] = [:]
+        var albums: [String: RankedGroupAggregate] = [:]
+        var artists: [String: RankedGroupAggregate] = [:]
+        var movement: [UInt64: MovementSongAggregate] = [:]
+        var newSongIDs: [UInt64] = []
+
+        for recap in monthlyRecaps {
+            var mergedSongIDsForMonth: Set<UInt64> = []
+
+            for song in recap.topSongs {
+                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+                mergedSongIDsForMonth.insert(song.id)
+            }
+
+            for song in recap.topNewSongs {
+                if !mergedSongIDsForMonth.contains(song.id) {
+                    songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
+                    mergedSongIDsForMonth.insert(song.id)
+                }
+                if !newSongIDs.contains(song.id) {
+                    newSongIDs.append(song.id)
+                }
+            }
+
+            for group in recap.topAlbums {
+                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for group in recap.topArtists {
+                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+            }
+            for song in recap.biggestGainers {
+                movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
+            }
+        }
+
+        let rankedSongs = songs.values
+            .map(\.rankedSong)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedAlbums = albums.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let rankedArtists = artists.values
+            .map(\.rankedGroup)
+            .sorted { $0.playDelta > $1.playDelta }
+
+        let biggestGainers = movement.values
+            .map(\.movementSong)
+            .sorted { $0.rankChange > $1.rankChange }
+
+        let newSongs = newSongIDs.compactMap { id in
+            songs[id]?.rankedSong
+        }
+        .sorted { $0.playDelta > $1.playDelta }
+
+        return MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: monthlyRecaps.map(\.generatedAt).max() ?? Date(),
+            lastCaptureReason: monthlyRecaps.last?.lastCaptureReason,
+            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
+            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
+            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
+            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
+            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
+            playedSongCount: songs.count,
+            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
+            topSongs: rankedSongs,
+            topArtists: rankedArtists,
+            topAlbums: rankedAlbums,
+            biggestGainers: biggestGainers,
+            topNewSongs: newSongs
+        )
+    }
+
+    private struct RankedSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        let albumTitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var skipDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(song: MonthlyRecap.RankedSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            albumTitle = song.albumTitle
+            artwork = song.artwork
+            playDelta = 0
+            skipDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ song: MonthlyRecap.RankedSong) {
+            playDelta += song.playDelta
+            skipDelta += song.skipDelta
+            listeningDuration += song.listeningDuration
+        }
+
+        var rankedSong: MonthlyRecap.RankedSong {
+            MonthlyRecap.RankedSong(
+                id: id,
+                title: title,
+                artist: artist,
+                albumTitle: albumTitle,
+                playDelta: playDelta,
+                skipDelta: skipDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct RankedGroupAggregate {
+        let id: String
+        let title: String
+        let subtitle: String
+        let artwork: MPMediaItemArtwork?
+        var playDelta: Int
+        var listeningDuration: TimeInterval
+
+        init(group: MonthlyRecap.RankedGroup) {
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            artwork = group.artwork
+            playDelta = 0
+            listeningDuration = 0
+        }
+
+        mutating func merge(_ group: MonthlyRecap.RankedGroup) {
+            playDelta += group.playDelta
+            listeningDuration += group.listeningDuration
+        }
+
+        var rankedGroup: MonthlyRecap.RankedGroup {
+            MonthlyRecap.RankedGroup(
+                id: id,
+                title: title,
+                subtitle: subtitle,
+                playDelta: playDelta,
+                listeningDuration: listeningDuration,
+                artwork: artwork
+            )
+        }
+    }
+
+    private struct MovementSongAggregate {
+        let id: UInt64
+        let title: String
+        let artist: String
+        var playDelta: Int
+        var rankChange: Int
+        var currentRank: Int
+        var previousRank: Int?
+        let artwork: MPMediaItemArtwork?
+
+        init(song: MonthlyRecap.MovementSong) {
+            id = song.id
+            title = song.title
+            artist = song.artist
+            playDelta = 0
+            rankChange = 0
+            currentRank = song.currentRank
+            previousRank = song.previousRank
+            artwork = song.artwork
+        }
+
+        mutating func merge(_ song: MonthlyRecap.MovementSong) {
+            playDelta += song.playDelta
+            rankChange = max(rankChange, song.rankChange)
+        }
+
+        var movementSong: MonthlyRecap.MovementSong {
+            MonthlyRecap.MovementSong(
+                id: id,
+                title: title,
+                artist: artist,
+                playDelta: playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: artwork
+            )
+        }
+    }
 }
 
 final class MonthlyRecapSnapshotStore {
@@ -441,25 +650,50 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    fileprivate struct SyncedYearlyRecap: Codable, Equatable, Identifiable {
+        let year: Int
+        let recap: SyncedMonthlyRecap
+
+        var id: Int { year }
+
+        init(year: Int, recap: MonthlyRecap) {
+            self.year = year
+            self.recap = SyncedMonthlyRecap(recap: recap)
+        }
+
+        func monthlyRecap(artworkLookup: ArtworkLookup) -> MonthlyRecap {
+            recap.monthlyRecap(artworkLookup: artworkLookup)
+        }
+    }
+
+    private struct SyncedRecapSummaries: Codable, Equatable {
+        let monthlyRecaps: [SyncedMonthlyRecap]
+        let yearlyRecaps: [SyncedYearlyRecap]
+    }
+
     private struct StoredSnapshots: Codable {
         var schemaVersion: Int
         var snapshots: [LibrarySnapshot]
         var syncedRecaps: [SyncedMonthlyRecap]
+        var syncedYearlyRecaps: [SyncedYearlyRecap]
 
         init(
             schemaVersion: Int,
             snapshots: [LibrarySnapshot],
-            syncedRecaps: [SyncedMonthlyRecap] = []
+            syncedRecaps: [SyncedMonthlyRecap] = [],
+            syncedYearlyRecaps: [SyncedYearlyRecap] = []
         ) {
             self.schemaVersion = schemaVersion
             self.snapshots = snapshots
             self.syncedRecaps = syncedRecaps
+            self.syncedYearlyRecaps = syncedYearlyRecaps
         }
 
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
             case snapshots
             case syncedRecaps
+            case syncedYearlyRecaps
         }
 
         init(from decoder: Decoder) throws {
@@ -467,6 +701,7 @@ final class MonthlyRecapSnapshotStore {
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
             snapshots = try container.decode([LibrarySnapshot].self, forKey: .snapshots)
             syncedRecaps = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .syncedRecaps) ?? []
+            syncedYearlyRecaps = try container.decodeIfPresent([SyncedYearlyRecap].self, forKey: .syncedYearlyRecaps) ?? []
         }
     }
 
@@ -687,6 +922,25 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    func syncedYearlyRecap(
+        for year: Int,
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = []
+    ) -> MonthlyRecap? {
+        accessQueue.sync {
+            let stored = loadLocked()
+            let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs, sourceAlbums: sourceAlbums, sourceArtists: sourceArtists)
+            return stored.syncedYearlyRecaps
+                .filter { $0.year == year }
+                .sorted {
+                    Self.isHigherPrioritySyncedRecap($0.recap, than: $1.recap)
+                }
+                .first?
+                .monthlyRecap(artworkLookup: artworkLookup)
+        }
+    }
+
     #if DEBUG
     func debugRecordLegacySnapshot(
         songs: [TopSong],
@@ -757,6 +1011,7 @@ final class MonthlyRecapSnapshotStore {
                 saveLocked(stored)
             }
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
+            let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
             let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
                 for: stored.snapshots,
                 currentDeviceIdentifier: deviceIdentifier
@@ -764,7 +1019,8 @@ final class MonthlyRecapSnapshotStore {
             return stored.snapshots.sortedForSyncPayloads().compactMap { snapshot in
                 snapshot.syncPayload(
                     prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [],
-                    encodedRecaps: encodedRecaps
+                    encodedRecaps: encodedRecaps,
+                    encodedYearlyRecaps: encodedYearlyRecaps
                 )
             }
             .uniquedByID()
@@ -792,10 +1048,12 @@ final class MonthlyRecapSnapshotStore {
                 currentDeviceIdentifier: deviceIdentifier
             )
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
+            let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
             return localSnapshots.sortedForSyncPayloads().compactMap { snapshot in
                 snapshot.syncPayload(
                     prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [],
-                    encodedRecaps: encodedRecaps
+                    encodedRecaps: encodedRecaps,
+                    encodedYearlyRecaps: encodedYearlyRecaps
                 )
             }
             .uniquedByID()
@@ -813,6 +1071,7 @@ final class MonthlyRecapSnapshotStore {
                 snapshotsByID[snapshot.syncIdentifier] = snapshot
             }
             let incomingSyncedRecaps = payloads.flatMap(Self.syncedRecaps)
+            let incomingSyncedYearlyRecaps = payloads.flatMap(Self.syncedYearlyRecaps)
             var didChange = false
 
             for payload in payloads {
@@ -826,6 +1085,12 @@ final class MonthlyRecapSnapshotStore {
             let mergedSyncedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + incomingSyncedRecaps)
             if mergedSyncedRecaps != stored.syncedRecaps {
                 stored.syncedRecaps = mergedSyncedRecaps
+                didChange = true
+            }
+
+            let mergedSyncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + incomingSyncedYearlyRecaps)
+            if mergedSyncedYearlyRecaps != stored.syncedYearlyRecaps {
+                stored.syncedYearlyRecaps = mergedSyncedYearlyRecaps
                 didChange = true
             }
 
@@ -946,17 +1211,49 @@ final class MonthlyRecapSnapshotStore {
 
     private func updateSyncedRecaps(in stored: inout StoredSnapshots, snapshots: [LibrarySnapshot]) -> Bool {
         let generatedRecaps = syncedRecaps(from: snapshots)
+        let generatedYearlyRecaps = syncedYearlyRecaps(from: snapshots)
         let mergedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + generatedRecaps)
-        guard mergedRecaps != stored.syncedRecaps else { return false }
+        let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + generatedYearlyRecaps)
 
-        stored.syncedRecaps = mergedRecaps
-        return true
+        var didChange = false
+        if mergedRecaps != stored.syncedRecaps {
+            stored.syncedRecaps = mergedRecaps
+            didChange = true
+        }
+        if mergedYearlyRecaps != stored.syncedYearlyRecaps {
+            stored.syncedYearlyRecaps = mergedYearlyRecaps
+            didChange = true
+        }
+        return didChange
     }
 
     private func syncedRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedMonthlyRecap] {
+        fullMonthlyRecaps(from: snapshots).map(SyncedMonthlyRecap.init(recap:))
+    }
+
+    private func fullMonthlyRecaps(from snapshots: [LibrarySnapshot]) -> [MonthlyRecap] {
         let monthStarts = Set(snapshots.map { calendar.startOfMonth(containing: $0.capturedAt) })
         return monthStarts.map { monthStart in
-            SyncedMonthlyRecap(recap: snapshotRecap(for: monthStart, snapshots: snapshots))
+            snapshotRecap(for: monthStart, snapshots: snapshots)
+        }
+    }
+
+    private func syncedYearlyRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedYearlyRecap] {
+        let monthlyRecapsByYear = Dictionary(grouping: fullMonthlyRecaps(from: snapshots)) {
+            calendar.component(.year, from: $0.monthStart)
+        }
+
+        return monthlyRecapsByYear.map { year, recaps in
+            let months = recaps.map(\.monthStart).sorted()
+            let fallbackMonth = months.first ?? calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? Date()
+            let yearlyRecap = MonthlyRecap.yearly(
+                for: year,
+                months: months,
+                monthlyRecaps: recaps,
+                fallbackMonth: fallbackMonth,
+                fallbackRecap: .empty(for: fallbackMonth, calendar: calendar)
+            )
+            return SyncedYearlyRecap(year: year, recap: yearlyRecap)
         }
     }
 
@@ -965,12 +1262,32 @@ final class MonthlyRecapSnapshotStore {
         return try? JSONEncoder.playCount.encode(recaps)
     }
 
+    private static func encodedSyncedYearlyRecaps(_ recaps: [SyncedYearlyRecap]) -> Data? {
+        guard !recaps.isEmpty else { return nil }
+        return try? JSONEncoder.playCount.encode(recaps)
+    }
+
     private static func syncedRecaps(from payload: RecapSnapshotSyncPayload) -> [SyncedMonthlyRecap] {
-        guard let encodedRecaps = payload.encodedRecaps,
-              let recaps = try? JSONDecoder.playCount.decode([SyncedMonthlyRecap].self, from: encodedRecaps) else {
+        guard let encodedRecaps = payload.encodedRecaps else {
             return []
         }
-        return recaps
+        if let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: encodedRecaps) {
+            return summaries.monthlyRecaps
+        }
+        return (try? JSONDecoder.playCount.decode([SyncedMonthlyRecap].self, from: encodedRecaps)) ?? []
+    }
+
+    private static func syncedYearlyRecaps(from payload: RecapSnapshotSyncPayload) -> [SyncedYearlyRecap] {
+        if let encodedYearlyRecaps = payload.encodedYearlyRecaps,
+           let recaps = try? JSONDecoder.playCount.decode([SyncedYearlyRecap].self, from: encodedYearlyRecaps) {
+            return recaps
+        }
+
+        guard let encodedRecaps = payload.encodedRecaps,
+              let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: encodedRecaps) else {
+            return []
+        }
+        return summaries.yearlyRecaps
     }
 
     private static func mergedSyncedRecaps(_ recaps: [SyncedMonthlyRecap]) -> [SyncedMonthlyRecap] {
@@ -991,6 +1308,27 @@ final class MonthlyRecapSnapshotStore {
                 return $0.monthStart < $1.monthStart
             }
             return $0.generatedAt < $1.generatedAt
+        }
+    }
+
+    private static func mergedSyncedYearlyRecaps(_ recaps: [SyncedYearlyRecap]) -> [SyncedYearlyRecap] {
+        var recapsByYear: [Int: SyncedYearlyRecap] = [:]
+        for recap in recaps {
+            guard let existing = recapsByYear[recap.year] else {
+                recapsByYear[recap.year] = recap
+                continue
+            }
+
+            if isHigherPrioritySyncedRecap(recap.recap, than: existing.recap) {
+                recapsByYear[recap.year] = recap
+            }
+        }
+
+        return recapsByYear.values.sorted {
+            if $0.year != $1.year {
+                return $0.year < $1.year
+            }
+            return $0.recap.generatedAt < $1.recap.generatedAt
         }
     }
 
@@ -1312,7 +1650,7 @@ final class MonthlyRecapSnapshotStore {
 
         let topArtists = groupedDeltas(
             playDeltas,
-            id: { String($0.latest.artistPersistentID) },
+            id: artistGroupID,
             title: { $0.latest.artist },
             subtitle: { _ in "Artist" },
             artwork: { artworkLookup.artistArtwork(for: $0.latest) }
@@ -1320,7 +1658,7 @@ final class MonthlyRecapSnapshotStore {
 
         let topAlbums = groupedDeltas(
             playDeltas,
-            id: { String($0.latest.albumPersistentID) },
+            id: albumGroupID,
             title: { $0.latest.albumTitle },
             subtitle: { $0.latest.artist },
             artwork: { artworkLookup.albumArtwork(for: $0.latest) }
@@ -1601,6 +1939,33 @@ final class MonthlyRecapSnapshotStore {
         }
 
         return max(0, song.playCount)
+    }
+
+    private func artistGroupID(for delta: SongDelta) -> String {
+        if delta.latest.artistPersistentID != 0 {
+            return String(delta.latest.artistPersistentID)
+        }
+
+        return "artist:\(normalizedGroupKey(delta.latest.artist))"
+    }
+
+    private func albumGroupID(for delta: SongDelta) -> String {
+        if delta.latest.albumPersistentID != 0 {
+            return String(delta.latest.albumPersistentID)
+        }
+
+        return [
+            "album",
+            normalizedGroupKey(delta.latest.albumTitle),
+            normalizedGroupKey(delta.latest.artist)
+        ].joined(separator: ":")
+    }
+
+    private func normalizedGroupKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .lowercased()
     }
 
     private func groupedDeltas(
@@ -1962,7 +2327,8 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
 
     func syncPayload(
         prioritySongIDs: Set<UInt64>,
-        encodedRecaps: Data? = nil
+        encodedRecaps: Data? = nil,
+        encodedYearlyRecaps: Data? = nil
     ) -> RecapSnapshotSyncPayload? {
         let snapshot = snapshotForSyncPayload(prioritySongIDs: prioritySongIDs)
         guard let data = try? JSONEncoder.playCount.encode(snapshot) else { return nil }
@@ -1971,7 +2337,8 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             capturedAt: snapshot.capturedAt,
             counterSignature: snapshot.counterSignature,
             encodedSnapshot: data,
-            encodedRecaps: encodedRecaps
+            encodedRecaps: encodedRecaps,
+            encodedYearlyRecaps: encodedYearlyRecaps
         )
     }
 

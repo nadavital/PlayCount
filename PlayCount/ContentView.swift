@@ -87,6 +87,15 @@ private struct AuthorizedLibraryView: View {
             false
             #endif
         }
+
+        static var isScreenshotModeEnabled: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
+                ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
+            #else
+            false
+            #endif
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
@@ -105,9 +114,19 @@ private struct AuthorizedLibraryView: View {
 
     private var iPadBody: some View {
         iPadLibraryView(manager: manager)
-            .sheet(item: $presentedScreenshotArtist) { artist in
+            .fullScreenCover(item: $presentedScreenshotArtist) { artist in
                 NavigationStack {
-                    ArtistInfoView(artist: artist, manager: manager)
+                    ArtistInfoView(artist: artist, manager: manager, reservesBottomAccessorySpace: false)
+                        .toolbar {
+                            if !LibraryTab.isScreenshotModeEnabled {
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    Button("Done") {
+                                        presentedScreenshotArtist = nil
+                                    }
+                                }
+                            }
+                        }
+                        .toolbar(LibraryTab.isScreenshotModeEnabled ? .hidden : .visible, for: .navigationBar)
                 }
             }
             .task {

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MonthlyRecapView: View {
     @ObservedObject var manager: MediaLibraryManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedMonthStart: Date?
     @State private var isShowingYearAggregate = false
     @State private var monthTransitionEdge: Edge = .trailing
@@ -10,6 +11,7 @@ struct MonthlyRecapView: View {
     @State private var isUsingYearlyBreakdownStrip = false
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
     @State private var cachedArtworkHighlightsSignature = ""
+    @State private var cachedRecapBackgroundPalette: RecapBackgroundPalette?
     @State private var hasScheduledInitialCloudSync = false
 
     #if DEBUG
@@ -203,19 +205,32 @@ struct MonthlyRecapView: View {
     }
 
     private var recapBackgroundPalette: RecapBackgroundPalette {
+        if let cachedRecapBackgroundPalette {
+            return cachedRecapBackgroundPalette
+        }
+
+        return RecapBackgroundPalette(seed: recapBackgroundSeed)
+    }
+
+    private var recapBackgroundSeed: UInt64 {
         var seed = UInt64(recap.monthStart.timeIntervalSinceReferenceDate.rounded())
         seed = seed &* 1_099_511_628_211 &+ UInt64(max(recap.totalPlayDelta, 0))
         seed = seed &* 1_099_511_628_211 &+ UInt64(recap.playedSongCount)
         for id in recap.topSongs.prefix(3).map(\.id) + recap.topNewSongs.prefix(3).map(\.id) {
             seed = seed &* 1_099_511_628_211 &+ id
         }
-        return RecapBackgroundPalette(seed: seed)
+        return seed
     }
 
     private func updateCachedArtworkHighlightsIfNeeded() {
         let signature = artworkHighlightsSignature
-        guard signature != cachedArtworkHighlightsSignature else { return }
-        cachedArtworkHighlights = artworkHighlights
+        guard signature != cachedArtworkHighlightsSignature || cachedRecapBackgroundPalette == nil else { return }
+        let highlights = artworkHighlights
+        cachedArtworkHighlights = highlights
+        cachedRecapBackgroundPalette = RecapBackgroundPalette(
+            artworks: highlights,
+            fallbackSeed: recapBackgroundSeed
+        )
         cachedArtworkHighlightsSignature = signature
     }
 
@@ -346,7 +361,7 @@ struct MonthlyRecapView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
-                .padding(.bottom, 36)
+                .padding(.bottom, isRegularWidth ? 132 : 72)
                 .frame(maxWidth: 1120, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
                 .offset(x: monthDragDisplayOffset)
@@ -355,6 +370,13 @@ struct MonthlyRecapView: View {
             }
         }
         .scrollIndicators(.hidden)
+        .safeAreaInset(edge: .bottom) {
+            if isRegularWidth {
+                Color.clear
+                    .frame(height: 84)
+                    .allowsHitTesting(false)
+            }
+        }
         .refreshable {
             manager.syncRecapFromCloud()
             manager.refreshForRecapSequence(reason: .manualRefresh)
@@ -381,6 +403,10 @@ struct MonthlyRecapView: View {
         .onChange(of: manager.monthlyRecap.monthStart) { _, _ in
             syncSelectedMonthIfNeeded()
         }
+    }
+
+    private var isRegularWidth: Bool {
+        horizontalSizeClass == .regular
     }
 
     @ViewBuilder
@@ -930,10 +956,15 @@ private struct RecapHeroPoster: View {
     let selectedMonthStart: Date
     let onSelectYear: () -> Void
     let onSelectMonth: (Date) -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var isRegularWidth: Bool {
+        horizontalSizeClass == .regular
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            RecapArtworkCollage(artworks: artworks)
+        VStack(alignment: .leading, spacing: isRegularWidth ? 14 : 18) {
+            RecapArtworkCollage(artworks: artworks, layout: isRegularWidth ? .regular : .compact)
 
             titleBlock
             RecapSummaryBar(recap: recap)
@@ -948,7 +979,7 @@ private struct RecapHeroPoster: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(monthTitle)
-                .font(.system(size: 42, weight: .bold, design: .rounded))
+                .font(.system(size: isRegularWidth ? 36 : 42, weight: .bold, design: .rounded))
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -966,7 +997,13 @@ private struct RecapHeroPoster: View {
 }
 
 private struct RecapArtworkCollage: View {
+    enum Layout {
+        case compact
+        case regular
+    }
+
     let artworks: [MPMediaItemArtwork]
+    let layout: Layout
 
     var body: some View {
         if artworks.isEmpty {
@@ -988,8 +1025,8 @@ private struct RecapArtworkCollage: View {
                 if let mainArtwork = artworks.first {
                     ArtworkView(
                         artwork: mainArtwork,
-                        size: CGSize(width: 196, height: 196),
-                        cornerRadius: 28
+                        size: mainArtworkSize,
+                        cornerRadius: layout == .regular ? 28 : 24
                     )
                     .rotationEffect(.degrees(-1.5))
                     .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 16)
@@ -997,7 +1034,7 @@ private struct RecapArtworkCollage: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 282)
+            .frame(height: layout == .regular ? 282 : 218)
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Recap album artwork collage")
@@ -1005,17 +1042,47 @@ private struct RecapArtworkCollage: View {
     }
 
     private var sideArtworks: [MPMediaItemArtwork] {
-        Array(artworks.dropFirst().prefix(5))
+        Array(artworks.dropFirst().prefix(sideArtworkLimit))
+    }
+
+    private var sideArtworkLimit: Int {
+        switch layout {
+        case .compact:
+            return 3
+        case .regular:
+            return 5
+        }
+    }
+
+    private var mainArtworkSize: CGSize {
+        switch layout {
+        case .compact:
+            return CGSize(width: 164, height: 164)
+        case .regular:
+            return CGSize(width: 196, height: 196)
+        }
     }
 
     private func sideArtworkSize(for index: Int) -> CGSize {
-        switch index {
-        case 0, 1:
-            return CGSize(width: 132, height: 132)
-        case 2, 3:
-            return CGSize(width: 112, height: 112)
-        default:
-            return CGSize(width: 96, height: 96)
+        switch layout {
+        case .compact:
+            switch index {
+            case 0, 1:
+                return CGSize(width: 104, height: 104)
+            case 2, 3:
+                return CGSize(width: 78, height: 78)
+            default:
+                return CGSize(width: 68, height: 68)
+            }
+        case .regular:
+            switch index {
+            case 0, 1:
+                return CGSize(width: 132, height: 132)
+            case 2, 3:
+                return CGSize(width: 112, height: 112)
+            default:
+                return CGSize(width: 96, height: 96)
+            }
         }
     }
 
@@ -1034,17 +1101,33 @@ private struct RecapArtworkCollage: View {
     }
 
     private func sideArtworkOffset(for index: Int) -> CGSize {
-        switch index {
-        case 0:
-            return CGSize(width: -146, height: 52)
-        case 1:
-            return CGSize(width: 146, height: 58)
-        case 2:
-            return CGSize(width: -258, height: 8)
-        case 3:
-            return CGSize(width: 258, height: 14)
-        default:
-            return CGSize(width: 0, height: 120)
+        switch layout {
+        case .compact:
+            switch index {
+            case 0:
+                return CGSize(width: -96, height: 34)
+            case 1:
+                return CGSize(width: 96, height: 38)
+            case 2:
+                return CGSize(width: -138, height: 6)
+            case 3:
+                return CGSize(width: 138, height: 8)
+            default:
+                return CGSize(width: 0, height: 82)
+            }
+        case .regular:
+            switch index {
+            case 0:
+                return CGSize(width: -146, height: 52)
+            case 1:
+                return CGSize(width: 146, height: 58)
+            case 2:
+                return CGSize(width: -258, height: 8)
+            case 3:
+                return CGSize(width: 258, height: 14)
+            default:
+                return CGSize(width: 0, height: 120)
+            }
         }
     }
 
@@ -1733,11 +1816,77 @@ private struct RecapBackgroundPalette {
     let secondary: Color
     let tertiary: Color
 
+    init(artworks: [MPMediaItemArtwork], fallbackSeed: UInt64) {
+        let components = artworks
+            .prefix(3)
+            .compactMap { $0.averageColorComponents() }
+
+        guard let first = components.first else {
+            let colors = Self.colors(seed: fallbackSeed)
+            self.primary = colors.primary
+            self.secondary = colors.secondary
+            self.tertiary = colors.tertiary
+            return
+        }
+
+        let second = components.dropFirst().first ?? first
+        let third = components.dropFirst(2).first ?? Self.blend(first, second)
+
+        self.primary = Self.color(from: first, transform: .darken(0.24))
+        self.secondary = Self.color(from: second, transform: .boost(0.18))
+        self.tertiary = Self.color(from: third, transform: .boost(0.36))
+    }
+
     init(seed: UInt64) {
+        let colors = Self.colors(seed: seed)
+        primary = colors.primary
+        secondary = colors.secondary
+        tertiary = colors.tertiary
+    }
+
+    private static func colors(seed: UInt64) -> (primary: Color, secondary: Color, tertiary: Color) {
         let hue = Double(seed % 360) / 360.0
-        primary = Color(hue: hue, saturation: 0.58, brightness: 0.94)
-        secondary = Color(hue: (hue + 0.13).truncatingRemainder(dividingBy: 1), saturation: 0.52, brightness: 0.96)
-        tertiary = Color(hue: (hue + 0.58).truncatingRemainder(dividingBy: 1), saturation: 0.42, brightness: 0.92)
+        return (
+            Color(hue: hue, saturation: 0.58, brightness: 0.94),
+            Color(hue: (hue + 0.13).truncatingRemainder(dividingBy: 1), saturation: 0.52, brightness: 0.96),
+            Color(hue: (hue + 0.58).truncatingRemainder(dividingBy: 1), saturation: 0.42, brightness: 0.92)
+        )
+    }
+
+    private enum ComponentTransform {
+        case darken(Double)
+        case boost(Double)
+    }
+
+    private static func color(
+        from components: (Double, Double, Double),
+        transform: ComponentTransform
+    ) -> Color {
+        Color(
+            red: transformed(components.0, transform: transform),
+            green: transformed(components.1, transform: transform),
+            blue: transformed(components.2, transform: transform)
+        )
+    }
+
+    private static func transformed(_ component: Double, transform: ComponentTransform) -> Double {
+        switch transform {
+        case .darken(let amount):
+            return max(component * (1 - amount), 0)
+        case .boost(let amount):
+            return min(component + (1 - component) * amount, 1)
+        }
+    }
+
+    private static func blend(
+        _ lhs: (Double, Double, Double),
+        _ rhs: (Double, Double, Double)
+    ) -> (Double, Double, Double) {
+        (
+            (lhs.0 + rhs.0) / 2,
+            (lhs.1 + rhs.1) / 2,
+            (lhs.2 + rhs.2) / 2
+        )
     }
 }
 

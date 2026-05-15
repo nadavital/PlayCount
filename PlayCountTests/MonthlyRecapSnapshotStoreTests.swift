@@ -472,6 +472,67 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(iPadRecap.topNewSongs.first?.playDelta, 12)
     }
 
+    func testSyncPayloadRecapSummariesRemainLegacyMonthlyArray() throws {
+        let sourceStore = makeStore(named: "legacy-monthly-summary")
+        let baselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Legacy Compatible Song", playCount: 10)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Legacy Compatible Song", playCount: 15)],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let payload = try XCTUnwrap(sourceStore.localSyncPayloads().first { $0.encodedRecaps != nil })
+        let encodedRecaps = try XCTUnwrap(payload.encodedRecaps)
+        let legacyRecaps = try playCountDecoder.decode([LegacySyncedMonthlyRecap].self, from: encodedRecaps)
+
+        XCTAssertNotNil(payload.encodedYearlyRecaps)
+        XCTAssertEqual(legacyRecaps.count, 1)
+        XCTAssertEqual(legacyRecaps.first?.totalPlayDelta, 5)
+        XCTAssertEqual(legacyRecaps.first?.topSongs.first?.title, "Legacy Compatible Song")
+    }
+
+    func testSeparateYearlyRecapSummaryMergesIntoFreshStore() {
+        let sourceStore = makeStore(named: "yearly-summary-source")
+        let targetStore = makeStore(named: "yearly-summary-target")
+        let baselineDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let latestDate = date(year: 2026, month: 5, day: 8, hour: 8)
+        let newSongDate = date(year: 2026, month: 5, day: 7, hour: 8)
+        let baselineSongs = (1...260).map {
+            song(id: UInt64($0), title: "Existing Song \($0)", playCount: 10)
+        }
+        var latestSongs = baselineSongs.map {
+            song(id: $0.id, title: $0.title, playCount: $0.playCount + 1)
+        }
+        latestSongs.append(
+            song(
+                id: 9_001,
+                title: "Low Delta New Song",
+                playCount: 1,
+                dateAdded: newSongDate
+            )
+        )
+
+        _ = sourceStore.record(songs: baselineSongs, at: baselineDate, reason: .manualRefresh)
+        _ = sourceStore.record(songs: latestSongs, at: latestDate, reason: .foreground)
+
+        let payloads = sourceStore.localSyncPayloads()
+        XCTAssertTrue(payloads.contains { $0.encodedRecaps != nil })
+        XCTAssertTrue(payloads.contains { $0.encodedYearlyRecaps != nil })
+        XCTAssertTrue(targetStore.mergeSyncPayloads(payloads, now: latestDate))
+
+        let yearlyRecap = targetStore.syncedYearlyRecap(for: 2026)
+        XCTAssertEqual(yearlyRecap?.playedSongCount, 261)
+        XCTAssertEqual(yearlyRecap?.topSongs.count, 250)
+        XCTAssertEqual(yearlyRecap?.topNewSongs.first?.title, "Low Delta New Song")
+    }
+
     func testLegacyPhoneBaselineBridgesToCurrentPhoneStreamForConsistentRecap() {
         let phoneStore = makeStore(named: "current-phone")
         let iPadStore = makeStore(named: "polluted-ipad")
@@ -764,6 +825,62 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recaps.map(\.totalPlayDelta), [5, 2])
     }
 
+    func testRecapArtistGroupsUseNameFallbackWhenPersistentIDIsMissing() {
+        let store = makeStore(named: "zero-artist-groups")
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let latestDate = date(year: 2026, month: 5, day: 8)
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "First Artist", playCount: 10, artistPersistentID: 0),
+                song(id: 2, title: "Second Song", artist: "Second Artist", playCount: 10, artistPersistentID: 0)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "First Artist", playCount: 13, artistPersistentID: 0),
+                song(id: 2, title: "Second Song", artist: "Second Artist", playCount: 15, artistPersistentID: 0)
+            ],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let recap = store.recap(forMonthContaining: latestDate)
+
+        XCTAssertEqual(recap.topArtists.map(\.title), ["Second Artist", "First Artist"])
+        XCTAssertEqual(recap.topArtists.map(\.playDelta), [5, 3])
+    }
+
+    func testRecapAlbumGroupsUseTitleArtistFallbackWhenPersistentIDIsMissing() {
+        let store = makeStore(named: "zero-album-groups")
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let latestDate = date(year: 2026, month: 5, day: 8)
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "First Artist", albumTitle: "First Album", playCount: 10, albumPersistentID: 0),
+                song(id: 2, title: "Second Song", artist: "Second Artist", albumTitle: "Second Album", playCount: 10, albumPersistentID: 0)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "First Artist", albumTitle: "First Album", playCount: 13, albumPersistentID: 0),
+                song(id: 2, title: "Second Song", artist: "Second Artist", albumTitle: "Second Album", playCount: 15, albumPersistentID: 0)
+            ],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let recap = store.recap(forMonthContaining: latestDate)
+
+        XCTAssertEqual(recap.topAlbums.map(\.title), ["Second Album", "First Album"])
+        XCTAssertEqual(recap.topAlbums.map(\.playDelta), [5, 3])
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)
@@ -774,12 +891,36 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         )
     }
 
-    private func song(id: UInt64, title: String, playCount: Int, dateAdded: Date? = nil) -> TopSong {
+    private var playCountDecoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    private struct LegacySyncedMonthlyRecap: Decodable {
+        struct RankedSong: Decodable {
+            let title: String
+        }
+
+        let totalPlayDelta: Int
+        let topSongs: [RankedSong]
+    }
+
+    private func song(
+        id: UInt64,
+        title: String,
+        artist: String = "Artist",
+        albumTitle: String = "Album",
+        playCount: Int,
+        dateAdded: Date? = nil,
+        albumPersistentID: UInt64 = 10,
+        artistPersistentID: UInt64 = 20
+    ) -> TopSong {
         TopSong(
             id: id,
             title: title,
-            artist: "Artist",
-            albumTitle: "Album",
+            artist: artist,
+            albumTitle: albumTitle,
             playCount: playCount,
             skipCount: 0,
             totalPlayDuration: TimeInterval(playCount * 180),
@@ -787,8 +928,8 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             lastPlayedDate: nil,
             dateAdded: dateAdded,
             artwork: nil,
-            albumPersistentID: 10,
-            artistPersistentID: 20,
+            albumPersistentID: albumPersistentID,
+            artistPersistentID: artistPersistentID,
             trackNumber: 1
         )
     }

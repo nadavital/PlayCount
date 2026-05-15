@@ -102,6 +102,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         static let payload = "payload"
         static let payloadIDs = "payloadIDs"
         static let recapSummaries = "recapSummaries"
+        static let yearlyRecapSummaries = "yearlyRecapSummaries"
     }
 
     private static let containerIdentifier = "iCloud.com.nadavavital.PlayCount"
@@ -186,6 +187,9 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             if let encodedRecaps = payload.encodedRecaps {
                 record[Field.recapSummaries] = encodedRecaps as NSData
             }
+            if let encodedYearlyRecaps = payload.encodedYearlyRecaps {
+                record[Field.yearlyRecapSummaries] = encodedYearlyRecaps as NSData
+            }
             return record
         }
 
@@ -214,7 +218,13 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         let fetchChangesResult: (CKServerChangeToken?, Bool) = try await withCheckedThrowingContinuation { continuation in
             let configuration = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
             configuration.previousServerChangeToken = previousServerChangeToken
-            configuration.desiredKeys = [Field.capturedAt, Field.counterSignature, Field.payload, Field.recapSummaries]
+            configuration.desiredKeys = [
+                Field.capturedAt,
+                Field.counterSignature,
+                Field.payload,
+                Field.recapSummaries,
+                Field.yearlyRecapSummaries
+            ]
 
             let operation = CKFetchRecordZoneChangesOperation(
                 recordZoneIDs: [zoneID],
@@ -286,7 +296,13 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         try await withCheckedThrowingContinuation { continuation in
             let payloads = PayloadAccumulator()
             let operation = CKFetchRecordsOperation(recordIDs: recordIDs)
-            operation.desiredKeys = [Field.capturedAt, Field.counterSignature, Field.payload, Field.recapSummaries]
+            operation.desiredKeys = [
+                Field.capturedAt,
+                Field.counterSignature,
+                Field.payload,
+                Field.recapSummaries,
+                Field.yearlyRecapSummaries
+            ]
             operation.perRecordResultBlock = { _, result in
                 switch result {
                 case .success(let record):
@@ -409,6 +425,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         let capturedAt = (record[Field.capturedAt] as? Date) ?? (record[Field.capturedAt] as? NSDate).map { $0 as Date }
         let data = (record[Field.payload] as? Data) ?? (record[Field.payload] as? NSData).map { $0 as Data }
         let recapData = (record[Field.recapSummaries] as? Data) ?? (record[Field.recapSummaries] as? NSData).map { $0 as Data }
+        let yearlyRecapData = (record[Field.yearlyRecapSummaries] as? Data) ?? (record[Field.yearlyRecapSummaries] as? NSData).map { $0 as Data }
 
         guard let capturedAt,
               let counterSignature = record[Field.counterSignature] as? String,
@@ -421,7 +438,8 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             capturedAt: capturedAt,
             counterSignature: counterSignature,
             encodedSnapshot: data,
-            encodedRecaps: recapData
+            encodedRecaps: recapData,
+            encodedYearlyRecaps: yearlyRecapData
         )
     }
 

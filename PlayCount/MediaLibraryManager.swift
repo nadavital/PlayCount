@@ -175,6 +175,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private var yearlyRecapCache: [Int: MonthlyRecap] = [:]
     private var yearlyMonthlyHighlightsCache: [Int: [YearlyRecapMonthlyHighlight]] = [:]
     private var isRecapCloudSyncInFlight = false
+    private var pendingRecapCloudSync = false
     private var songsByPersistentID: [UInt64: TopSong] = [:]
     private var albumsByPersistentID: [UInt64: TopAlbum] = [:]
     private var artistsByPersistentID: [UInt64: TopArtist] = [:]
@@ -197,7 +198,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     init(
         fetchLimit: Int = 0,
         snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
-        recapCloudSyncService: RecapCloudSyncService? = RecapCloudSyncService.live(),
+        recapCloudSyncService: RecapCloudSyncService? = MediaLibraryManager.defaultRecapCloudSyncService(),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
@@ -231,6 +232,22 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
         scheduleRecapCloudSync()
     }
+
+    #if DEBUG
+    func debugLoadLibraryFixture(
+        songs: [TopSong],
+        albums: [TopAlbum],
+        artists: [TopArtist]
+    ) {
+        librarySongs = songs
+        libraryAlbums = albums
+        libraryArtists = artists
+        librarySummary = LibrarySummary(songs: songs, albums: albums, artists: artists)
+        applySortAndLimit()
+        updateLibraryIndexes(songs: songs, albums: albums, artists: artists)
+        hasLoadedInitialSnapshot = true
+    }
+    #endif
 
     deinit {
         teardownObservers()
@@ -278,6 +295,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         default:
             break
         }
+    }
+
+    private static func defaultRecapCloudSyncService() -> RecapCloudSyncService? {
+        #if DEBUG
+        if isScreenshotModeEnabled {
+            return nil
+        }
+        #endif
+
+        return RecapCloudSyncService.live()
     }
 
     func refreshTopItems() {
@@ -408,13 +435,18 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
 
         let yearMonths = months(in: year)
-        let recap = Self.yearlyRecap(
+        let recap = snapshotStore.syncedYearlyRecap(
             for: year,
-            months: yearMonths,
-            monthlyRecaps: recaps(forMonthsContaining: yearMonths),
-            fallbackMonth: monthlyRecap.monthStart,
-            fallbackRecap: monthlyRecap
-        )
+            sourceSongs: librarySongs,
+            sourceAlbums: libraryAlbums,
+            sourceArtists: libraryArtists
+        ) ?? Self.yearlyRecap(
+                for: year,
+                months: yearMonths,
+                monthlyRecaps: recaps(forMonthsContaining: yearMonths),
+                fallbackMonth: monthlyRecap.monthStart,
+                fallbackRecap: monthlyRecap
+            )
         yearlyRecapCache[year] = recap
         return recap
     }
@@ -446,18 +478,32 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func scheduleRecapCloudSync() {
-        guard let recapCloudSyncService, !isRecapCloudSyncInFlight else { return }
+        guard let recapCloudSyncService else { return }
+        guard !isRecapCloudSyncInFlight else {
+            pendingRecapCloudSync = true
+            return
+        }
+
         isRecapCloudSyncInFlight = true
 
         Task { [weak self, snapshotStore, recapCloudSyncService] in
             _ = await recapCloudSyncService.sync(snapshotStore: snapshotStore)
 
-            await MainActor.run { [weak self] in
-                guard let self else { return }
+            let shouldSyncAgain = await MainActor.run { [weak self] in
+                guard let self else { return false }
                 self.isRecapCloudSyncInFlight = false
                 self.invalidateRecapCaches()
                 self.monthlyRecap = self.recap(forMonthContaining: Date())
                 self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
+                let shouldSyncAgain = self.pendingRecapCloudSync
+                self.pendingRecapCloudSync = false
+                return shouldSyncAgain
+            }
+
+            if shouldSyncAgain {
+                await MainActor.run { [weak self] in
+                    self?.scheduleRecapCloudSync()
+                }
             }
         }
     }
@@ -525,87 +571,32 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         fallbackMonth: Date,
         fallbackRecap: MonthlyRecap
     ) -> MonthlyRecap {
-        let calendar = Calendar.current
-        guard let firstMonth = months.first else {
-            return fallbackRecap
-        }
-
-        let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? fallbackMonth
-
-        var songs: [UInt64: RankedSongAggregate] = [:]
-        var albums: [String: RankedGroupAggregate] = [:]
-        var artists: [String: RankedGroupAggregate] = [:]
-        var movement: [UInt64: MovementSongAggregate] = [:]
-        var newSongIDs: [UInt64] = []
-
-        for recap in monthlyRecaps {
-            var mergedSongIDsForMonth: Set<UInt64> = []
-
-            for song in recap.topSongs {
-                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                mergedSongIDsForMonth.insert(song.id)
-            }
-
-            for song in recap.topNewSongs {
-                if !mergedSongIDsForMonth.contains(song.id) {
-                    songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                    mergedSongIDsForMonth.insert(song.id)
-                }
-                if !newSongIDs.contains(song.id) {
-                    newSongIDs.append(song.id)
-                }
-            }
-
-            for group in recap.topAlbums {
-                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
-            }
-            for group in recap.topArtists {
-                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
-            }
-            for song in recap.biggestGainers {
-                movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
-            }
-        }
-
-        let rankedSongs = songs.values
-            .map(\.rankedSong)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let rankedAlbums = albums.values
-            .map(\.rankedGroup)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let rankedArtists = artists.values
-            .map(\.rankedGroup)
-            .sorted { $0.playDelta > $1.playDelta }
-
-        let biggestGainers = movement.values
-            .map(\.movementSong)
-            .sorted { $0.rankChange > $1.rankChange }
-
-        let newSongs = newSongIDs.compactMap { id in
-            songs[id]?.rankedSong
-        }
-        .sorted { $0.playDelta > $1.playDelta }
-
-        return MonthlyRecap(
-            monthStart: monthStart,
-            generatedAt: monthlyRecaps.map(\.generatedAt).max() ?? Date(),
-            lastCaptureReason: monthlyRecaps.last?.lastCaptureReason,
-            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
-            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
-            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
-            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
-            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
-            playedSongCount: Set(monthlyRecaps.flatMap { $0.topSongs.map(\.id) }).count,
-            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
-            topSongs: rankedSongs,
-            topArtists: rankedArtists,
-            topAlbums: rankedAlbums,
-            biggestGainers: biggestGainers,
-            topNewSongs: newSongs
+        MonthlyRecap.yearly(
+            for: year,
+            months: months,
+            monthlyRecaps: monthlyRecaps,
+            fallbackMonth: fallbackMonth,
+            fallbackRecap: fallbackRecap
         )
     }
+
+    #if DEBUG
+    static func debugYearlyRecap(
+        for year: Int,
+        months: [Date],
+        monthlyRecaps: [MonthlyRecap],
+        fallbackMonth: Date,
+        fallbackRecap: MonthlyRecap
+    ) -> MonthlyRecap {
+        MonthlyRecap.yearly(
+            for: year,
+            months: months,
+            monthlyRecaps: monthlyRecaps,
+            fallbackMonth: fallbackMonth,
+            fallbackRecap: fallbackRecap
+        )
+    }
+    #endif
 
     private struct RankedSongAggregate {
         let id: UInt64
@@ -826,12 +817,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         albumsByArtistKey = Dictionary(grouping: albums, by: { Self.normalizedLookupKey($0.artist) })
             .mapValues(sortAlbums)
 
-        songPlayCountRanks = Self.rankMap(for: songs.sorted { $0.playCount > $1.playCount }.map(\.id))
-        songListenTimeRanks = Self.rankMap(for: songs.sorted { $0.totalPlayDuration > $1.totalPlayDuration }.map(\.id))
-        albumPlayCountRanks = Self.rankMap(for: albums.sorted { $0.playCount > $1.playCount }.map(\.id))
-        albumListenTimeRanks = Self.rankMap(for: albums.sorted { $0.totalPlayDuration > $1.totalPlayDuration }.map(\.id))
-        artistPlayCountRanks = Self.rankMap(for: artists.sorted { $0.playCount > $1.playCount }.map(\.id))
-        artistListenTimeRanks = Self.rankMap(for: artists.sorted { $0.totalPlayDuration > $1.totalPlayDuration }.map(\.id))
+        songPlayCountRanks = Self.rankMap(for: songs.sorted(by: Self.isHigherPlayCountSong).map(\.id))
+        songListenTimeRanks = Self.rankMap(for: songs.sorted(by: Self.isHigherListenTimeSong).map(\.id))
+        albumPlayCountRanks = Self.rankMap(for: albums.sorted(by: Self.isHigherPlayCountAlbum).map(\.id))
+        albumListenTimeRanks = Self.rankMap(for: albums.sorted(by: Self.isHigherListenTimeAlbum).map(\.id))
+        artistPlayCountRanks = Self.rankMap(for: artists.sorted(by: Self.isHigherPlayCountArtist).map(\.id))
+        artistListenTimeRanks = Self.rankMap(for: artists.sorted(by: Self.isHigherListenTimeArtist).map(\.id))
     }
 
     func songs(for album: TopAlbum, limit: Int? = nil) -> [TopSong] {
@@ -947,27 +938,46 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func songsForAlbum(_ album: TopAlbum) -> [TopSong] {
+        var candidates: [TopSong] = []
+
         if album.id != 0, let songs = songsByAlbumID[album.id] {
-            return songs
+            candidates.append(contentsOf: songs)
         }
 
-        return songsByAlbumKey[Self.titleArtistKey(title: album.title, artist: album.artist)] ?? []
+        let albumKeyMatches = songsByAlbumKey[Self.titleArtistKey(title: album.title, artist: album.artist)] ?? []
+        candidates.append(contentsOf: albumKeyMatches.filter { song in
+            song.albumPersistentID == 0 && (
+                (album.artistPersistentID != 0 && song.artistPersistentID == album.artistPersistentID) ||
+                song.artist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame
+            )
+        })
+
+        return sortSongs(Self.deduplicated(candidates))
     }
 
     private func songsForArtist(_ artist: TopArtist) -> [TopSong] {
+        var candidates: [TopSong] = []
+
         if artist.id != 0, let songs = songsByArtistID[artist.id] {
-            return songs
+            candidates.append(contentsOf: songs)
         }
 
-        return songsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
+        let artistNameMatches = songsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
+        candidates.append(contentsOf: artistNameMatches.filter { $0.artistPersistentID == 0 })
+
+        return sortSongs(Self.deduplicated(candidates))
     }
 
     private func albumsForArtist(_ artist: TopArtist) -> [TopAlbum] {
+        var candidates: [TopAlbum] = []
+
         if artist.id != 0, let albums = albumsByArtistID[artist.id] {
-            return albums
+            candidates.append(contentsOf: albums)
         }
 
-        return albumsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
+        candidates.append(contentsOf: albumsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? [])
+
+        return sortAlbums(Self.deduplicated(candidates))
     }
 
     private static func titleArtistKey(title: String, artist: String) -> String {
@@ -979,6 +989,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .lowercased()
+    }
+
+    private static func deduplicated<T: Identifiable>(_ values: [T]) -> [T] where T.ID == UInt64 {
+        var seen: Set<UInt64> = []
+        return values.filter { value in
+            seen.insert(value.id).inserted
+        }
     }
 
     private static func rankMap(for ids: [UInt64]) -> [UInt64: Int] {
@@ -1086,23 +1103,31 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         songs.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
-                if lhs.playCount == rhs.playCount {
-                    if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                        return (lhs.lastPlayedDate ?? .distantPast) > (rhs.lastPlayedDate ?? .distantPast)
-                    }
-                    return lhs.totalPlayDuration > rhs.totalPlayDuration
-                }
-                return lhs.playCount > rhs.playCount
+                return Self.isHigherPlayCountSong(lhs, rhs)
             case .listenTime:
-                if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                    if lhs.playCount == rhs.playCount {
-                        return (lhs.lastPlayedDate ?? .distantPast) > (rhs.lastPlayedDate ?? .distantPast)
-                    }
-                    return lhs.playCount > rhs.playCount
-                }
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
+                return Self.isHigherListenTimeSong(lhs, rhs)
             }
         }
+    }
+
+    private static func isHigherPlayCountSong(_ lhs: TopSong, _ rhs: TopSong) -> Bool {
+        if lhs.playCount == rhs.playCount {
+            if lhs.totalPlayDuration == rhs.totalPlayDuration {
+                return (lhs.lastPlayedDate ?? .distantPast) > (rhs.lastPlayedDate ?? .distantPast)
+            }
+            return lhs.totalPlayDuration > rhs.totalPlayDuration
+        }
+        return lhs.playCount > rhs.playCount
+    }
+
+    private static func isHigherListenTimeSong(_ lhs: TopSong, _ rhs: TopSong) -> Bool {
+        if lhs.totalPlayDuration == rhs.totalPlayDuration {
+            if lhs.playCount == rhs.playCount {
+                return (lhs.lastPlayedDate ?? .distantPast) > (rhs.lastPlayedDate ?? .distantPast)
+            }
+            return lhs.playCount > rhs.playCount
+        }
+        return lhs.totalPlayDuration > rhs.totalPlayDuration
     }
 
     private func configureObservers() {
@@ -1259,21 +1284,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         albums.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
-                if lhs.playCount == rhs.playCount {
-                    if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                        return lhs.title < rhs.title
-                    }
-                    return lhs.totalPlayDuration > rhs.totalPlayDuration
-                }
-                return lhs.playCount > rhs.playCount
+                return Self.isHigherPlayCountAlbum(lhs, rhs)
             case .listenTime:
-                if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                    if lhs.playCount == rhs.playCount {
-                        return lhs.title < rhs.title
-                    }
-                    return lhs.playCount > rhs.playCount
-                }
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
+                return Self.isHigherListenTimeAlbum(lhs, rhs)
             }
         }
     }
@@ -1282,23 +1295,51 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         artists.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
-                if lhs.playCount == rhs.playCount {
-                    if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                        return lhs.name < rhs.name
-                    }
-                    return lhs.totalPlayDuration > rhs.totalPlayDuration
-                }
-                return lhs.playCount > rhs.playCount
+                return Self.isHigherPlayCountArtist(lhs, rhs)
             case .listenTime:
-                if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                    if lhs.playCount == rhs.playCount {
-                        return lhs.name < rhs.name
-                    }
-                    return lhs.playCount > rhs.playCount
-                }
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
+                return Self.isHigherListenTimeArtist(lhs, rhs)
             }
         }
+    }
+
+    private static func isHigherPlayCountAlbum(_ lhs: TopAlbum, _ rhs: TopAlbum) -> Bool {
+        if lhs.playCount == rhs.playCount {
+            if lhs.totalPlayDuration == rhs.totalPlayDuration {
+                return lhs.title < rhs.title
+            }
+            return lhs.totalPlayDuration > rhs.totalPlayDuration
+        }
+        return lhs.playCount > rhs.playCount
+    }
+
+    private static func isHigherListenTimeAlbum(_ lhs: TopAlbum, _ rhs: TopAlbum) -> Bool {
+        if lhs.totalPlayDuration == rhs.totalPlayDuration {
+            if lhs.playCount == rhs.playCount {
+                return lhs.title < rhs.title
+            }
+            return lhs.playCount > rhs.playCount
+        }
+        return lhs.totalPlayDuration > rhs.totalPlayDuration
+    }
+
+    private static func isHigherPlayCountArtist(_ lhs: TopArtist, _ rhs: TopArtist) -> Bool {
+        if lhs.playCount == rhs.playCount {
+            if lhs.totalPlayDuration == rhs.totalPlayDuration {
+                return lhs.name < rhs.name
+            }
+            return lhs.totalPlayDuration > rhs.totalPlayDuration
+        }
+        return lhs.playCount > rhs.playCount
+    }
+
+    private static func isHigherListenTimeArtist(_ lhs: TopArtist, _ rhs: TopArtist) -> Bool {
+        if lhs.totalPlayDuration == rhs.totalPlayDuration {
+            if lhs.playCount == rhs.playCount {
+                return lhs.name < rhs.name
+            }
+            return lhs.playCount > rhs.playCount
+        }
+        return lhs.totalPlayDuration > rhs.totalPlayDuration
     }
 
     private static func fetchTopSongs() -> [TopSong] {
