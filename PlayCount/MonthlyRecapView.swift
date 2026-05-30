@@ -8,6 +8,7 @@ struct MonthlyRecapView: View {
     @State private var isShowingYearAggregate = false
     @State private var monthTransitionEdge: Edge = .trailing
     @State private var monthDragOffset: CGFloat = 0
+    @State private var monthDragAxis: MonthDragAxis = .undecided
     @State private var isUsingYearlyBreakdownStrip = false
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
     @State private var cachedArtworkHighlightsSignature = ""
@@ -17,6 +18,12 @@ struct MonthlyRecapView: View {
     #if DEBUG
     @State private var reminderStatusMessage: String?
     #endif
+
+    private enum MonthDragAxis {
+        case undecided
+        case horizontal
+        case vertical
+    }
 
     private var recap: MonthlyRecap {
         if isShowingYearAggregate {
@@ -370,6 +377,7 @@ struct MonthlyRecapView: View {
             }
         }
         .scrollIndicators(.hidden)
+        .scrollDisabled(monthDragAxis == .horizontal)
         .safeAreaInset(edge: .bottom) {
             if isRegularWidth {
                 Color.clear
@@ -770,16 +778,21 @@ struct MonthlyRecapView: View {
     }
 
     private var monthSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 24)
+        DragGesture(minimumDistance: 8)
             .onChanged { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 guard !isUsingYearlyBreakdownStrip else {
-                    monthDragOffset = 0
+                    resetMonthDragState()
                     return
                 }
-                guard abs(horizontal) > 8,
-                      abs(horizontal) > abs(vertical) * 1.2 else {
+
+                if monthDragAxis == .undecided {
+                    monthDragAxis = resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical)
+                }
+
+                guard monthDragAxis == .horizontal else {
+                    monthDragOffset = 0
                     return
                 }
 
@@ -788,13 +801,20 @@ struct MonthlyRecapView: View {
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
+                let dragAxis: MonthDragAxis
+                if monthDragAxis == .undecided {
+                    dragAxis = resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical)
+                } else {
+                    dragAxis = monthDragAxis
+                }
                 defer {
                     withAnimation(.smooth(duration: 0.22)) {
-                        monthDragOffset = 0
+                        resetMonthDragState()
                     }
                 }
 
                 guard !isUsingYearlyBreakdownStrip else { return }
+                guard dragAxis == .horizontal else { return }
 
                 guard abs(horizontal) > 64,
                       abs(horizontal) > abs(vertical) * 1.35 else {
@@ -826,10 +846,33 @@ struct MonthlyRecapView: View {
         return min(118, max(-118, offset * resistance))
     }
 
+    private func resolvedMonthDragAxis(horizontal: CGFloat, vertical: CGFloat) -> MonthDragAxis {
+        let absoluteHorizontal = abs(horizontal)
+        let absoluteVertical = abs(vertical)
+        guard max(absoluteHorizontal, absoluteVertical) >= 8 else {
+            return .undecided
+        }
+
+        if absoluteHorizontal > absoluteVertical * 1.2 {
+            return .horizontal
+        }
+
+        if absoluteVertical >= absoluteHorizontal * 1.1 {
+            return .vertical
+        }
+
+        return .undecided
+    }
+
+    private func resetMonthDragState() {
+        monthDragOffset = 0
+        monthDragAxis = .undecided
+    }
+
     private func setYearlyBreakdownScrollActivity(_ isActive: Bool) {
         if isActive {
             isUsingYearlyBreakdownStrip = true
-            monthDragOffset = 0
+            resetMonthDragState()
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 isUsingYearlyBreakdownStrip = false
