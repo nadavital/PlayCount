@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaPlayer
+import UIKit
 
 struct ContentView: View {
     @StateObject private var libraryManager: MediaLibraryManager
@@ -86,6 +87,15 @@ private struct AuthorizedLibraryView: View {
             false
             #endif
         }
+
+        static var isScreenshotModeEnabled: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
+                ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
+            #else
+            false
+            #endif
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
@@ -95,6 +105,41 @@ private struct AuthorizedLibraryView: View {
     @State private var presentedScreenshotArtist: TopArtist?
 
     var body: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            iPadBody
+        } else {
+            iPhoneBody
+        }
+    }
+
+    private var iPadBody: some View {
+        iPadLibraryView(manager: manager)
+            .fullScreenCover(item: $presentedScreenshotArtist) { artist in
+                NavigationStack {
+                    ArtistInfoView(artist: artist, manager: manager, reservesBottomAccessorySpace: false)
+                        .toolbar {
+                            if !LibraryTab.isScreenshotModeEnabled {
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    Button("Done") {
+                                        presentedScreenshotArtist = nil
+                                    }
+                                }
+                            }
+                        }
+                        .toolbar(LibraryTab.isScreenshotModeEnabled ? .hidden : .visible, for: .navigationBar)
+                }
+            }
+            .task {
+                guard LibraryTab.screenshotPresentsArtistDetail else { return }
+                try? await Task.sleep(for: .milliseconds(350))
+                presentedScreenshotArtist = manager.topArtists.first
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openMonthlyRecap)) { _ in
+                manager.refreshForRecapSequence(reason: .notificationOpen)
+            }
+    }
+
+    private var iPhoneBody: some View {
         TabView(selection: $selectedTab) {
             Tab("Songs", systemImage: "music.note.list", value: LibraryTab.songs) {
                 NavigationStack {

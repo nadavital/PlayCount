@@ -1,6 +1,7 @@
 import SwiftUI
 import MediaPlayer
 import UIKit
+import CoreImage.CIFilterBuiltins
 
 private enum ArtworkImageCache {
     private static let cache = NSCache<NSString, UIImage>()
@@ -21,6 +22,70 @@ private enum ArtworkImageCache {
 
         cache.setObject(image, forKey: key)
         return image
+    }
+}
+
+private final class ArtworkAverageColor {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+}
+
+private enum ArtworkColorCalculator {
+    static let context = CIContext(options: [.workingColorSpace: NSNull()])
+    static let cache = NSCache<NSString, ArtworkAverageColor>()
+}
+
+extension MPMediaItemArtwork {
+    func averageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
+        let pixelDimension = Int((maxDimension * UIScreen.main.scale).rounded(.up))
+        let key = "\(ObjectIdentifier(self))-\(pixelDimension)" as NSString
+        if let cached = ArtworkColorCalculator.cache.object(forKey: key) {
+            return (cached.red, cached.green, cached.blue)
+        }
+
+        let targetSize = CGSize(width: maxDimension, height: maxDimension)
+        guard let image = image(at: targetSize),
+              let inputImage = CIImage(image: image) else {
+            return nil
+        }
+
+        let filter = CIFilter.areaAverage()
+        filter.inputImage = inputImage
+        filter.extent = inputImage.extent
+
+        guard let outputImage = filter.outputImage else {
+            return nil
+        }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        ArtworkColorCalculator.context.render(
+            outputImage,
+            toBitmap: &bitmap,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: nil
+        )
+
+        guard bitmap[3] > 0 else {
+            return nil
+        }
+
+        let color = ArtworkAverageColor(
+            red: Double(bitmap[0]) / 255,
+            green: Double(bitmap[1]) / 255,
+            blue: Double(bitmap[2]) / 255
+        )
+        ArtworkColorCalculator.cache.setObject(color, forKey: key)
+
+        return (color.red, color.green, color.blue)
     }
 }
 
@@ -179,6 +244,7 @@ struct MediaListRow<Artwork: View>: View {
     let subtitle: String?
     let detail: String
     let badgeText: String
+    let subtitleProminent: Bool
     private let artwork: Artwork
 
     init(
@@ -187,6 +253,7 @@ struct MediaListRow<Artwork: View>: View {
         subtitle: String? = nil,
         detail: String,
         badgeText: String,
+        subtitleProminent: Bool = false,
         @ViewBuilder artwork: () -> Artwork
     ) {
         self.rank = rank
@@ -194,6 +261,7 @@ struct MediaListRow<Artwork: View>: View {
         self.subtitle = subtitle
         self.detail = detail
         self.badgeText = badgeText
+        self.subtitleProminent = subtitleProminent
         self.artwork = artwork()
     }
 
@@ -229,8 +297,8 @@ struct MediaListRow<Artwork: View>: View {
     private var subtitleLine: some View {
         if let subtitle, !subtitle.isEmpty {
             Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.subheadline.weight(subtitleProminent ? .semibold : .regular))
+                .foregroundStyle(subtitleProminent ? .primary : .secondary)
                 .lineLimit(1)
         } else {
             Text(" ")
@@ -409,8 +477,13 @@ private struct LibraryGlassSurfaceModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular.tint(Color.accentColor.opacity(tintOpacity)), in: .rect(cornerRadius: cornerRadius))
+            if tintOpacity > 0 {
+                content
+                    .glassEffect(.regular.tint(Color.accentColor.opacity(tintOpacity)), in: .rect(cornerRadius: cornerRadius))
+            } else {
+                content
+                    .glassEffect(.regular.tint(Color.black.opacity(0.06)), in: .rect(cornerRadius: cornerRadius))
+            }
         } else {
             content
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
