@@ -27,10 +27,19 @@ private struct NowPlayingBarContent: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(.primary)
-                Text(state.subtitle)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(state.subtitle)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                    if let playCountText {
+                        Text(playCountText)
+                            .font(.caption2.weight(.medium))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
 
             Spacer(minLength: 8)
@@ -56,5 +65,10 @@ private struct NowPlayingBarContent: View {
         .onTapGesture {
             onTap?(state)
         }
+    }
+
+    private var playCountText: String? {
+        guard let song = state.song else { return nil }
+        return "\(song.playCount.detailFormatted) plays"
     }
 }
