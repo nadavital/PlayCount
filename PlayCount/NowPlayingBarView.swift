@@ -27,34 +27,29 @@ private struct NowPlayingBarContent: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(.primary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(state.subtitle)
-                        .font(.caption)
-                        .lineLimit(1)
-                        .foregroundStyle(.secondary)
-                    if let playCountText {
-                        Text(playCountText)
-                            .font(.caption2.weight(.medium))
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+                Text(state.subtitle)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
+
+            if let playCountText {
+                Text(playCountText)
+                    .font(.caption2.weight(.medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
 
             Button(action: manager.togglePlayback) {
                 Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
                     .contentTransition(.symbolEffect(.replace))
-            }
-
-            Button(action: manager.skipForward) {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
             }
         }
         .padding(.vertical, 6)
