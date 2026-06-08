@@ -68,13 +68,51 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
 
         let phonePayloads = phoneStore.localSyncPayloads()
         XCTAssertFalse(phonePayloads.isEmpty)
-        XCTAssertTrue(phonePayloads.allSatisfy { $0.encodedRecaps != nil })
+        XCTAssertEqual(phonePayloads.filter { $0.encodedRecaps != nil }.count, 1)
         XCTAssertTrue(iPadStore.mergeSyncPayloads(phonePayloads, now: latestDate))
 
         let recap = iPadStore.recap(forMonthContaining: latestDate)
         XCTAssertEqual(recap.totalPlayDelta, 12)
         XCTAssertEqual(recap.playedSongCount, 2)
         XCTAssertEqual(recap.topSongs.map(\.title), ["Phone Favorite", "Phone Runner Up"])
+    }
+
+    func testPreviousMonthsSyncAsArchivedRecapsWithoutFullSnapshotHistory() {
+        let sourceStore = makeStore(named: "archive-source")
+        let targetStore = makeStore(named: "archive-target")
+        let aprilBaseline = date(year: 2026, month: 4, day: 1, hour: 8)
+        let aprilLatest = date(year: 2026, month: 4, day: 20, hour: 8)
+        let mayBaseline = date(year: 2026, month: 5, day: 1, hour: 8)
+        let mayLatest = date(year: 2026, month: 5, day: 8, hour: 8)
+
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Archive Song", playCount: 10)],
+            at: aprilBaseline,
+            reason: .manualRefresh
+        )
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Archive Song", playCount: 14)],
+            at: aprilLatest,
+            reason: .foreground
+        )
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Archive Song", playCount: 14)],
+            at: mayBaseline,
+            reason: .manualRefresh
+        )
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Archive Song", playCount: 17)],
+            at: mayLatest,
+            reason: .foreground
+        )
+
+        let payloads = sourceStore.localSyncPayloads()
+
+        XCTAssertEqual(payloads.count, 3)
+        XCTAssertEqual(payloads.filter { $0.encodedRecaps != nil }.count, 1)
+        XCTAssertTrue(targetStore.mergeSyncPayloads(payloads, now: mayLatest))
+        XCTAssertEqual(targetStore.recap(forMonthContaining: aprilLatest).totalPlayDelta, 4)
+        XCTAssertEqual(targetStore.recap(forMonthContaining: mayLatest).totalPlayDelta, 3)
     }
 
     func testSyncedRecapSummaryWinsWhenLocalDeviceHasDifferentEqualQualityRankings() {

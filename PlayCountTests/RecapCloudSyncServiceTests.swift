@@ -34,7 +34,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertTrue(didMerge)
         XCTAssertEqual(localStore.syncPayloads().count, 3)
         XCTAssertEqual(client.savedPayloads.count, 3)
-        XCTAssertTrue(client.savedPayloads.allSatisfy { $0.encodedRecaps != nil })
+        XCTAssertEqual(client.savedPayloads.filter { $0.encodedRecaps != nil }.count, 1)
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
@@ -100,7 +100,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         let iPadClient = FakeRecapCloudSyncClient(remotePayloads: phoneInitialClient.savedPayloads)
         _ = await RecapCloudSyncService(client: iPadClient).sync(snapshotStore: iPadStore)
         XCTAssertEqual(iPadClient.savedPayloads.count, 4)
-        XCTAssertTrue(iPadClient.savedPayloads.contains { $0.encodedRecaps != nil })
+        XCTAssertEqual(iPadClient.savedPayloads.filter { $0.encodedRecaps != nil }.count, 1)
 
         let phoneSecondClient = FakeRecapCloudSyncClient(remotePayloads: iPadClient.savedPayloads)
         _ = await RecapCloudSyncService(client: phoneSecondClient).sync(snapshotStore: phoneStore)
@@ -154,7 +154,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertEqual(client.savedPayloads.count, 4)
     }
 
-    func testSyncPreservesRemotePayloadsThatLocalCompactionWouldDrop() async {
+    func testSyncPrunesRemotePayloadsThatLocalCompactionDropsAfterMerge() async {
         let fullSourceStore = makeStore(named: "full-remote-preserved")
         let trimmedSourceStore = makeStore(named: "trimmed-remote-preserved")
         let localStore = makeStore(named: "local-remote-preserved")
@@ -183,7 +183,8 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         _ = await RecapCloudSyncService(client: client).sync(snapshotStore: localStore)
 
         XCTAssertEqual(localStore.syncPayloads().count, 1)
-        XCTAssertEqual(Set(client.savedPayloads.map(\.id)), Set(remotePayloads.map(\.id)))
+        XCTAssertEqual(Set(client.savedPayloads.map(\.id)), Set(localStore.syncPayloads().map(\.id)))
+        XCTAssertEqual(Set(client.deletedPayloadIDs), Set(remotePayloads.map(\.id)).subtracting(client.savedPayloads.map(\.id)))
     }
 
     func testSyncDoesNothingWhenICloudIsUnavailable() async {
@@ -256,13 +257,20 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         )
     }
 
-    func testMergedManifestPayloadIDsPreserveNewerRemoteManifestEntries() {
+    func testMergedManifestPayloadIDsCanStillDescribeLegacyUnion() {
         XCTAssertEqual(
             CloudKitRecapSyncClient.mergedManifestPayloadIDs(
                 existingPayloadIDs: ["older-a", "newer-phone", "older-a"],
                 uploadPayloadIDs: ["older-a", "ipad-local"]
             ),
             ["older-a", "newer-phone", "ipad-local"]
+        )
+    }
+
+    func testCurrentManifestPayloadIDsReplaceRemoteManifestEntries() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.manifestPayloadIDs(from: ["current-a", "current-b", "current-a"]),
+            ["current-a", "current-b"]
         )
     }
 
@@ -349,6 +357,7 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
     private let fetchError: Error?
     private(set) var savedPayloads: [RecapSnapshotSyncPayload] = []
     private(set) var savedPayloadCalls: [[RecapSnapshotSyncPayload]] = []
+    private(set) var deletedPayloadIDs: [String] = []
 
     init(
         isAvailable: Bool = true,
@@ -371,8 +380,9 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
         return remotePayloads
     }
 
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload]) async throws {
+    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws {
         savedPayloads = payloads
         savedPayloadCalls.append(payloads)
+        deletedPayloadIDs = deletingPayloadIDs
     }
 }
