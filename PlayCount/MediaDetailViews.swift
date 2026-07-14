@@ -244,6 +244,7 @@ struct AlbumInfoView: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
+    @State private var detailSortMetric: MediaLibraryManager.SortMetric
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     init(
@@ -256,6 +257,7 @@ struct AlbumInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
+        _detailSortMetric = State(initialValue: manager.sortMetric)
     }
 
     private var artist: TopArtist? {
@@ -263,25 +265,7 @@ struct AlbumInfoView: View {
     }
 
     private var albumSongs: [TopSong] {
-        let songs = manager.songs(for: album)
-        return songs.sorted { lhs, rhs in
-            if lhs.trackNumber > 0 && rhs.trackNumber > 0 {
-                if lhs.trackNumber == rhs.trackNumber {
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
-                return lhs.trackNumber < rhs.trackNumber
-            }
-
-            if lhs.trackNumber > 0 {
-                return true
-            }
-
-            if rhs.trackNumber > 0 {
-                return false
-            }
-
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        sortedSongs(manager.songs(for: album), by: detailSortMetric)
     }
 
     private var monthlySongs: [MonthlyRecap.RankedSong] {
@@ -289,7 +273,7 @@ struct AlbumInfoView: View {
     }
 
     private var topAlbumSongs: [TopSong] {
-        manager.songs(for: album)
+        albumSongs
     }
 
     var body: some View {
@@ -297,6 +281,8 @@ struct AlbumInfoView: View {
             VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                 AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: recapContext)
                     .frame(maxWidth: .infinity)
+
+                MediaDetailMetricPicker(selection: $detailSortMetric)
 
                 if let recapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
@@ -313,7 +299,7 @@ struct AlbumInfoView: View {
                 }
 
                 if !topAlbumSongs.isEmpty {
-                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, displayLimit: 6, recapContext: recapContext)
+                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: detailSortMetric, displayLimit: 6, recapContext: recapContext)
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -330,7 +316,7 @@ struct AlbumInfoView: View {
                                 NavigationLink {
                                     SongInfoView(song: song, manager: manager, recapContext: recapContext)
                                 } label: {
-                                    AlbumTrackRow(song: song)
+                                    AlbumTrackRow(song: song, sortMetric: detailSortMetric)
                                 }
                                 .buttonStyle(.plain)
 
@@ -398,6 +384,7 @@ struct ArtistInfoView: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
+    @State private var detailSortMetric: MediaLibraryManager.SortMetric
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private let displayLimit = 5
@@ -421,11 +408,12 @@ struct ArtistInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
+        _detailSortMetric = State(initialValue: manager.sortMetric)
     }
 
     var body: some View {
-        let songs = manager.songs(for: artist)
-        let albums = manager.albums(for: artist)
+        let songs = sortedSongs(manager.songs(for: artist), by: detailSortMetric)
+        let albums = sortedAlbums(manager.albums(for: artist), by: detailSortMetric)
         let topSongs = Array(songs.prefix(displayLimit))
         let topAlbums = Array(albums.prefix(displayLimit))
         let monthlySongs = recapContext?.songs(for: artist) ?? []
@@ -435,6 +423,8 @@ struct ArtistInfoView: View {
                 VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                     ArtistDetailHeader(artist: artist, manager: manager)
                         .frame(maxWidth: .infinity)
+
+                    MediaDetailMetricPicker(selection: $detailSortMetric)
 
                     if let recapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
@@ -457,7 +447,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if songs.count > displayLimit {
                                 NavigationLink {
-                                    ArtistSongsListView(artist: artist, manager: manager, recapContext: recapContext)
+                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: detailSortMetric, recapContext: recapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -478,7 +468,7 @@ struct ArtistInfoView: View {
                                     NavigationLink {
                                         SongInfoView(song: song, manager: manager, recapContext: recapContext)
                                     } label: {
-                                        SongRow(song: song, sortMetric: manager.sortMetric, rank: index + 1)
+                                        SongRow(song: song, sortMetric: detailSortMetric, rank: index + 1)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -514,7 +504,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if albums.count > displayLimit {
                                 NavigationLink {
-                                    ArtistAlbumsListView(artist: artist, manager: manager, recapContext: recapContext)
+                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: detailSortMetric, recapContext: recapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -535,7 +525,7 @@ struct ArtistInfoView: View {
                                     NavigationLink {
                                         AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
                                     } label: {
-                                        AlbumRow(album: album, sortMetric: manager.sortMetric, rank: index + 1)
+                                        AlbumRow(album: album, sortMetric: detailSortMetric, rank: index + 1)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -1122,8 +1112,25 @@ private struct MediaDetailGlassGroup<Content: View>: View {
     }
 }
 
+private struct MediaDetailMetricPicker: View {
+    @Binding var selection: MediaLibraryManager.SortMetric
+
+    var body: some View {
+        Picker("Metric", selection: $selection) {
+            ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
+                Label(metric.toolbarLabel, systemImage: metric.systemImageName)
+                    .tag(metric)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
 private struct AlbumTrackRow: View {
     let song: TopSong
+    let sortMetric: MediaLibraryManager.SortMetric
 
     var body: some View {
         HStack(spacing: 16) {
@@ -1145,12 +1152,14 @@ private struct AlbumTrackRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(2)
 
-                Text("\(song.playCount.detailFormatted) plays • \(song.totalPlayDuration.formattedListeningMinutes) listened")
+                Text(sortMetric.supplementaryDescription(playCount: song.playCount, duration: song.totalPlayDuration))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
+
+            MetricBadge(text: sortMetric.badgeText(playCount: song.playCount, duration: song.totalPlayDuration))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -1186,6 +1195,7 @@ private struct RelatedSongsSection: View {
     let title: String
     let songs: [TopSong]
     @ObservedObject var manager: MediaLibraryManager
+    let sortMetric: MediaLibraryManager.SortMetric
     let currentSongID: UInt64?
     let displayLimit: Int?
     let recapContext: RecapDrilldownContext?
@@ -1201,6 +1211,7 @@ private struct RelatedSongsSection: View {
         title: String,
         songs: [TopSong],
         manager: MediaLibraryManager,
+        sortMetric: MediaLibraryManager.SortMetric? = nil,
         currentSongID: UInt64? = nil,
         displayLimit: Int? = nil,
         recapContext: RecapDrilldownContext? = nil
@@ -1208,6 +1219,7 @@ private struct RelatedSongsSection: View {
         self.title = title
         self.songs = songs
         self.manager = manager
+        self.sortMetric = sortMetric ?? manager.sortMetric
         self.currentSongID = currentSongID
         self.displayLimit = displayLimit
         self.recapContext = recapContext
@@ -1244,7 +1256,7 @@ private struct RelatedSongsSection: View {
                         NavigationLink {
                             SongInfoView(song: resolvedSong, manager: manager, recapContext: recapContext)
                         } label: {
-                            SongRow(song: resolvedSong, sortMetric: manager.sortMetric, rank: rank)
+                            SongRow(song: resolvedSong, sortMetric: sortMetric, rank: rank)
                         }
                         .buttonStyle(.plain)
                     }
@@ -1274,8 +1286,8 @@ private struct RelatedSongsSection: View {
             rank: rank,
             title: song.title,
             subtitle: "This song",
-            detail: manager.sortMetric.supplementaryDescription(playCount: song.playCount, duration: song.totalPlayDuration),
-            badgeText: manager.sortMetric.badgeText(playCount: song.playCount, duration: song.totalPlayDuration),
+            detail: sortMetric.supplementaryDescription(playCount: song.playCount, duration: song.totalPlayDuration),
+            badgeText: sortMetric.badgeText(playCount: song.playCount, duration: song.totalPlayDuration),
             subtitleProminent: true
         ) {
             ArtworkView(artwork: song.artwork)
@@ -1507,10 +1519,11 @@ private struct MonthlyDetailSongDeltaRow: View {
 private struct ArtistSongsListView: View {
     let artist: TopArtist
     @ObservedObject var manager: MediaLibraryManager
+    let sortMetric: MediaLibraryManager.SortMetric
     let recapContext: RecapDrilldownContext?
 
     private var songs: [TopSong] {
-        manager.songs(for: artist)
+        sortedSongs(manager.songs(for: artist), by: sortMetric)
     }
 
     var body: some View {
@@ -1526,7 +1539,7 @@ private struct ArtistSongsListView: View {
                     NavigationLink {
                         SongInfoView(song: song, manager: manager, recapContext: recapContext)
                     } label: {
-                        SongRow(song: song, sortMetric: manager.sortMetric, rank: index + 1)
+                        SongRow(song: song, sortMetric: sortMetric, rank: index + 1)
                     }
                 }
             }
@@ -1534,6 +1547,50 @@ private struct ArtistSongsListView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Songs")
+    }
+}
+
+private func sortedSongs(_ songs: [TopSong], by metric: MediaLibraryManager.SortMetric) -> [TopSong] {
+    songs.sorted { lhs, rhs in
+        switch metric {
+        case .playCount:
+            if lhs.playCount != rhs.playCount {
+                return lhs.playCount > rhs.playCount
+            }
+            if lhs.totalPlayDuration != rhs.totalPlayDuration {
+                return lhs.totalPlayDuration > rhs.totalPlayDuration
+            }
+        case .listenTime:
+            if lhs.totalPlayDuration != rhs.totalPlayDuration {
+                return lhs.totalPlayDuration > rhs.totalPlayDuration
+            }
+            if lhs.playCount != rhs.playCount {
+                return lhs.playCount > rhs.playCount
+            }
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+}
+
+private func sortedAlbums(_ albums: [TopAlbum], by metric: MediaLibraryManager.SortMetric) -> [TopAlbum] {
+    albums.sorted { lhs, rhs in
+        switch metric {
+        case .playCount:
+            if lhs.playCount != rhs.playCount {
+                return lhs.playCount > rhs.playCount
+            }
+            if lhs.totalPlayDuration != rhs.totalPlayDuration {
+                return lhs.totalPlayDuration > rhs.totalPlayDuration
+            }
+        case .listenTime:
+            if lhs.totalPlayDuration != rhs.totalPlayDuration {
+                return lhs.totalPlayDuration > rhs.totalPlayDuration
+            }
+            if lhs.playCount != rhs.playCount {
+                return lhs.playCount > rhs.playCount
+            }
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 }
 
@@ -1547,10 +1604,11 @@ private extension String {
 private struct ArtistAlbumsListView: View {
     let artist: TopArtist
     @ObservedObject var manager: MediaLibraryManager
+    let sortMetric: MediaLibraryManager.SortMetric
     let recapContext: RecapDrilldownContext?
 
     private var albums: [TopAlbum] {
-        manager.albums(for: artist)
+        sortedAlbums(manager.albums(for: artist), by: sortMetric)
     }
 
     var body: some View {
@@ -1566,7 +1624,7 @@ private struct ArtistAlbumsListView: View {
                     NavigationLink {
                         AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
                     } label: {
-                        AlbumRow(album: album, sortMetric: manager.sortMetric, rank: index + 1)
+                        AlbumRow(album: album, sortMetric: sortMetric, rank: index + 1)
                     }
                 }
             }

@@ -1060,17 +1060,23 @@ final class MonthlyRecapSnapshotStore {
             }
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
             let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
-            let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
-                for: stored.snapshots,
+            let syncSnapshots = compactSnapshotsForCloudSync(
+                from: stored.snapshots,
                 currentDeviceIdentifier: deviceIdentifier
             )
-            return stored.snapshots.sortedForSyncPayloads().compactMap { snapshot in
-                snapshot.syncPayload(
-                    prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [],
-                    encodedRecaps: encodedRecaps,
-                    encodedYearlyRecaps: encodedYearlyRecaps
-                )
-            }
+            let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
+                for: syncSnapshots,
+                currentDeviceIdentifier: deviceIdentifier
+            )
+            return Self.attachRecapSummariesToLatestPayload(
+                syncSnapshots.sortedForSyncPayloads().compactMap { snapshot in
+                    snapshot.syncPayload(
+                        prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? []
+                    )
+                },
+                encodedRecaps: encodedRecaps,
+                encodedYearlyRecaps: encodedYearlyRecaps
+            )
             .uniquedByID()
         }
     }
@@ -1088,22 +1094,27 @@ final class MonthlyRecapSnapshotStore {
             if didChange {
                 saveLocked(stored)
             }
-            let localSnapshots = canonicalSnapshots(stored.snapshots.filter {
-                $0.belongsToLocalDevice(currentDeviceIdentifier: deviceIdentifier)
-            })
+            let localSnapshots = compactSnapshotsForCloudSync(
+                from: stored.snapshots.filter {
+                    $0.belongsToLocalDevice(currentDeviceIdentifier: deviceIdentifier)
+                },
+                currentDeviceIdentifier: deviceIdentifier
+            )
             let prioritySongIDs = syncPrioritySongIDsBySnapshotKey(
                 for: localSnapshots,
                 currentDeviceIdentifier: deviceIdentifier
             )
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
             let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
-            return localSnapshots.sortedForSyncPayloads().compactMap { snapshot in
-                snapshot.syncPayload(
-                    prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? [],
-                    encodedRecaps: encodedRecaps,
-                    encodedYearlyRecaps: encodedYearlyRecaps
-                )
-            }
+            return Self.attachRecapSummariesToLatestPayload(
+                localSnapshots.sortedForSyncPayloads().compactMap { snapshot in
+                    snapshot.syncPayload(
+                        prioritySongIDs: prioritySongIDs[snapshot.syncPayloadKey] ?? []
+                    )
+                },
+                encodedRecaps: encodedRecaps,
+                encodedYearlyRecaps: encodedYearlyRecaps
+            )
             .uniquedByID()
         }
     }
@@ -1255,6 +1266,70 @@ final class MonthlyRecapSnapshotStore {
 
         stored.snapshots = snapshots
         return true
+    }
+
+    private func compactSnapshotsForCloudSync(
+        from snapshots: [LibrarySnapshot],
+        currentDeviceIdentifier: String
+    ) -> [LibrarySnapshot] {
+        let retainedSnapshots = retainedCanonicalSnapshots(from: snapshots, now: Date())
+        let streams = Dictionary(grouping: retainedSnapshots.sortedForSyncPayloads()) {
+            $0.logicalDeviceKey(fallbackDeviceIdentifier: currentDeviceIdentifier)
+        }
+
+        var syncSnapshots: [LibrarySnapshot] = []
+        for stream in streams.values {
+            let ordered = canonicalSnapshots(stream)
+            guard let latest = ordered.last else { continue }
+            let latestMonth = calendar.startOfMonth(containing: latest.capturedAt)
+            let monthSnapshots = ordered.filter {
+                calendar.startOfMonth(containing: $0.capturedAt) == latestMonth
+            }
+            if let baseline = ordered.last(where: { $0.capturedAt < latestMonth }) {
+                syncSnapshots.append(baseline)
+            }
+            syncSnapshots.append(contentsOf: monthSnapshots)
+        }
+
+        return canonicalSnapshots(syncSnapshots)
+    }
+
+    private static func attachRecapSummariesToLatestPayload(
+        _ payloads: [RecapSnapshotSyncPayload],
+        encodedRecaps: Data?,
+        encodedYearlyRecaps: Data?
+    ) -> [RecapSnapshotSyncPayload] {
+        guard !payloads.isEmpty,
+              encodedRecaps != nil || encodedYearlyRecaps != nil else {
+            return payloads
+        }
+
+        let latestPayloadID = payloads.max {
+            if $0.capturedAt != $1.capturedAt {
+                return $0.capturedAt < $1.capturedAt
+            }
+            return $0.id < $1.id
+        }?.id
+
+        return payloads.map { payload in
+            guard payload.id == latestPayloadID else {
+                return RecapSnapshotSyncPayload(
+                    id: payload.id,
+                    capturedAt: payload.capturedAt,
+                    counterSignature: payload.counterSignature,
+                    encodedSnapshot: payload.encodedSnapshot
+                )
+            }
+
+            return RecapSnapshotSyncPayload(
+                id: payload.id,
+                capturedAt: payload.capturedAt,
+                counterSignature: payload.counterSignature,
+                encodedSnapshot: payload.encodedSnapshot,
+                encodedRecaps: encodedRecaps,
+                encodedYearlyRecaps: encodedYearlyRecaps
+            )
+        }
     }
 
     private func updateSyncedRecaps(in stored: inout StoredSnapshots, snapshots: [LibrarySnapshot]) -> Bool {

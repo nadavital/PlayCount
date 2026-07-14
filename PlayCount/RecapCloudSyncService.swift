@@ -4,7 +4,7 @@ import Foundation
 protocol RecapCloudSyncClient {
     func isAvailable() async -> Bool
     func fetchSnapshotPayloads() async throws -> [RecapSnapshotSyncPayload]
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload]) async throws
+    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws
 }
 
 final class RecapCloudSyncService {
@@ -44,14 +44,15 @@ final class RecapCloudSyncService {
             #endif
             let didMergeRemote = snapshotStore.mergeSyncPayloads(remotePayloads)
             if uploadsEnabled {
-                let uploadPayloads = Self.uploadPayloads(
-                    localPayloads: snapshotStore.localSyncPayloads(),
-                    remotePayloads: remotePayloads
-                )
+                let uploadPayloads = snapshotStore.syncPayloads()
+                let uploadPayloadIDs = Set(uploadPayloads.map(\.id))
+                let deletingPayloadIDs = remotePayloads
+                    .map(\.id)
+                    .filter { !uploadPayloadIDs.contains($0) }
                 #if DEBUG
-                print("Recap CloudKit sync saving \(uploadPayloads.count) merged payloads; didMergeRemote=\(didMergeRemote)")
+                print("Recap CloudKit sync saving \(uploadPayloads.count) compact payloads, deleting \(deletingPayloadIDs.count); didMergeRemote=\(didMergeRemote)")
                 #endif
-                try await client.saveSnapshotPayloads(uploadPayloads)
+                try await client.saveSnapshotPayloads(uploadPayloads, deletingPayloadIDs: deletingPayloadIDs)
             } else {
                 #if DEBUG
                 print("Recap CloudKit sync upload skipped; didMergeRemote=\(didMergeRemote)")
@@ -66,26 +67,6 @@ final class RecapCloudSyncService {
             print("Recap CloudKit sync failed: \(error)")
             #endif
             return false
-        }
-    }
-
-    private static func uploadPayloads(
-        localPayloads: [RecapSnapshotSyncPayload],
-        remotePayloads: [RecapSnapshotSyncPayload]
-    ) -> [RecapSnapshotSyncPayload] {
-        var payloadsByID: [String: RecapSnapshotSyncPayload] = [:]
-        for payload in remotePayloads {
-            payloadsByID[payload.id] = payload
-        }
-        for payload in localPayloads {
-            payloadsByID[payload.id] = payload
-        }
-
-        return payloadsByID.values.sorted {
-            if $0.capturedAt != $1.capturedAt {
-                return $0.capturedAt < $1.capturedAt
-            }
-            return $0.id < $1.id
         }
     }
 
@@ -169,8 +150,8 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
     }
 
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload]) async throws {
-        guard !payloads.isEmpty else { return }
+    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws {
+        guard !payloads.isEmpty || !deletingPayloadIDs.isEmpty else { return }
         try await saveRecordZoneIfNeeded()
 
         var seenPayloadIDs = Set<String>()
@@ -193,8 +174,15 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             return record
         }
 
+        let recordIDsToDelete = deletingPayloadIDs.map {
+            CKRecord.ID(recordName: $0, zoneID: Self.recordZoneID)
+        }
+
         for chunk in records.chunked(into: saveBatchSize) {
-            try await modify(recordsToSave: chunk)
+            try await modify(recordsToSave: chunk, recordIDsToDelete: [])
+        }
+        for chunk in recordIDsToDelete.chunked(into: saveBatchSize) {
+            try await modify(recordsToSave: [], recordIDsToDelete: chunk)
         }
 
         try await saveManifest(payloadIDs: Self.manifestPayloadIDs(for: uniquePayloads))
@@ -336,9 +324,16 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
     }
 
-    private func modify(recordsToSave records: [CKRecord], savePolicy: CKModifyRecordsOperation.RecordSavePolicy = .allKeys) async throws {
+    private func modify(
+        recordsToSave records: [CKRecord],
+        recordIDsToDelete: [CKRecord.ID] = [],
+        savePolicy: CKModifyRecordsOperation.RecordSavePolicy = .allKeys
+    ) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
+            let operation = CKModifyRecordsOperation(
+                recordsToSave: records.isEmpty ? nil : records,
+                recordIDsToDelete: recordIDsToDelete.isEmpty ? nil : recordIDsToDelete
+            )
             operation.savePolicy = savePolicy
             operation.qualityOfService = .utility
             let errors = CloudKitRecordSaveErrors()
@@ -377,13 +372,9 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             existingRecord = nil
         }
 
-        let existingPayloadIDs = existingRecord.map(Self.payloadIDs(from:)) ?? []
-        let mergedPayloadIDs = Self.mergedManifestPayloadIDs(
-            existingPayloadIDs: existingPayloadIDs,
-            uploadPayloadIDs: payloadIDs
-        )
+        let manifestPayloadIDs = Self.manifestPayloadIDs(from: payloadIDs)
         let record = existingRecord ?? CKRecord(recordType: manifestRecordType, recordID: recordID)
-        record[Field.payloadIDs] = try JSONEncoder().encode(mergedPayloadIDs) as NSData
+        record[Field.payloadIDs] = try JSONEncoder().encode(manifestPayloadIDs) as NSData
 
         do {
             try await modify(
@@ -396,7 +387,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             return
         }
         #if DEBUG
-        print("Recap CloudKit manifest saved \(mergedPayloadIDs.count) payload IDs")
+        print("Recap CloudKit manifest saved \(manifestPayloadIDs.count) payload IDs")
         #endif
     }
 
@@ -452,8 +443,12 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
     }
 
     static func manifestPayloadIDs(for payloads: [RecapSnapshotSyncPayload]) -> [String] {
+        manifestPayloadIDs(from: payloads.map(\.id))
+    }
+
+    static func manifestPayloadIDs(from payloadIDs: [String]) -> [String] {
         var manifestPayloadIDs = OrderedUniqueStrings()
-        manifestPayloadIDs.append(contentsOf: payloads.map(\.id))
+        manifestPayloadIDs.append(contentsOf: payloadIDs)
         return manifestPayloadIDs.values
     }
 

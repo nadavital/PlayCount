@@ -32,20 +32,24 @@ private struct NowPlayingBarContent: View {
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
+
+            if let playCountText {
+                Text(playCountText)
+                    .font(.caption2.weight(.medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
 
             Button(action: manager.togglePlayback) {
                 Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.primary)
                     .contentTransition(.symbolEffect(.replace))
-            }
-
-            Button(action: manager.skipForward) {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
             }
         }
         .padding(.vertical, 6)
@@ -56,5 +60,10 @@ private struct NowPlayingBarContent: View {
         .onTapGesture {
             onTap?(state)
         }
+    }
+
+    private var playCountText: String? {
+        guard let song = state.song else { return nil }
+        return "\(song.playCount.detailFormatted) plays"
     }
 }
