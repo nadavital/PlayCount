@@ -257,19 +257,7 @@ private struct AuthorizedLibraryView: View {
     }
 
     private var sortPicker: some View {
-        Menu {
-            ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
-                Button {
-                    manager.sortMetric = metric
-                } label: {
-                    Label(metric.menuTitle, systemImage: metric.systemImageName)
-                }
-            }
-        } label: {
-            Image(systemName: manager.sortMetric.systemImageName)
-                .accessibilityLabel(Text(manager.sortMetric.toolbarLabel))
-                .imageScale(.medium)
-        }
+        LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
     private var refreshButton: some View {

@@ -11,6 +11,7 @@ struct MonthlyRecapView: View {
     @State private var monthDragAxis: MonthDragAxis = .undecided
     @State private var isSuppressingRecapNavigation = false
     @State private var recapNavigationSuppressionToken = 0
+    @State private var selectedRecapDestination: RecapNavigationDestination?
     @State private var isUsingYearlyBreakdownStrip = false
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
     @State private var cachedArtworkHighlightsSignature = ""
@@ -25,6 +26,12 @@ struct MonthlyRecapView: View {
         case undecided
         case horizontal
         case vertical
+    }
+
+    private enum RecapNavigationDestination: Hashable {
+        case song(id: UInt64, title: String, artist: String)
+        case album(id: UInt64, title: String, artist: String)
+        case artist(id: UInt64, name: String)
     }
 
     private var recap: MonthlyRecap {
@@ -418,6 +425,9 @@ struct MonthlyRecapView: View {
         .onChange(of: manager.monthlyRecap.monthStart) { _, _ in
             syncSelectedMonthIfNeeded()
         }
+        .navigationDestination(item: $selectedRecapDestination) { destination in
+            recapDestinationView(for: destination)
+        }
     }
 
     private func applyPendingRecapMonth() {
@@ -540,10 +550,11 @@ struct MonthlyRecapView: View {
         } content: {
             ForEach(Array(recap.topSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
-                    NavigationLink {
-                        SongInfoView(song: topSong, manager: manager, recapContext: recapDrilldownContext)
+                    Button {
+                        openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
                     } label: {
                         RecapSongRow(song: song, artwork: resolvedArtwork(for: song))
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -557,10 +568,11 @@ struct MonthlyRecapView: View {
         RecapRankingSection(title: "Biggest Gainers") {
             ForEach(recap.biggestGainers.prefix(5)) { song in
                 if let topSong = resolvedTopSong(for: song) {
-                    NavigationLink {
-                        SongInfoView(song: topSong, manager: manager, recapContext: recapDrilldownContext)
+                    Button {
+                        openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
                     } label: {
                         RecapMovementRow(song: song, artwork: resolvedArtwork(for: song))
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -574,10 +586,11 @@ struct MonthlyRecapView: View {
         RecapRankingSection(title: "Top New Songs") {
             ForEach(Array(recap.topNewSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
-                    NavigationLink {
-                        SongInfoView(song: topSong, manager: manager, recapContext: recapDrilldownContext)
+                    Button {
+                        openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
                     } label: {
                         RecapSongRow(song: song, artwork: resolvedArtwork(for: song))
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -597,10 +610,11 @@ struct MonthlyRecapView: View {
         } content: {
             ForEach(Array(recap.topAlbums.prefix(5).enumerated()), id: \.element.id) { index, album in
                 if let topAlbum = resolvedTopAlbum(for: album) {
-                    NavigationLink {
-                        AlbumInfoView(album: topAlbum, manager: manager, recapContext: recapDrilldownContext)
+                    Button {
+                        openRecapDestination(.album(id: topAlbum.id, title: topAlbum.title, artist: topAlbum.artist))
                     } label: {
                         RecapGroupRow(group: album, systemImage: "rectangle.stack.fill", artwork: resolvedArtwork(for: album, systemImage: "rectangle.stack.fill"))
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -620,10 +634,11 @@ struct MonthlyRecapView: View {
         } content: {
             ForEach(Array(recap.topArtists.prefix(5).enumerated()), id: \.element.id) { index, artist in
                 if let topArtist = resolvedTopArtist(for: artist) {
-                    NavigationLink {
-                        ArtistInfoView(artist: topArtist, manager: manager, recapContext: recapDrilldownContext)
+                    Button {
+                        openRecapDestination(.artist(id: topArtist.id, name: topArtist.name))
                     } label: {
                         RecapGroupRow(group: artist, systemImage: "person.fill", artwork: resolvedArtwork(for: artist, systemImage: "person.fill"))
+                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -791,7 +806,7 @@ struct MonthlyRecapView: View {
     }
 
     private var monthSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
+        DragGesture(minimumDistance: 5)
             .onChanged { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
@@ -831,8 +846,8 @@ struct MonthlyRecapView: View {
                 guard !isUsingYearlyBreakdownStrip else { return }
                 guard dragAxis == .horizontal else { return }
 
-                guard abs(horizontal) > 64,
-                      abs(horizontal) > abs(vertical) * 1.35 else {
+                guard abs(horizontal) > 48,
+                      abs(horizontal) > abs(vertical) * 1.25 else {
                     return
                 }
 
@@ -864,7 +879,7 @@ struct MonthlyRecapView: View {
     private func resolvedMonthDragAxis(horizontal: CGFloat, vertical: CGFloat) -> MonthDragAxis {
         let absoluteHorizontal = abs(horizontal)
         let absoluteVertical = abs(vertical)
-        guard max(absoluteHorizontal, absoluteVertical) >= 8 else {
+        guard max(absoluteHorizontal, absoluteVertical) >= 5 else {
             return .undecided
         }
 
@@ -898,6 +913,35 @@ struct MonthlyRecapView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
             guard token == recapNavigationSuppressionToken else { return }
             isSuppressingRecapNavigation = false
+        }
+    }
+
+    private func openRecapDestination(_ destination: RecapNavigationDestination) {
+        guard !isSuppressingRecapNavigation, monthDragAxis != .horizontal else { return }
+        selectedRecapDestination = destination
+    }
+
+    @ViewBuilder
+    private func recapDestinationView(for destination: RecapNavigationDestination) -> some View {
+        switch destination {
+        case .song(let id, let title, let artist):
+            if let song = manager.song(withPersistentID: id) ?? manager.song(matchingTitle: title, artist: artist) {
+                SongInfoView(song: song, manager: manager, recapContext: recapDrilldownContext)
+            } else {
+                RecapUnavailableDetail(title: title)
+            }
+        case .album(let id, let title, let artist):
+            if let album = manager.album(withPersistentID: id) ?? manager.album(matchingTitle: title, artist: artist) {
+                AlbumInfoView(album: album, manager: manager, recapContext: recapDrilldownContext)
+            } else {
+                RecapUnavailableDetail(title: title)
+            }
+        case .artist(let id, let name):
+            if let artist = manager.artist(withPersistentID: id) ?? manager.artist(matchingName: name) {
+                ArtistInfoView(artist: artist, manager: manager, recapContext: recapDrilldownContext)
+            } else {
+                RecapUnavailableDetail(title: name)
+            }
         }
     }
 

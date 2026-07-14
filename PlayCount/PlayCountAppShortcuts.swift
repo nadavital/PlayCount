@@ -14,6 +14,26 @@ struct PlayCountAppShortcuts: AppShortcutsProvider {
         )
 
         AppShortcut(
+            intent: TopAlbumsIntent(),
+            phrases: [
+                "What are my top albums in \(.applicationName)",
+                "Show my most played albums in \(.applicationName)"
+            ],
+            shortTitle: "Top Albums",
+            systemImageName: "rectangle.stack"
+        )
+
+        AppShortcut(
+            intent: TopArtistsIntent(),
+            phrases: [
+                "Who are my top artists in \(.applicationName)",
+                "Show my most played artists in \(.applicationName)"
+            ],
+            shortTitle: "Top Artists",
+            systemImageName: "person.2"
+        )
+
+        AppShortcut(
             intent: SongPlayCountIntent(),
             phrases: [
                 "How many times did I play \(\.$song) in \(.applicationName)",

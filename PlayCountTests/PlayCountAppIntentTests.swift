@@ -22,6 +22,26 @@ final class PlayCountAppIntentTests: XCTestCase {
         XCTAssertEqual(PlayCountIntentRanking.topSongs(from: [longest, mostPlayed], metric: .listeningTime, limit: 1).map(\.id), [2])
     }
 
+    func testAlbumAndArtistRankingSupportsPlaysAndListeningTime() {
+        let playedAlbum = makeAlbum(id: 1, title: "Played Album", plays: 12, listeningTime: 720)
+        let listenedAlbum = makeAlbum(id: 2, title: "Listened Album", plays: 3, listeningTime: 1_800)
+        let playedArtist = makeArtist(id: 3, name: "Played Artist", plays: 20, listeningTime: 1_200)
+        let listenedArtist = makeArtist(id: 4, name: "Listened Artist", plays: 8, listeningTime: 3_600)
+
+        XCTAssertEqual(PlayCountIntentRanking.topAlbums(from: [listenedAlbum, playedAlbum], metric: .plays, limit: 1).map(\.id), [1])
+        XCTAssertEqual(PlayCountIntentRanking.topAlbums(from: [listenedAlbum, playedAlbum], metric: .listeningTime, limit: 1).map(\.id), [2])
+        XCTAssertEqual(PlayCountIntentRanking.topArtists(from: [listenedArtist, playedArtist], metric: .plays, limit: 1).map(\.id), [3])
+        XCTAssertEqual(PlayCountIntentRanking.topArtists(from: [listenedArtist, playedArtist], metric: .listeningTime, limit: 1).map(\.id), [4])
+    }
+
+    func testAlbumAndArtistEntitiesExposeListeningTime() {
+        let album = AlbumEntity(album: makeAlbum(id: 7, title: "Album", plays: 4, listeningTime: 900))
+        let artist = ArtistEntity(artist: makeArtist(id: 8, name: "Artist", plays: 5, listeningTime: 1_200))
+
+        XCTAssertEqual(album.listeningTime, 900)
+        XCTAssertEqual(artist.listeningTime, 1_200)
+    }
+
     func testSongSearchMatchesTitleArtistAndAlbumAndRanksResults() {
         let titleMatch = makeSong(id: 1, title: "Northern Sky", artist: "Nick Drake", album: "Bryter Layter", plays: 9)
         let artistMatch = makeSong(id: 2, title: "Pink Moon", artist: "Nick Drake", album: "Pink Moon", plays: 20)
@@ -172,6 +192,28 @@ final class PlayCountAppIntentTests: XCTestCase {
             topAlbums: [],
             biggestGainers: [],
             topNewSongs: []
+        )
+    }
+
+    private func makeAlbum(id: UInt64, title: String, plays: Int, listeningTime: TimeInterval) -> TopAlbum {
+        TopAlbum(
+            id: id,
+            title: title,
+            artist: "Artist",
+            playCount: plays,
+            totalPlayDuration: listeningTime,
+            artwork: nil,
+            artistPersistentID: id + 100
+        )
+    }
+
+    private func makeArtist(id: UInt64, name: String, plays: Int, listeningTime: TimeInterval) -> TopArtist {
+        TopArtist(
+            id: id,
+            name: name,
+            playCount: plays,
+            totalPlayDuration: listeningTime,
+            artwork: nil
         )
     }
 }

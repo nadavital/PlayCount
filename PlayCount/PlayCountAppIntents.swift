@@ -180,6 +180,9 @@ struct AlbumEntity: IndexedEntity {
     @Property(title: "Play Count")
     var playCount: Int
 
+    @Property(title: "Listening Time")
+    var listeningTime: TimeInterval
+
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(title)", subtitle: "\(artist)", image: .init(systemName: "square.stack"))
     }
@@ -189,6 +192,7 @@ struct AlbumEntity: IndexedEntity {
         title = album.title
         artist = album.artist
         playCount = album.playCount
+        listeningTime = album.totalPlayDuration
     }
 }
 
@@ -204,6 +208,9 @@ struct ArtistEntity: IndexedEntity {
     @Property(title: "Play Count")
     var playCount: Int
 
+    @Property(title: "Listening Time")
+    var listeningTime: TimeInterval
+
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(name)", image: .init(systemName: "music.mic"))
     }
@@ -212,6 +219,7 @@ struct ArtistEntity: IndexedEntity {
         id = String(artist.id)
         name = artist.name
         playCount = artist.playCount
+        listeningTime = artist.totalPlayDuration
     }
 }
 
@@ -243,7 +251,7 @@ struct SongEntityQuery: EntityStringQuery, EnumerableEntityQuery {
     }
 }
 
-struct AlbumEntityQuery: EntityStringQuery {
+struct AlbumEntityQuery: EntityStringQuery, EnumerableEntityQuery {
     @available(iOS 27.0, *)
     static var allowedExecutionTargets: IntentExecutionTargets { .main }
     private let library = PlayCountIntentLibrary()
@@ -264,9 +272,13 @@ struct AlbumEntityQuery: EntityStringQuery {
     func suggestedEntities() async throws -> [AlbumEntity] {
         try library.albums().sorted { $0.playCount > $1.playCount }.prefix(20).map(AlbumEntity.init)
     }
+
+    func allEntities() async throws -> [AlbumEntity] {
+        try library.albums().map(AlbumEntity.init)
+    }
 }
 
-struct ArtistEntityQuery: EntityStringQuery {
+struct ArtistEntityQuery: EntityStringQuery, EnumerableEntityQuery {
     @available(iOS 27.0, *)
     static var allowedExecutionTargets: IntentExecutionTargets { .main }
     private let library = PlayCountIntentLibrary()
@@ -286,6 +298,10 @@ struct ArtistEntityQuery: EntityStringQuery {
 
     func suggestedEntities() async throws -> [ArtistEntity] {
         try library.artists().sorted { $0.playCount > $1.playCount }.prefix(20).map(ArtistEntity.init)
+    }
+
+    func allEntities() async throws -> [ArtistEntity] {
+        try library.artists().map(ArtistEntity.init)
     }
 }
 
@@ -330,6 +346,36 @@ enum PlayCountIntentRanking {
             limit: limit
         )
     }
+
+    static func topAlbums(from albums: [TopAlbum], metric: RankingMetric, limit: Int) -> [TopAlbum] {
+        Array(albums.sorted {
+            switch metric {
+            case .plays:
+                return $0.playCount == $1.playCount
+                    ? $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                    : $0.playCount > $1.playCount
+            case .listeningTime:
+                return $0.totalPlayDuration == $1.totalPlayDuration
+                    ? $0.title.localizedStandardCompare($1.title) == .orderedAscending
+                    : $0.totalPlayDuration > $1.totalPlayDuration
+            }
+        }.prefix(max(0, limit)))
+    }
+
+    static func topArtists(from artists: [TopArtist], metric: RankingMetric, limit: Int) -> [TopArtist] {
+        Array(artists.sorted {
+            switch metric {
+            case .plays:
+                return $0.playCount == $1.playCount
+                    ? $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                    : $0.playCount > $1.playCount
+            case .listeningTime:
+                return $0.totalPlayDuration == $1.totalPlayDuration
+                    ? $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                    : $0.totalPlayDuration > $1.totalPlayDuration
+            }
+        }.prefix(max(0, limit)))
+    }
 }
 
 struct TopSongsIntent: AppIntent {
@@ -353,6 +399,66 @@ struct TopSongsIntent: AppIntent {
         let entities = PlayCountIntentRanking.topSongs(from: songs, metric: metric, limit: limit).map(SongEntity.init)
         let names = entities.map(\.title).formatted()
         return .result(value: entities, dialog: "Your top songs are \(names).", view: TopSongsSnippet(songs: entities, metric: metric))
+    }
+}
+
+struct TopAlbumsIntent: AppIntent {
+    @available(iOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+    static let title: LocalizedStringResource = "Get Top Albums"
+    static let description = IntentDescription("Gets your highest-ranked albums from your media library.", categoryName: "Listening Stats")
+
+    @Parameter(title: "Number of Albums", default: 5, inclusiveRange: (1, 20))
+    var limit: Int
+
+    @Parameter(title: "Rank By", default: .plays)
+    var metric: RankingMetric
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Get the top \(\.$limit) albums by \(\.$metric)")
+    }
+
+    func perform() async throws -> some IntentResult & ReturnsValue<[AlbumEntity]> & ProvidesDialog & ShowsSnippetView {
+        let albums = try PlayCountIntentRanking.topAlbums(
+            from: PlayCountIntentLibrary().albums(),
+            metric: metric,
+            limit: limit
+        ).map(AlbumEntity.init)
+        return .result(
+            value: albums,
+            dialog: "Your top albums are \(albums.map(\.title).formatted()).",
+            view: TopAlbumsSnippet(albums: albums, metric: metric)
+        )
+    }
+}
+
+struct TopArtistsIntent: AppIntent {
+    @available(iOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+    static let title: LocalizedStringResource = "Get Top Artists"
+    static let description = IntentDescription("Gets your highest-ranked artists from your media library.", categoryName: "Listening Stats")
+
+    @Parameter(title: "Number of Artists", default: 5, inclusiveRange: (1, 20))
+    var limit: Int
+
+    @Parameter(title: "Rank By", default: .plays)
+    var metric: RankingMetric
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Get the top \(\.$limit) artists by \(\.$metric)")
+    }
+
+    func perform() async throws -> some IntentResult & ReturnsValue<[ArtistEntity]> & ProvidesDialog & ShowsSnippetView {
+        let artists = try PlayCountIntentRanking.topArtists(
+            from: PlayCountIntentLibrary().artists(),
+            metric: metric,
+            limit: limit
+        ).map(ArtistEntity.init)
+        return .result(
+            value: artists,
+            dialog: "Your top artists are \(artists.map(\.name).formatted()).",
+            view: TopArtistsSnippet(artists: artists, metric: metric)
+        )
     }
 }
 
@@ -522,6 +628,49 @@ private struct TopSongsSnippet: View {
                     }
                     Spacer()
                     Text(metric == .plays ? "\(song.playCount)" : song.listeningTime.formattedListeningMinutes)
+                        .font(.subheadline.weight(.semibold)).monospacedDigit()
+                }
+            }
+        }
+        .padding()
+    }
+}
+
+private struct TopAlbumsSnippet: View {
+    let albums: [AlbumEntity]
+    let metric: RankingMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
+                HStack(spacing: 10) {
+                    Text(index + 1, format: .number).font(.headline).monospacedDigit()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(album.title).font(.headline).lineLimit(1)
+                        Text(album.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Text(metric == .plays ? "\(album.playCount)" : album.listeningTime.formattedListeningMinutes)
+                        .font(.subheadline.weight(.semibold)).monospacedDigit()
+                }
+            }
+        }
+        .padding()
+    }
+}
+
+private struct TopArtistsSnippet: View {
+    let artists: [ArtistEntity]
+    let metric: RankingMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(artists.enumerated()), id: \.element.id) { index, artist in
+                HStack(spacing: 10) {
+                    Text(index + 1, format: .number).font(.headline).monospacedDigit()
+                    Text(artist.name).font(.headline).lineLimit(1)
+                    Spacer()
+                    Text(metric == .plays ? "\(artist.playCount)" : artist.listeningTime.formattedListeningMinutes)
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
                 }
             }

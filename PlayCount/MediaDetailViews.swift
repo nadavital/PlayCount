@@ -294,7 +294,7 @@ struct AlbumInfoView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                 AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: recapContext)
                     .frame(maxWidth: .infinity)
 
@@ -363,7 +363,7 @@ struct AlbumInfoView: View {
                 }
             }
             .padding(.horizontal, isRegularWidth ? 36 : 24)
-            .padding(.top, isRegularWidth ? 28 : 40)
+            .padding(.top, isRegularWidth ? 28 : 12)
             .padding(.bottom, bottomPadding)
             .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
@@ -372,7 +372,16 @@ struct AlbumInfoView: View {
         .background(MediaDetailBackground(artwork: album.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(album.title)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                detailMetricPicker
+            }
+        }
         .playCountAlbumEntityIdentifier(album)
+    }
+
+    private var detailMetricPicker: some View {
+        LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
     private var isRegularWidth: Bool {
@@ -423,7 +432,7 @@ struct ArtistInfoView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 32) {
+                VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                     ArtistDetailHeader(artist: artist, manager: manager)
                         .frame(maxWidth: .infinity)
 
@@ -555,7 +564,7 @@ struct ArtistInfoView: View {
                     }
                 }
                 .padding(.horizontal, isRegularWidth ? 36 : 24)
-                .padding(.top, isRegularWidth ? 28 : 40)
+                .padding(.top, isRegularWidth ? 28 : 12)
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
@@ -570,7 +579,16 @@ struct ArtistInfoView: View {
         .background(MediaDetailBackground(artwork: artist.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(artist.name)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                detailMetricPicker
+            }
+        }
         .playCountArtistEntityIdentifier(artist)
+    }
+
+    private var detailMetricPicker: some View {
+        LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
     private var isRegularWidth: Bool {
@@ -792,29 +810,18 @@ private struct AlbumDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        isRegularWidth ? 260 : 320
+        isRegularWidth ? 220 : 136
     }
 
     var body: some View {
         MediaDetailGlassGroup {
-            if isRegularWidth {
-                HStack(alignment: .center, spacing: 28) {
-                    heroArtwork
-                        .frame(width: artworkSize)
+            HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
+                heroArtwork
+                    .frame(width: artworkSize)
 
-                    VStack(spacing: 16) {
-                        infoCard
-                        metrics
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                VStack(spacing: 28) {
-                    heroArtwork
-                    infoCard
-                    metrics
-                }
+                infoCard
             }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -827,33 +834,35 @@ private struct AlbumDetailHeader: View {
     }
 
     private var infoCard: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 8) {
+        VStack(alignment: isRegularWidth ? .center : .leading, spacing: isRegularWidth ? 12 : 8) {
+            VStack(alignment: isRegularWidth ? .center : .leading, spacing: 4) {
                 Text(album.title)
-                    .font(.system(size: isRegularWidth ? 26 : 24, weight: .bold))
-                    .multilineTextAlignment(.center)
+                    .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
+                    .multilineTextAlignment(isRegularWidth ? .center : .leading)
                     .foregroundStyle(.primary)
-                    .lineLimit(3)
+                    .lineLimit(2)
 
                 artistLink
             }
 
+            metrics
+
             Button(action: handlePlayTapped) {
-                HStack(spacing: 10) {
+                HStack(spacing: 7) {
                     Image(systemName: playButtonIcon)
                         .font(.body.weight(.semibold))
                     Text(playButtonTitle)
                         .font(.subheadline.weight(.semibold))
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 11)
+                .padding(.horizontal, isRegularWidth ? 32 : 16)
+                .padding(.vertical, isRegularWidth ? 11 : 8)
             }
             .glassEffect(.regular.interactive(), in: Capsule())
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+        .padding(.horizontal, isRegularWidth ? 18 : 12)
+        .padding(.vertical, isRegularWidth ? 18 : 10)
+        .libraryGlassSurface(cornerRadius: isRegularWidth ? 20 : 18, tintOpacity: 0)
     }
 
     private var metrics: some View {
@@ -862,8 +871,7 @@ private struct AlbumDetailHeader: View {
             playCount: album.playCount,
             duration: album.totalPlayDuration,
             playCountRank: manager.playCountRank(of: album),
-            listenTimeRank: manager.listenTimeRank(of: album),
-            onSelectMetric: { manager.sortMetric = $0 }
+            listenTimeRank: manager.listenTimeRank(of: album)
         )
     }
 
@@ -876,7 +884,7 @@ private struct AlbumDetailHeader: View {
                 Text(artist.name)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(isRegularWidth ? .center : .leading)
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
@@ -934,29 +942,18 @@ private struct ArtistDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        isRegularWidth ? 260 : 320
+        isRegularWidth ? 220 : 136
     }
 
     var body: some View {
         MediaDetailGlassGroup {
-            if isRegularWidth {
-                HStack(alignment: .center, spacing: 28) {
-                    heroArtwork
-                        .frame(width: artworkSize)
+            HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
+                heroArtwork
+                    .frame(width: artworkSize)
 
-                    VStack(spacing: 16) {
-                        infoCard
-                        metrics
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                VStack(spacing: 28) {
-                    heroArtwork
-                    infoCard
-                    metrics
-                }
+                infoCard
             }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -969,29 +966,31 @@ private struct ArtistDetailHeader: View {
     }
 
     private var infoCard: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: isRegularWidth ? .center : .leading, spacing: isRegularWidth ? 12 : 8) {
             Text(artist.name)
-                .font(.system(size: isRegularWidth ? 26 : 24, weight: .bold))
-                .multilineTextAlignment(.center)
+                .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
+                .multilineTextAlignment(isRegularWidth ? .center : .leading)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
 
+            metrics
+
             Button(action: handlePlayTapped) {
-                HStack(spacing: 10) {
+                HStack(spacing: 7) {
                     Image(systemName: playButtonIcon)
                         .font(.body.weight(.semibold))
                     Text(playButtonTitle)
                         .font(.subheadline.weight(.semibold))
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 11)
+                .padding(.horizontal, isRegularWidth ? 32 : 16)
+                .padding(.vertical, isRegularWidth ? 11 : 8)
             }
             .glassEffect(.regular.interactive(), in: Capsule())
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+        .padding(.horizontal, isRegularWidth ? 18 : 12)
+        .padding(.vertical, isRegularWidth ? 18 : 10)
+        .libraryGlassSurface(cornerRadius: isRegularWidth ? 20 : 18, tintOpacity: 0)
     }
 
     private var metrics: some View {
@@ -1000,8 +999,7 @@ private struct ArtistDetailHeader: View {
             playCount: artist.playCount,
             duration: artist.totalPlayDuration,
             playCountRank: manager.playCountRank(of: artist),
-            listenTimeRank: manager.listenTimeRank(of: artist),
-            onSelectMetric: { manager.sortMetric = $0 }
+            listenTimeRank: manager.listenTimeRank(of: artist)
         )
     }
 
@@ -1060,7 +1058,6 @@ private struct MediaDetailPrimaryMetric: View {
     let duration: TimeInterval
     let playCountRank: Int?
     let listenTimeRank: Int?
-    let onSelectMetric: (MediaLibraryManager.SortMetric) -> Void
 
     private var value: String {
         sortMetric.badgeText(playCount: playCount, duration: duration)
@@ -1084,51 +1081,30 @@ private struct MediaDetailPrimaryMetric: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 10) {
+            Text(value)
+                .font(.system(size: 25, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title.uppercased())
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
                     .tracking(0.5)
                     .lineLimit(1)
 
-                Text(value)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-
                 Text(rank.map { "\(supportingText) • Ranked #\($0)" } ?? supportingText)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.72)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Menu {
-                ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
-                    Button {
-                        onSelectMetric(metric)
-                    } label: {
-                        Label(metric.menuTitle, systemImage: metric.systemImageName)
-                    }
-                }
-            } label: {
-                Image(systemName: sortMetric.systemImageName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 38, height: 38)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Change metric"))
         }
-        .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

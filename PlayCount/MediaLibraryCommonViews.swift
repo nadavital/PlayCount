@@ -461,6 +461,26 @@ struct LibraryStatusOverlayModifier: ViewModifier {
     }
 }
 
+struct LibraryMetricPicker: View {
+    @Binding var selection: MediaLibraryManager.SortMetric
+
+    var body: some View {
+        Menu {
+            ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
+                Button {
+                    selection = metric
+                } label: {
+                    Label(metric.menuTitle, systemImage: metric.systemImageName)
+                }
+            }
+        } label: {
+            Image(systemName: selection.systemImageName)
+                .accessibilityLabel(Text(selection.toolbarLabel))
+                .imageScale(.medium)
+        }
+    }
+}
+
 extension View {
     func libraryStatusOverlay(isLoading: Bool, message: String?) -> some View {
         modifier(LibraryStatusOverlayModifier(isLoading: isLoading, message: message))
