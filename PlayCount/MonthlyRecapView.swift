@@ -361,6 +361,10 @@ struct MonthlyRecapView: View {
                         months: selectedYearMonths,
                         isYearSelected: isShowingYearAggregate,
                         selectedMonthStart: selectedMonthStartOrCurrent,
+                        canSelectPrevious: canSelectPreviousMonth,
+                        canSelectNext: canSelectNextMonth,
+                        onSelectPrevious: selectPreviousMonth,
+                        onSelectNext: selectNextMonth,
                         onSelectYear: selectYearAggregate,
                         onSelectMonth: { selectMonth($0) }
                     )
@@ -377,7 +381,7 @@ struct MonthlyRecapView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
-                .padding(.bottom, isRegularWidth ? 132 : 72)
+                .padding(.bottom, isRegularWidth ? 132 : 154)
                 .frame(maxWidth: 1120, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
                 .offset(x: monthDragDisplayOffset)
@@ -1075,6 +1079,10 @@ private struct RecapHeroPoster: View {
     let months: [Date]
     let isYearSelected: Bool
     let selectedMonthStart: Date
+    let canSelectPrevious: Bool
+    let canSelectNext: Bool
+    let onSelectPrevious: () -> Void
+    let onSelectNext: () -> Void
     let onSelectYear: () -> Void
     let onSelectMonth: (Date) -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -1084,7 +1092,7 @@ private struct RecapHeroPoster: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isRegularWidth ? 14 : 18) {
+        VStack(alignment: .leading, spacing: isRegularWidth ? 14 : 12) {
             RecapArtworkCollage(artworks: artworks, layout: isRegularWidth ? .regular : .compact)
 
             titleBlock
@@ -1100,7 +1108,7 @@ private struct RecapHeroPoster: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(monthTitle)
-                .font(.system(size: isRegularWidth ? 36 : 42, weight: .bold, design: .rounded))
+                .font(.system(size: isRegularWidth ? 36 : 34, weight: .bold, design: .rounded))
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1110,6 +1118,10 @@ private struct RecapHeroPoster: View {
                 months: months,
                 isYearSelected: isYearSelected,
                 selectedMonthStart: selectedMonthStart,
+                canSelectPrevious: canSelectPrevious,
+                canSelectNext: canSelectNext,
+                onSelectPrevious: onSelectPrevious,
+                onSelectNext: onSelectNext,
                 onSelectYear: onSelectYear,
                 onSelectMonth: onSelectMonth
             )
@@ -1155,7 +1167,7 @@ private struct RecapArtworkCollage: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: layout == .regular ? 282 : 218)
+            .frame(height: layout == .regular ? 282 : 142)
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Recap album artwork collage")
@@ -1178,7 +1190,7 @@ private struct RecapArtworkCollage: View {
     private var mainArtworkSize: CGSize {
         switch layout {
         case .compact:
-            return CGSize(width: 164, height: 164)
+            return CGSize(width: 112, height: 112)
         case .regular:
             return CGSize(width: 196, height: 196)
         }
@@ -1189,9 +1201,9 @@ private struct RecapArtworkCollage: View {
         case .compact:
             switch index {
             case 0, 1:
-                return CGSize(width: 104, height: 104)
+                return CGSize(width: 76, height: 76)
             case 2, 3:
-                return CGSize(width: 78, height: 78)
+                return CGSize(width: 58, height: 58)
             default:
                 return CGSize(width: 68, height: 68)
             }
@@ -1226,13 +1238,13 @@ private struct RecapArtworkCollage: View {
         case .compact:
             switch index {
             case 0:
-                return CGSize(width: -96, height: 34)
+                return CGSize(width: -72, height: 22)
             case 1:
-                return CGSize(width: 96, height: 38)
+                return CGSize(width: 72, height: 25)
             case 2:
-                return CGSize(width: -138, height: 6)
+                return CGSize(width: -112, height: 4)
             case 3:
-                return CGSize(width: 138, height: 8)
+                return CGSize(width: 112, height: 6)
             default:
                 return CGSize(width: 0, height: 82)
             }
@@ -1273,57 +1285,81 @@ private struct RecapPeriodStrip: View {
     let months: [Date]
     let isYearSelected: Bool
     let selectedMonthStart: Date
+    let canSelectPrevious: Bool
+    let canSelectNext: Bool
+    let onSelectPrevious: () -> Void
+    let onSelectNext: () -> Void
     let onSelectYear: () -> Void
     let onSelectMonth: (Date) -> Void
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 7) {
-                periodChip(
-                    title: String(selectedYear),
-                    isSelected: isYearSelected,
-                    action: onSelectYear
-                )
+        HStack(spacing: 8) {
+            navigationButton(systemImage: "chevron.left", label: "Previous recap", isEnabled: canSelectPrevious, action: onSelectPrevious)
+
+            Menu {
+                Button(action: onSelectYear) {
+                    periodMenuLabel(title: String(selectedYear), isSelected: isYearSelected)
+                }
+
+                Divider()
 
                 ForEach(months, id: \.timeIntervalSinceReferenceDate) { month in
-                    periodChip(
-                        title: Self.monthFormatter.string(from: month),
-                        isSelected: !isYearSelected && Calendar.current.isDate(month, equalTo: selectedMonthStart, toGranularity: .month)
-                    ) {
+                    let isSelected = !isYearSelected && Calendar.current.isDate(month, equalTo: selectedMonthStart, toGranularity: .month)
+                    Button {
                         onSelectMonth(month)
+                    } label: {
+                        periodMenuLabel(title: Self.fullMonthFormatter.string(from: month), isSelected: isSelected)
                     }
                 }
+            } label: {
+                HStack(spacing: 7) {
+                    Text(selectedPeriodTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(Color.primary.opacity(0.055), in: Capsule(style: .continuous))
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08))
+                }
             }
-            .padding(.vertical, 1)
+            .buttonStyle(.plain)
+
+            navigationButton(systemImage: "chevron.right", label: "Next recap", isEnabled: canSelectNext, action: onSelectNext)
         }
-        .scrollIndicators(.hidden)
         .accessibilityLabel("Recap period")
     }
 
-    private func periodChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption.weight(isSelected ? .bold : .semibold))
-                .monospacedDigit()
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .padding(.horizontal, isSelected ? 11 : 9)
-                .frame(height: 28)
-                .background {
-                    Capsule(style: .continuous)
-                        .fill(isSelected ? Color.primary.opacity(0.10) : Color.primary.opacity(0.045))
-                }
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(Color.primary.opacity(isSelected ? 0.12 : 0.06), lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
+    private var selectedPeriodTitle: String {
+        isYearSelected ? String(selectedYear) : Self.fullMonthFormatter.string(from: selectedMonthStart)
     }
 
-    private static let monthFormatter: DateFormatter = {
+    private func navigationButton(systemImage: String, label: String, isEnabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 40, height: 40)
+                .background(Color.primary.opacity(0.055), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.35)
+        .accessibilityLabel(label)
+    }
+
+    private func periodMenuLabel(title: String, isSelected: Bool) -> some View {
+        Label(title, systemImage: isSelected ? "checkmark" : "calendar")
+    }
+
+    private static let fullMonthFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "LLL"
+        formatter.dateFormat = "LLLL yyyy"
         return formatter
     }()
 }
@@ -1359,7 +1395,7 @@ private struct RecapHeroSpotlight: View {
             MetricBadge(text: "+\(song.playDelta)")
         }
         .padding(10)
-        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.07)
+        .playCountCardSurface(cornerRadius: 16)
     }
 }
 
@@ -1378,7 +1414,7 @@ private struct RecapSummaryBar: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.06)
+        .playCountCardSurface(cornerRadius: 16)
     }
 }
 
@@ -1657,7 +1693,7 @@ private struct RecapStatTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: 86)
         .padding(10)
-        .recapTileSurface(cornerRadius: 16, tintOpacity: 0.08)
+        .playCountCardSurface(cornerRadius: 16)
     }
 }
 
@@ -1885,50 +1921,7 @@ private struct RecapSurface<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .recapTileSurface(cornerRadius: 20, tintOpacity: 0.08)
-    }
-}
-
-private struct RecapGlassGroup<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 10) {
-                    content
-                }
-            }
-        } else {
-            VStack(spacing: 10) {
-                content
-            }
-        }
-    }
-}
-
-private struct RecapTileSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    let tintOpacity: Double
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular.tint(Color.accentColor.opacity(tintOpacity)), in: .rect(cornerRadius: cornerRadius))
-        } else {
-            content
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06))
-                }
-        }
-    }
-}
-
-private extension View {
-    func recapTileSurface(cornerRadius: CGFloat, tintOpacity: Double) -> some View {
-        modifier(RecapTileSurfaceModifier(cornerRadius: cornerRadius, tintOpacity: tintOpacity))
+        .playCountCardSurface(cornerRadius: 20)
     }
 }
 

@@ -337,7 +337,7 @@ private struct iPadDashboardSummaryBar: View {
                 }
                 .padding(10)
                 .frame(minHeight: 56)
-                .libraryGlassSurface(cornerRadius: 14, tintOpacity: 0.05)
+                .playCountCardSurface(cornerRadius: 14)
             }
         }
     }
@@ -379,7 +379,7 @@ private struct iPadDashboardSection<Destination: View, Content: View>: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .libraryGlassSurface(cornerRadius: 18, tintOpacity: 0.06)
+        .playCountCardSurface(cornerRadius: 18)
     }
 }
 
@@ -407,6 +407,6 @@ private struct iPadDashboardEmptyState: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 38)
-        .libraryGlassSurface(cornerRadius: 18, tintOpacity: 0.06)
+        .playCountCardSurface(cornerRadius: 18)
     }
 }

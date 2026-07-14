@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaPlayer
+import UIKit
 
 struct RecapPeriodBreakdown: Identifiable {
     let id: String
@@ -203,7 +204,7 @@ struct SongInfoView: View {
                 relatedSongSections
             }
             .padding(.horizontal, isRegularWidth ? 36 : 24)
-            .padding(.top, isRegularWidth ? 28 : 40)
+            .padding(.top, isRegularWidth ? 28 : 12)
             .padding(.bottom, bottomPadding)
             .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
@@ -220,7 +221,7 @@ struct SongInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        isRegularWidth ? (reservesBottomAccessorySpace ? 132 : 48) : 60
+        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
     }
 
     @ViewBuilder
@@ -244,7 +245,6 @@ struct AlbumInfoView: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
-    @State private var detailSortMetric: MediaLibraryManager.SortMetric
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     init(
@@ -257,7 +257,6 @@ struct AlbumInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
-        _detailSortMetric = State(initialValue: manager.sortMetric)
     }
 
     private var artist: TopArtist? {
@@ -265,7 +264,7 @@ struct AlbumInfoView: View {
     }
 
     private var albumSongs: [TopSong] {
-        sortedSongs(manager.songs(for: album), by: detailSortMetric)
+        sortedSongs(manager.songs(for: album), by: manager.sortMetric)
     }
 
     private var monthlySongs: [MonthlyRecap.RankedSong] {
@@ -282,8 +281,6 @@ struct AlbumInfoView: View {
                 AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: recapContext)
                     .frame(maxWidth: .infinity)
 
-                MediaDetailMetricPicker(selection: $detailSortMetric)
-
                 if let recapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
                         title: recapContext.songsSectionTitle,
@@ -299,7 +296,7 @@ struct AlbumInfoView: View {
                 }
 
                 if !topAlbumSongs.isEmpty {
-                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: detailSortMetric, displayLimit: 6, recapContext: recapContext)
+                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: manager.sortMetric, displayLimit: 6, recapContext: recapContext)
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -316,7 +313,7 @@ struct AlbumInfoView: View {
                                 NavigationLink {
                                     SongInfoView(song: song, manager: manager, recapContext: recapContext)
                                 } label: {
-                                    AlbumTrackRow(song: song, sortMetric: detailSortMetric)
+                                    AlbumTrackRow(song: song, sortMetric: manager.sortMetric)
                                 }
                                 .buttonStyle(.plain)
 
@@ -328,7 +325,7 @@ struct AlbumInfoView: View {
                         }
                         .background(
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(.ultraThinMaterial)
+                                .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(
@@ -375,7 +372,7 @@ struct AlbumInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        isRegularWidth ? (reservesBottomAccessorySpace ? 132 : 48) : 60
+        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
     }
 }
 
@@ -384,7 +381,6 @@ struct ArtistInfoView: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
-    @State private var detailSortMetric: MediaLibraryManager.SortMetric
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private let displayLimit = 5
@@ -408,12 +404,11 @@ struct ArtistInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
-        _detailSortMetric = State(initialValue: manager.sortMetric)
     }
 
     var body: some View {
-        let songs = sortedSongs(manager.songs(for: artist), by: detailSortMetric)
-        let albums = sortedAlbums(manager.albums(for: artist), by: detailSortMetric)
+        let songs = sortedSongs(manager.songs(for: artist), by: manager.sortMetric)
+        let albums = sortedAlbums(manager.albums(for: artist), by: manager.sortMetric)
         let topSongs = Array(songs.prefix(displayLimit))
         let topAlbums = Array(albums.prefix(displayLimit))
         let monthlySongs = recapContext?.songs(for: artist) ?? []
@@ -423,8 +418,6 @@ struct ArtistInfoView: View {
                 VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                     ArtistDetailHeader(artist: artist, manager: manager)
                         .frame(maxWidth: .infinity)
-
-                    MediaDetailMetricPicker(selection: $detailSortMetric)
 
                     if let recapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
@@ -447,7 +440,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if songs.count > displayLimit {
                                 NavigationLink {
-                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: detailSortMetric, recapContext: recapContext)
+                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: recapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -468,7 +461,7 @@ struct ArtistInfoView: View {
                                     NavigationLink {
                                         SongInfoView(song: song, manager: manager, recapContext: recapContext)
                                     } label: {
-                                        SongRow(song: song, sortMetric: detailSortMetric, rank: index + 1)
+                                        SongRow(song: song, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -477,7 +470,7 @@ struct ArtistInfoView: View {
                             .padding(.horizontal, 16)
                             .background(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(.ultraThinMaterial)
+                                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -504,7 +497,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if albums.count > displayLimit {
                                 NavigationLink {
-                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: detailSortMetric, recapContext: recapContext)
+                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: recapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -525,7 +518,7 @@ struct ArtistInfoView: View {
                                     NavigationLink {
                                         AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
                                     } label: {
-                                        AlbumRow(album: album, sortMetric: detailSortMetric, rank: index + 1)
+                                        AlbumRow(album: album, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -534,7 +527,7 @@ struct ArtistInfoView: View {
                             .padding(.horizontal, 16)
                             .background(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(.ultraThinMaterial)
+                                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -586,7 +579,7 @@ struct ArtistInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        isRegularWidth ? (reservesBottomAccessorySpace ? 132 : 48) : 60
+        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
     }
 }
 
@@ -597,6 +590,7 @@ private struct SongDetailHeader: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var isCurrentSong: Bool {
         manager.nowPlayingState?.song?.id == song.id
@@ -625,11 +619,12 @@ private struct SongDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        isRegularWidth ? 260 : 320
+        if isRegularWidth { return 240 }
+        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
     }
 
     var body: some View {
-        MediaDetailGlassGroup {
+        MediaDetailHeaderGroup {
             if isRegularWidth {
                 HStack(alignment: .center, spacing: 28) {
                     heroArtwork
@@ -641,10 +636,19 @@ private struct SongDetailHeader: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                VStack(spacing: 28) {
+            } else if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 16) {
                     heroArtwork
                     infoCard
+                    metrics
+                }
+            } else {
+                VStack(spacing: 14) {
+                    HStack(alignment: .center, spacing: 16) {
+                        heroArtwork
+                            .frame(width: artworkSize)
+                        infoCard
+                    }
                     metrics
                 }
             }
@@ -660,15 +664,15 @@ private struct SongDetailHeader: View {
     }
 
     private var infoCard: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 8) {
+        VStack(alignment: compactTextAlignment, spacing: 10) {
+            VStack(alignment: compactTextAlignment, spacing: 6) {
                 Text(song.title)
-                    .font(.system(size: isRegularWidth ? 26 : 24, weight: .bold))
-                    .multilineTextAlignment(.center)
+                    .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
+                    .multilineTextAlignment(compactMultilineAlignment)
                     .foregroundStyle(.primary)
-                    .lineLimit(3)
+                    .lineLimit(2)
 
-                VStack(spacing: 8) {
+                VStack(alignment: compactTextAlignment, spacing: 4) {
                     albumLink
                     artistLink
                 }
@@ -681,15 +685,25 @@ private struct SongDetailHeader: View {
                     Text(playButtonTitle)
                         .font(.subheadline.weight(.semibold))
                 }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 11)
+                .padding(.horizontal, isRegularWidth ? 32 : 16)
+                .padding(.vertical, isRegularWidth ? 11 : 8)
             }
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .tint(.primary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+        .padding(.horizontal, isRegularWidth ? 16 : 12)
+        .padding(.vertical, isRegularWidth ? 16 : 10)
+        .playCountCardSurface(cornerRadius: 20)
+    }
+
+    private var compactTextAlignment: HorizontalAlignment {
+        !isRegularWidth && !dynamicTypeSize.isAccessibilitySize ? .leading : .center
+    }
+
+    private var compactMultilineAlignment: TextAlignment {
+        !isRegularWidth && !dynamicTypeSize.isAccessibilitySize ? .leading : .center
     }
 
     private var metrics: some View {
@@ -716,7 +730,7 @@ private struct SongDetailHeader: View {
                 Text(album.title)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(compactMultilineAlignment)
                     .lineLimit(2)
                     .padding(.vertical, 4)
             }
@@ -739,7 +753,7 @@ private struct SongDetailHeader: View {
                 Text(artist.name)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(compactMultilineAlignment)
                     .lineLimit(1)
                     .padding(.vertical, 4)
             }
@@ -768,6 +782,7 @@ private struct AlbumDetailHeader: View {
     @ObservedObject var manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var isCurrentAlbum: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -800,19 +815,27 @@ private struct AlbumDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        isRegularWidth ? 220 : 136
+        if isRegularWidth { return 220 }
+        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
     }
 
     var body: some View {
-        MediaDetailGlassGroup {
-            HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
-                heroArtwork
-                    .frame(width: artworkSize)
+        MediaDetailHeaderGroup {
+            if dynamicTypeSize.isAccessibilitySize && !isRegularWidth {
+                VStack(spacing: 16) {
+                    heroArtwork
+                    infoCard
+                }
+            } else {
+                HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
+                    heroArtwork
+                        .frame(width: artworkSize)
 
-                infoCard
+                    infoCard
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .center)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var heroArtwork: some View {
@@ -847,12 +870,14 @@ private struct AlbumDetailHeader: View {
                 .padding(.horizontal, isRegularWidth ? 32 : 16)
                 .padding(.vertical, isRegularWidth ? 11 : 8)
             }
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .tint(.primary)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegularWidth ? 18 : 12)
         .padding(.vertical, isRegularWidth ? 18 : 10)
-        .libraryGlassSurface(cornerRadius: isRegularWidth ? 20 : 18, tintOpacity: 0)
+        .playCountCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
     }
 
     private var metrics: some View {
@@ -900,6 +925,7 @@ private struct ArtistDetailHeader: View {
     let artist: TopArtist
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var isCurrentArtist: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -932,19 +958,27 @@ private struct ArtistDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        isRegularWidth ? 220 : 136
+        if isRegularWidth { return 220 }
+        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
     }
 
     var body: some View {
-        MediaDetailGlassGroup {
-            HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
-                heroArtwork
-                    .frame(width: artworkSize)
+        MediaDetailHeaderGroup {
+            if dynamicTypeSize.isAccessibilitySize && !isRegularWidth {
+                VStack(spacing: 16) {
+                    heroArtwork
+                    infoCard
+                }
+            } else {
+                HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
+                    heroArtwork
+                        .frame(width: artworkSize)
 
-                infoCard
+                    infoCard
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .center)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var heroArtwork: some View {
@@ -975,12 +1009,14 @@ private struct ArtistDetailHeader: View {
                 .padding(.horizontal, isRegularWidth ? 32 : 16)
                 .padding(.vertical, isRegularWidth ? 11 : 8)
             }
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .tint(.primary)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegularWidth ? 18 : 12)
         .padding(.vertical, isRegularWidth ? 18 : 10)
-        .libraryGlassSurface(cornerRadius: isRegularWidth ? 20 : 18, tintOpacity: 0)
+        .playCountCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
     }
 
     private var metrics: some View {
@@ -1006,6 +1042,7 @@ private struct MediaDetailMetric: View {
     let title: String
     let value: String
     let subtitle: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(title: String, value: String, subtitle: String? = nil) {
         self.title = title
@@ -1026,19 +1063,19 @@ private struct MediaDetailMetric: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
                     .tracking(0.5)
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
-        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+        .playCountCardSurface(cornerRadius: 20)
     }
 }
 
@@ -1048,6 +1085,7 @@ private struct MediaDetailPrimaryMetric: View {
     let duration: TimeInterval
     let playCountRank: Int?
     let listenTimeRank: Int?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var value: String {
         sortMetric.badgeText(playCount: playCount, duration: duration)
@@ -1071,60 +1109,54 @@ private struct MediaDetailPrimaryMetric: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(value)
-                .font(.system(size: 25, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.68)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.5)
-                    .lineLimit(1)
-
-                Text(rank.map { "\(supportingText) • Ranked #\($0)" } ?? supportingText)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 6) {
+                    metricValue
+                    metricDescription
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    metricValue
+                    metricDescription
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var metricValue: some View {
+        Text(value)
+            .font(.system(size: 25, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.68)
+    }
+
+    private var metricDescription: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+                .lineLimit(1)
+
+            Text(rank.map { "\(supportingText) • Ranked #\($0)" } ?? supportingText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                .minimumScaleFactor(0.72)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private struct MediaDetailGlassGroup<Content: View>: View {
+private struct MediaDetailHeaderGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 18) {
-                content
-            }
-        } else {
-            content
-        }
-    }
-}
-
-private struct MediaDetailMetricPicker: View {
-    @Binding var selection: MediaLibraryManager.SortMetric
-
-    var body: some View {
-        Picker("Metric", selection: $selection) {
-            ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
-                Label(metric.toolbarLabel, systemImage: metric.systemImageName)
-                    .tag(metric)
-            }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 420)
-        .frame(maxWidth: .infinity, alignment: .center)
+        content
     }
 }
 
@@ -1181,7 +1213,7 @@ private struct MonthlyDetailSongSection: View {
                 .padding(.horizontal, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(.ultraThinMaterial)
+                        .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1266,7 +1298,7 @@ private struct RelatedSongsSection: View {
             .padding(.horizontal, 16)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1354,7 +1386,7 @@ private struct MonthlyDetailSongsSection: View {
             .padding(.horizontal, 16)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1432,7 +1464,7 @@ private struct RecapDetailPeriodBreakdownSection: View {
             .padding(.horizontal, 12)
             .background(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)

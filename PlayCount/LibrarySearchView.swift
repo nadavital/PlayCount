@@ -55,7 +55,10 @@ struct LibrarySearchView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .padding(.horizontal, 2)
             }
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+            .listRowBackground(Color.clear)
 
             if manager.isLoading && !manager.hasLoadedInitialSnapshot {
                 LoadingListSection(title: "Indexing your media library…")
@@ -73,7 +76,7 @@ struct LibrarySearchView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle("Search")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(selectedDomain.searchPrompt))
     }
 

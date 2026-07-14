@@ -7,9 +7,8 @@ private enum ArtworkImageCache {
     private static let cache = NSCache<NSString, UIImage>()
 
     static func image(for artwork: MPMediaItemArtwork, size: CGSize) -> UIImage? {
-        let scale = UIScreen.main.scale
-        let pixelWidth = Int((size.width * scale).rounded(.up))
-        let pixelHeight = Int((size.height * scale).rounded(.up))
+        let pixelWidth = Int(size.width.rounded(.up))
+        let pixelHeight = Int(size.height.rounded(.up))
         let key = "\(ObjectIdentifier(artwork))-\(pixelWidth)x\(pixelHeight)" as NSString
 
         if let image = cache.object(forKey: key) {
@@ -44,7 +43,7 @@ private enum ArtworkColorCalculator {
 
 extension MPMediaItemArtwork {
     func averageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
-        let pixelDimension = Int((maxDimension * UIScreen.main.scale).rounded(.up))
+        let pixelDimension = Int(maxDimension.rounded(.up))
         let key = "\(ObjectIdentifier(self))-\(pixelDimension)" as NSString
         if let cached = ArtworkColorCalculator.cache.object(forKey: key) {
             return (cached.red, cached.green, cached.blue)
@@ -142,7 +141,7 @@ struct EmptyLibraryArtworkCluster: View {
                 .font(.system(size: 34, weight: .semibold))
                 .foregroundStyle(.primary.opacity(0.78))
                 .frame(width: 74, height: 74)
-                .libraryGlassSurface(cornerRadius: 18, tintOpacity: 0.12)
+                .playCountCardSurface(cornerRadius: 18)
         }
         .frame(width: 138, height: 126)
     }
@@ -246,6 +245,7 @@ struct MediaListRow<Artwork: View>: View {
     let badgeText: String
     let subtitleProminent: Bool
     private let artwork: Artwork
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(
         rank: Int? = nil,
@@ -266,12 +266,16 @@ struct MediaListRow<Artwork: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let rank {
-                RankBadgeView(rank: rank)
-            }
+        if dynamicTypeSize.isAccessibilitySize {
+            accessibilityLayout
+        } else {
+            standardLayout
+        }
+    }
 
-            artwork
+    private var standardLayout: some View {
+        HStack(spacing: 12) {
+            leadingIdentity
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -291,6 +295,39 @@ struct MediaListRow<Artwork: View>: View {
         }
         .frame(minHeight: 64, alignment: .center)
         .padding(.vertical, 4)
+    }
+
+    private var accessibilityLayout: some View {
+        HStack(alignment: .top, spacing: 12) {
+            leadingIdentity
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                subtitleLine
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                MetricBadge(text: badgeText)
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var leadingIdentity: some View {
+        if let rank {
+            RankBadgeView(rank: rank)
+        }
+
+        artwork
     }
 
     @ViewBuilder
@@ -474,9 +511,14 @@ struct LibraryMetricPicker: View {
                 }
             }
         } label: {
-            Image(systemName: selection.systemImageName)
-                .accessibilityLabel(Text(selection.toolbarLabel))
-                .imageScale(.medium)
+            HStack(spacing: 5) {
+                Image(systemName: selection.systemImageName)
+                    .imageScale(.medium)
+                Text(selection.toolbarLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .accessibilityLabel(Text("Ranking metric: \(selection.toolbarLabel)"))
         }
     }
 }
@@ -486,31 +528,23 @@ extension View {
         modifier(LibraryStatusOverlayModifier(isLoading: isLoading, message: message))
     }
 
-    func libraryGlassSurface(cornerRadius: CGFloat, tintOpacity: Double = 0.08) -> some View {
-        modifier(LibraryGlassSurfaceModifier(cornerRadius: cornerRadius, tintOpacity: tintOpacity))
+    func playCountCardSurface(cornerRadius: CGFloat) -> some View {
+        modifier(PlayCountCardSurfaceModifier(cornerRadius: cornerRadius))
     }
 }
 
-private struct LibraryGlassSurfaceModifier: ViewModifier {
+private struct PlayCountCardSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
-    let tintOpacity: Double
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if tintOpacity > 0 {
-                content
-                    .glassEffect(.regular.tint(Color.accentColor.opacity(tintOpacity)), in: .rect(cornerRadius: cornerRadius))
-            } else {
-                content
-                    .glassEffect(.regular.tint(Color.black.opacity(0.06)), in: .rect(cornerRadius: cornerRadius))
+        content
+            .background(
+                Color(uiColor: .secondarySystemBackground).opacity(0.94),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.07))
             }
-        } else {
-            content
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06))
-                }
-        }
     }
 }
