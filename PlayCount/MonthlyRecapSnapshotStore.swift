@@ -417,6 +417,7 @@ final class MonthlyRecapSnapshotStore {
         let title: String
         let artist: String
         let albumTitle: String
+        let albumArtist: String
         let playCount: Int
         let skipCount: Int
         let playbackDuration: TimeInterval
@@ -424,6 +425,53 @@ final class MonthlyRecapSnapshotStore {
         let dateAdded: Date?
         let albumPersistentID: UInt64
         let artistPersistentID: UInt64
+
+        init(
+            id: UInt64,
+            title: String,
+            artist: String,
+            albumTitle: String,
+            albumArtist: String? = nil,
+            playCount: Int,
+            skipCount: Int,
+            playbackDuration: TimeInterval,
+            lastPlayedDate: Date?,
+            dateAdded: Date?,
+            albumPersistentID: UInt64,
+            artistPersistentID: UInt64
+        ) {
+            self.id = id
+            self.title = title
+            self.artist = artist
+            self.albumTitle = albumTitle
+            self.albumArtist = albumArtist?.nonEmptyFallback(artist) ?? artist
+            self.playCount = playCount
+            self.skipCount = skipCount
+            self.playbackDuration = playbackDuration
+            self.lastPlayedDate = lastPlayedDate
+            self.dateAdded = dateAdded
+            self.albumPersistentID = albumPersistentID
+            self.artistPersistentID = artistPersistentID
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let artist = try container.decode(String.self, forKey: .artist)
+            self.init(
+                id: try container.decode(UInt64.self, forKey: .id),
+                title: try container.decode(String.self, forKey: .title),
+                artist: artist,
+                albumTitle: try container.decode(String.self, forKey: .albumTitle),
+                albumArtist: try container.decodeIfPresent(String.self, forKey: .albumArtist) ?? artist,
+                playCount: try container.decode(Int.self, forKey: .playCount),
+                skipCount: try container.decode(Int.self, forKey: .skipCount),
+                playbackDuration: try container.decode(TimeInterval.self, forKey: .playbackDuration),
+                lastPlayedDate: try container.decodeIfPresent(Date.self, forKey: .lastPlayedDate),
+                dateAdded: try container.decodeIfPresent(Date.self, forKey: .dateAdded),
+                albumPersistentID: try container.decode(UInt64.self, forKey: .albumPersistentID),
+                artistPersistentID: try container.decode(UInt64.self, forKey: .artistPersistentID)
+            )
+        }
     }
 
     fileprivate struct AggregateCounters: Codable, Equatable {
@@ -737,7 +785,7 @@ final class MonthlyRecapSnapshotStore {
                         albums[song.albumPersistentID] = artwork
                     }
 
-                    let albumKey = Self.albumKey(title: song.albumTitle, artist: song.artist)
+                    let albumKey = Self.albumKey(title: song.albumTitle, artist: song.albumArtist)
                     if albumsByName[albumKey] == nil {
                         albumsByName[albumKey] = artwork
                     }
@@ -798,7 +846,7 @@ final class MonthlyRecapSnapshotStore {
             if song.albumPersistentID != 0, let artwork = albums[song.albumPersistentID] {
                 return artwork
             }
-            return albumsByName[Self.albumKey(title: song.albumTitle, artist: song.artist)]
+            return albumsByName[Self.albumKey(title: song.albumTitle, artist: song.albumArtist)]
         }
 
         func artistArtwork(for song: SongSnapshot) -> MPMediaItemArtwork? {
@@ -1660,7 +1708,7 @@ final class MonthlyRecapSnapshotStore {
             playDeltas,
             id: albumGroupID,
             title: { $0.latest.albumTitle },
-            subtitle: { $0.latest.artist },
+            subtitle: { $0.latest.albumArtist },
             artwork: { artworkLookup.albumArtwork(for: $0.latest) }
         )
 
@@ -1957,7 +2005,7 @@ final class MonthlyRecapSnapshotStore {
         return [
             "album",
             normalizedGroupKey(delta.latest.albumTitle),
-            normalizedGroupKey(delta.latest.artist)
+            normalizedGroupKey(delta.latest.albumArtist)
         ].joined(separator: ":")
     }
 
@@ -2210,6 +2258,7 @@ final class MonthlyRecapSnapshotStore {
             title: title,
             artist: "Self Check Artist",
             albumTitle: "Self Check Album",
+            albumArtist: "Self Check Artist",
             playCount: playCount,
             skipCount: skipCount,
             playbackDuration: 180,
@@ -2229,6 +2278,7 @@ private extension MonthlyRecapSnapshotStore.SongSnapshot {
             title: song.title,
             artist: song.artist,
             albumTitle: song.albumTitle,
+            albumArtist: song.albumArtist,
             playCount: song.playCount,
             skipCount: song.skipCount,
             playbackDuration: song.playbackDuration,

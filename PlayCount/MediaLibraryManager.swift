@@ -9,6 +9,7 @@ struct TopSong: Identifiable {
     let title: String
     let artist: String
     let albumTitle: String
+    let albumArtist: String
     let playCount: Int
     let skipCount: Int
     let totalPlayDuration: TimeInterval
@@ -19,6 +20,12 @@ struct TopSong: Identifiable {
     let albumPersistentID: UInt64
     let artistPersistentID: UInt64
     let trackNumber: Int
+}
+
+private struct MediaLibrarySnapshot {
+    let songs: [TopSong]
+    let albums: [TopAlbum]
+    let artists: [TopArtist]
 }
 
 struct TopAlbum: Identifiable {
@@ -152,14 +159,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published var errorMessage: String?
     @Published var sortMetric: SortMetric = .playCount {
         didSet {
+            guard oldValue != sortMetric else { return }
             applySortAndLimit()
-            updateLibraryIndexes(songs: librarySongs, albums: libraryAlbums, artists: libraryArtists)
+            resortGroupedIndexes()
         }
     }
     @Published private(set) var hasLoadedInitialSnapshot = false
     @Published private(set) var nowPlayingState: NowPlayingState?
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
     @Published private(set) var availableRecapMonths: [Date] = []
+    let nowPlayingProgress = NowPlayingProgress()
 
     private let fetchLimit: Int
     private lazy var mediaLibrary = MPMediaLibrary.default()
@@ -168,6 +177,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private let recapCloudSyncService: RecapCloudSyncService?
     private var notificationObservers: [NSObjectProtocol] = []
     private var progressTimer: AnyCancellable?
+    private var delayedRefreshWorkItem: DispatchWorkItem?
     private var lastPlaybackDrivenRefresh: Date = .distantPast
     private var pendingSnapshotReason: RecapSnapshotReason?
     private let playbackRefreshInterval: TimeInterval = 20
@@ -283,6 +293,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                         self.isLoading = false
                         if status == .denied || status == .restricted {
                             self.errorMessage = "Media library access is required to show listening data."
+                            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
                         }
                     }
                 }
@@ -292,6 +303,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         case .denied, .restricted:
             isLoading = false
             errorMessage = "Media library access is required to show listening data."
+            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
         default:
             break
         }
@@ -332,11 +344,17 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     func refreshForRecapSequence(reason: RecapSnapshotReason) {
         refreshForRecap(reason: reason)
 
-        for delay in [8.0, 30.0, 90.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.refreshForRecap(reason: .delayedForeground)
-            }
+        guard reason == .appLaunch || reason == .foreground || reason == .notificationOpen else {
+            return
         }
+
+        delayedRefreshWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.delayedRefreshWorkItem = nil
+            self?.refreshForRecap(reason: .delayedForeground)
+        }
+        delayedRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0, execute: workItem)
     }
 
     func syncRecapFromCloud() {
@@ -359,23 +377,21 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
 
         let result = await Task.detached(priority: .utility) { [snapshotStore] in
-            let songs = Self.fetchTopSongs()
-            let albums = Self.fetchTopAlbums()
-            let artists = Self.fetchTopArtists()
-            let recap = snapshotStore.record(songs: songs, albums: albums, artists: artists, at: Date(), reason: reason)
-            return (songs, albums, artists, recap)
+            let snapshot = Self.fetchLibrarySnapshot()
+            let recap = snapshotStore.record(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists,
+                at: Date(),
+                reason: reason
+            )
+            return (snapshot, recap)
         }.value
 
         await MainActor.run {
             self.invalidateRecapCaches()
-            self.librarySongs = result.0
-            self.libraryAlbums = result.1
-            self.libraryArtists = result.2
-            self.librarySummary = LibrarySummary(songs: result.0, albums: result.1, artists: result.2)
-            self.monthlyRecap = result.3
+            self.applyLibrarySnapshot(result.0, recap: result.1)
             self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
-            self.applySortAndLimit()
-            self.updateLibraryIndexes(songs: result.0, albums: result.1, artists: result.2)
             self.hasLoadedInitialSnapshot = true
             self.scheduleRecapCloudSync()
         }
@@ -722,6 +738,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         guard currentStatus == .authorized else {
             isLoading = false
             errorMessage = "Media library access is required to show listening data."
+            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
             return
         }
 
@@ -736,27 +753,30 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
-            let songs = Self.fetchTopSongs()
-            let albums = Self.fetchTopAlbums()
-            let artists = Self.fetchTopArtists()
-            let recap = self.snapshotStore.record(songs: songs, albums: albums, artists: artists, at: Date(), reason: snapshotReason)
+            let snapshot = Self.fetchLibrarySnapshot()
+            let recap = self.snapshotStore.record(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists,
+                at: Date(),
+                reason: snapshotReason
+            )
 
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.invalidateRecapCaches()
-                self.librarySongs = songs
-                self.libraryAlbums = albums
-                self.libraryArtists = artists
-                self.librarySummary = LibrarySummary(songs: songs, albums: albums, artists: artists)
-                self.monthlyRecap = recap
+                self.applyLibrarySnapshot(
+                    snapshot,
+                    recap: recap,
+                    updatesSearchIndex: snapshotReason != .playbackChanged
+                )
                 self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
 
-                self.applySortAndLimit()
-                self.updateLibraryIndexes(songs: songs, albums: albums, artists: artists)
                 self.isLoading = false
                 self.hasLoadedInitialSnapshot = true
                 self.scheduleRecapCloudSync()
 
-                if songs.isEmpty && albums.isEmpty && artists.isEmpty {
+                if snapshot.songs.isEmpty && snapshot.albums.isEmpty && snapshot.artists.isEmpty {
                     self.errorMessage = "We couldn't find any listening data in your media library."
                 }
 
@@ -787,6 +807,38 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func applyLibrarySnapshot(
+        _ snapshot: MediaLibrarySnapshot,
+        recap: MonthlyRecap,
+        updatesSearchIndex: Bool = true
+    ) {
+        librarySongs = snapshot.songs
+        libraryAlbums = snapshot.albums
+        libraryArtists = snapshot.artists
+        librarySummary = LibrarySummary(songs: snapshot.songs, albums: snapshot.albums, artists: snapshot.artists)
+        monthlyRecap = recap
+        applySortAndLimit()
+        updateLibraryIndexes(songs: snapshot.songs, albums: snapshot.albums, artists: snapshot.artists)
+        if updatesSearchIndex {
+            Task {
+                await PlayCountSiriIntegration.updateSearchIndex(
+                    songs: sortSongs(snapshot.songs),
+                    albums: sortAlbums(snapshot.albums),
+                    artists: sortArtists(snapshot.artists)
+                )
+            }
+        }
+    }
+
+    private func resortGroupedIndexes() {
+        songsByAlbumID = songsByAlbumID.mapValues(sortSongs)
+        songsByAlbumKey = songsByAlbumKey.mapValues(sortSongs)
+        songsByArtistID = songsByArtistID.mapValues(sortSongs)
+        songsByArtistKey = songsByArtistKey.mapValues(sortSongs)
+        albumsByArtistID = albumsByArtistID.mapValues(sortAlbums)
+        albumsByArtistKey = albumsByArtistKey.mapValues(sortAlbums)
+    }
+
     private func updateLibraryIndexes(songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
         songsByPersistentID = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
         albumsByPersistentID = Dictionary(albums.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
@@ -806,8 +858,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
         songsByAlbumID = Dictionary(grouping: songs.filter { $0.albumPersistentID != 0 }, by: \.albumPersistentID)
             .mapValues(sortSongs)
-        songsByAlbumKey = Dictionary(grouping: songs, by: { Self.titleArtistKey(title: $0.albumTitle, artist: $0.artist) })
-            .mapValues(sortSongs)
+        songsByAlbumKey = Dictionary(
+            Self.albumLookupPairs(for: songs),
+            uniquingKeysWith: { current, additional in current + additional }
+        )
+        .mapValues(sortSongs)
         songsByArtistID = Dictionary(grouping: songs.filter { $0.artistPersistentID != 0 }, by: \.artistPersistentID)
             .mapValues(sortSongs)
         songsByArtistKey = Dictionary(grouping: songs, by: { Self.normalizedLookupKey($0.artist) })
@@ -948,6 +1003,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         candidates.append(contentsOf: albumKeyMatches.filter { song in
             song.albumPersistentID == 0 && (
                 (album.artistPersistentID != 0 && song.artistPersistentID == album.artistPersistentID) ||
+                song.albumArtist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame ||
                 song.artist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame
             )
         })
@@ -982,6 +1038,22 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     private static func titleArtistKey(title: String, artist: String) -> String {
         "\(normalizedLookupKey(title))|\(normalizedLookupKey(artist))"
+    }
+
+    private static func albumLookupPairs(for songs: [TopSong]) -> [(String, [TopSong])] {
+        songs.flatMap { song in
+            let albumArtistKey = titleArtistKey(title: song.albumTitle, artist: song.albumArtist)
+            let trackArtistKey = titleArtistKey(title: song.albumTitle, artist: song.artist)
+
+            if albumArtistKey == trackArtistKey {
+                return [(albumArtistKey, [song])]
+            }
+
+            return [
+                (albumArtistKey, [song]),
+                (trackArtistKey, [song])
+            ]
+        }
     }
 
     private static func normalizedLookupKey(_ value: String) -> String {
@@ -1199,7 +1271,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
         guard let item else {
             DispatchQueue.main.async {
-                self.nowPlayingState = nil
+                self.nowPlayingProgress.reset()
+                if self.nowPlayingState != nil {
+                    self.nowPlayingState = nil
+                    if #available(iOS 27.0, *) {
+                        Task { await PlayCountSiriIntegration.updateNowPlayingRelevance(song: nil) }
+                    }
+                }
             }
             stopProgressUpdates()
             return
@@ -1235,6 +1313,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             title: resolvedTitle,
             artist: resolvedArtist,
             albumTitle: resolvedAlbum,
+            albumArtist: item.albumArtist?.nonEmptyFallback(resolvedArtist) ?? resolvedArtist,
             playCount: playCount,
             skipCount: skipCount,
             totalPlayDuration: totalPlayDuration,
@@ -1252,14 +1331,20 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             subtitle: subtitle,
             artwork: item.artwork,
             duration: duration,
-            currentTime: currentTime,
             isPlaying: playbackState == .playing,
             playCount: playCount,
             song: topSong
         )
 
         DispatchQueue.main.async {
+            self.nowPlayingProgress.update(currentTime: currentTime, duration: duration)
+            guard self.nowPlayingState?.isDisplayEquivalent(to: state) != true else {
+                return
+            }
             self.nowPlayingState = state
+            if #available(iOS 27.0, *) {
+                Task { await PlayCountSiriIntegration.updateNowPlayingRelevance(song: state.song) }
+            }
         }
 
         if playbackState == .playing {
@@ -1356,6 +1441,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     title: item.title ?? "Unknown Title",
                     artist: item.artist ?? "Unknown Artist",
                     albumTitle: item.albumTitle ?? "Unknown Album",
+                    albumArtist: item.albumArtist ?? item.artist ?? "Unknown Artist",
                     playCount: item.playCount,
                     skipCount: item.skipCount,
                     totalPlayDuration: totalDuration,
@@ -1366,6 +1452,83 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     albumPersistentID: item.albumPersistentID,
                     artistPersistentID: item.artistPersistentID,
                     trackNumber: item.albumTrackNumber
+                )
+            }
+    }
+
+    private static func fetchLibrarySnapshot() -> MediaLibrarySnapshot {
+        let songs = fetchTopSongs()
+        return MediaLibrarySnapshot(
+            songs: songs,
+            albums: albums(from: songs),
+            artists: artists(from: songs)
+        )
+    }
+
+    /// A cold-launch-safe source for App Intents and entity queries. Intents can be
+    /// performed before the shared manager finishes its asynchronous UI refresh,
+    /// so they must not depend on `librarySongs` or `topSongs` already being filled.
+    static func intentLibrarySnapshot() -> (songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
+        let snapshot = fetchLibrarySnapshot()
+        return (snapshot.songs, snapshot.albums, snapshot.artists)
+    }
+
+    #if DEBUG
+    static func debugAlbumsDerivedFromSongs(_ songs: [TopSong]) -> [TopAlbum] {
+        albums(from: songs)
+    }
+    #endif
+
+    private static func albums(from songs: [TopSong]) -> [TopAlbum] {
+        Dictionary(grouping: songs.filter { $0.albumPersistentID != 0 }, by: \.albumPersistentID)
+            .compactMap { albumID, albumSongs in
+                guard let representative = albumSongs.first else { return nil }
+                let playCount = albumSongs.reduce(0) { $0 + $1.playCount }
+                guard playCount > 0 else { return nil }
+
+                let totalDuration = albumSongs.reduce(0) { $0 + $1.totalPlayDuration }
+                let artistPersistentID = albumArtistPersistentID(for: albumSongs, representative: representative)
+
+                return TopAlbum(
+                    id: albumID,
+                    title: representative.albumTitle,
+                    artist: representative.albumArtist,
+                    playCount: playCount,
+                    totalPlayDuration: totalDuration,
+                    artwork: representative.artwork,
+                    artistPersistentID: artistPersistentID
+                )
+            }
+    }
+
+    private static func albumArtistPersistentID(for albumSongs: [TopSong], representative: TopSong) -> UInt64 {
+        guard representative.albumArtist.localizedCaseInsensitiveCompare(representative.artist) == .orderedSame else {
+            return 0
+        }
+
+        let artistIDs = Set(albumSongs.map(\.artistPersistentID).filter { $0 != 0 })
+        guard artistIDs.count == 1 else {
+            return 0
+        }
+
+        return artistIDs.first ?? 0
+    }
+
+    private static func artists(from songs: [TopSong]) -> [TopArtist] {
+        Dictionary(grouping: songs.filter { $0.artistPersistentID != 0 }, by: \.artistPersistentID)
+            .compactMap { artistID, artistSongs in
+                guard let representative = artistSongs.first else { return nil }
+                let playCount = artistSongs.reduce(0) { $0 + $1.playCount }
+                guard playCount > 0 else { return nil }
+
+                let totalDuration = artistSongs.reduce(0) { $0 + $1.totalPlayDuration }
+
+                return TopArtist(
+                    id: artistID,
+                    name: representative.artist,
+                    playCount: playCount,
+                    totalPlayDuration: totalDuration,
+                    artwork: representative.artwork
                 )
             }
     }
@@ -1430,15 +1593,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 }
 
 extension MediaLibraryManager {
-    struct NowPlayingState: Equatable {
-        let title: String
-        let subtitle: String
-        let artwork: MPMediaItemArtwork?
-        let duration: TimeInterval
-        let currentTime: TimeInterval
-        let isPlaying: Bool
-        let playCount: Int
-        let song: TopSong?
+    final class NowPlayingProgress: ObservableObject {
+        @Published private(set) var currentTime: TimeInterval = 0
+        @Published private(set) var duration: TimeInterval = 0
 
         var progress: Double {
             guard duration > 0 else { return 0 }
@@ -1452,6 +1609,49 @@ extension MediaLibraryManager {
 
         var formattedElapsed: String {
             currentTime.formattedPlayback
+        }
+
+        func update(currentTime: TimeInterval, duration: TimeInterval) {
+            if self.currentTime != currentTime {
+                self.currentTime = currentTime
+            }
+            if self.duration != duration {
+                self.duration = duration
+            }
+        }
+
+        func reset() {
+            update(currentTime: 0, duration: 0)
+        }
+    }
+
+    struct NowPlayingState: Equatable {
+        let title: String
+        let subtitle: String
+        let artwork: MPMediaItemArtwork?
+        let duration: TimeInterval
+        let isPlaying: Bool
+        let playCount: Int
+        let song: TopSong?
+
+        func isDisplayEquivalent(to other: NowPlayingState) -> Bool {
+            let artworksEqual: Bool
+            switch (artwork, other.artwork) {
+            case (nil, nil):
+                artworksEqual = true
+            case let (left?, right?):
+                artworksEqual = left === right
+            default:
+                artworksEqual = false
+            }
+
+            return title == other.title &&
+                subtitle == other.subtitle &&
+                artworksEqual &&
+                duration == other.duration &&
+                isPlaying == other.isPlaying &&
+                playCount == other.playCount &&
+                song?.id == other.song?.id
         }
 
         static func == (lhs: NowPlayingState, rhs: NowPlayingState) -> Bool {
@@ -1469,7 +1669,6 @@ extension MediaLibraryManager {
                 lhs.subtitle == rhs.subtitle &&
                 artworksEqual &&
                 lhs.duration == rhs.duration &&
-                lhs.currentTime == rhs.currentTime &&
                 lhs.isPlaying == rhs.isPlaying &&
                 lhs.playCount == rhs.playCount &&
                 lhs.song?.id == rhs.song?.id
@@ -1638,11 +1837,11 @@ extension MediaLibraryManager {
             subtitle: "\(songs[0].artist) — \(songs[0].albumTitle)",
             artwork: songs[0].artwork,
             duration: songs[0].playbackDuration,
-            currentTime: 68,
             isPlaying: true,
             playCount: songs[0].playCount,
             song: songs[0]
         )
+        nowPlayingProgress.update(currentTime: 68, duration: songs[0].playbackDuration)
     }
 
     private static var screenshotSongs: [TopSong] {
@@ -1680,6 +1879,7 @@ extension MediaLibraryManager {
             title: title,
             artist: artist,
             albumTitle: album,
+            albumArtist: artist,
             playCount: plays,
             skipCount: max(0, delta / 4),
             totalPlayDuration: TimeInterval(plays) * duration,
@@ -1863,6 +2063,7 @@ extension MediaLibraryManager {
             title: "Midnight City",
             artist: "M83",
             albumTitle: "Hurry Up, We're Dreaming",
+            albumArtist: "M83",
             playCount: 42,
             skipCount: 3,
             totalPlayDuration: TimeInterval(240 * 42),
@@ -1880,11 +2081,11 @@ extension MediaLibraryManager {
             subtitle: "\(sampleSong.artist) — \(sampleSong.albumTitle)",
             artwork: sampleSong.artwork,
             duration: 240,
-            currentTime: 87,
             isPlaying: true,
             playCount: sampleSong.playCount,
             song: sampleSong
         )
+        manager.nowPlayingProgress.update(currentTime: 87, duration: 240)
         return manager
     }
 
@@ -1895,6 +2096,7 @@ extension MediaLibraryManager {
             title: "Holocene",
             artist: "Bon Iver",
             albumTitle: "Bon Iver",
+            albumArtist: "Bon Iver",
             playCount: 17,
             skipCount: 1,
             totalPlayDuration: TimeInterval(302 * 17),
@@ -1912,11 +2114,11 @@ extension MediaLibraryManager {
             subtitle: "\(sampleSong.artist) — \(sampleSong.albumTitle)",
             artwork: sampleSong.artwork,
             duration: 302,
-            currentTime: 0,
             isPlaying: false,
             playCount: sampleSong.playCount,
             song: sampleSong
         )
+        manager.nowPlayingProgress.update(currentTime: 0, duration: 302)
         return manager
     }
 }

@@ -309,6 +309,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
             title: title,
             artist: "Artist",
             albumTitle: "Album",
+            albumArtist: "Artist",
             playCount: playCount,
             skipCount: 0,
             totalPlayDuration: TimeInterval(playCount * 180),

@@ -9,6 +9,8 @@ struct MonthlyRecapView: View {
     @State private var monthTransitionEdge: Edge = .trailing
     @State private var monthDragOffset: CGFloat = 0
     @State private var monthDragAxis: MonthDragAxis = .undecided
+    @State private var isSuppressingRecapNavigation = false
+    @State private var recapNavigationSuppressionToken = 0
     @State private var isUsingYearlyBreakdownStrip = false
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
     @State private var cachedArtworkHighlightsSignature = ""
@@ -372,6 +374,7 @@ struct MonthlyRecapView: View {
                 .frame(maxWidth: 1120, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
                 .offset(x: monthDragDisplayOffset)
+                .disabled(isSuppressingRecapNavigation)
                 .id(selectedMonthStartOrCurrent)
                 .transition(monthContentTransition)
             }
@@ -402,8 +405,12 @@ struct MonthlyRecapView: View {
             updateCachedArtworkHighlightsIfNeeded()
         }
         .onAppear {
+            applyPendingRecapMonth()
             syncSelectedMonthIfNeeded()
             scheduleInitialCloudSyncIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openMonthlyRecap)) { _ in
+            applyPendingRecapMonth()
         }
         .onChange(of: manager.availableRecapMonths) { _, _ in
             syncSelectedMonthIfNeeded()
@@ -411,6 +418,12 @@ struct MonthlyRecapView: View {
         .onChange(of: manager.monthlyRecap.monthStart) { _, _ in
             syncSelectedMonthIfNeeded()
         }
+    }
+
+    private func applyPendingRecapMonth() {
+        guard let month = PlayCountNavigationRequestStore.consumeRequestedRecapMonth() else { return }
+        isShowingYearAggregate = false
+        selectedMonthStart = normalizedMonth(month)
     }
 
     private var isRegularWidth: Bool {
@@ -796,6 +809,7 @@ struct MonthlyRecapView: View {
                     return
                 }
 
+                suppressRecapNavigationDuringSwipe()
                 monthDragOffset = clampedMonthDragOffset(horizontal)
             }
             .onEnded { value in
@@ -811,6 +825,7 @@ struct MonthlyRecapView: View {
                     withAnimation(.smooth(duration: 0.22)) {
                         resetMonthDragState()
                     }
+                    releaseRecapNavigationAfterSwipe()
                 }
 
                 guard !isUsingYearlyBreakdownStrip else { return }
@@ -869,13 +884,32 @@ struct MonthlyRecapView: View {
         monthDragAxis = .undecided
     }
 
+    private func suppressRecapNavigationDuringSwipe() {
+        recapNavigationSuppressionToken += 1
+        if !isSuppressingRecapNavigation {
+            isSuppressingRecapNavigation = true
+        }
+    }
+
+    private func releaseRecapNavigationAfterSwipe() {
+        guard isSuppressingRecapNavigation else { return }
+        recapNavigationSuppressionToken += 1
+        let token = recapNavigationSuppressionToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+            guard token == recapNavigationSuppressionToken else { return }
+            isSuppressingRecapNavigation = false
+        }
+    }
+
     private func setYearlyBreakdownScrollActivity(_ isActive: Bool) {
         if isActive {
             isUsingYearlyBreakdownStrip = true
             resetMonthDragState()
+            suppressRecapNavigationDuringSwipe()
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 isUsingYearlyBreakdownStrip = false
+                releaseRecapNavigationAfterSwipe()
             }
         }
     }

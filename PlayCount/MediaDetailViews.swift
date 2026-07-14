@@ -212,6 +212,7 @@ struct SongInfoView: View {
         .background(MediaDetailBackground(artwork: song.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(song.title)
+        .playCountSongEntityIdentifier(song)
     }
 
     private var isRegularWidth: Bool {
@@ -371,6 +372,7 @@ struct AlbumInfoView: View {
         .background(MediaDetailBackground(artwork: album.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(album.title)
+        .playCountAlbumEntityIdentifier(album)
     }
 
     private var isRegularWidth: Bool {
@@ -568,6 +570,7 @@ struct ArtistInfoView: View {
         .background(MediaDetailBackground(artwork: artist.artwork))
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(artist.name)
+        .playCountArtistEntityIdentifier(artist)
     }
 
     private var isRegularWidth: Bool {
@@ -854,18 +857,14 @@ private struct AlbumDetailHeader: View {
     }
 
     private var metrics: some View {
-        HStack(spacing: 12) {
-            MediaDetailMetric(
-                title: "Plays",
-                value: album.playCount.detailFormatted,
-                subtitle: manager.playCountRank(of: album).map { "Ranked #\($0)" }
-            )
-            MediaDetailMetric(
-                title: "Time Listened",
-                value: album.totalPlayDuration.formattedListenTime,
-                subtitle: manager.listenTimeRank(of: album).map { "Ranked #\($0)" }
-            )
-        }
+        MediaDetailPrimaryMetric(
+            sortMetric: manager.sortMetric,
+            playCount: album.playCount,
+            duration: album.totalPlayDuration,
+            playCountRank: manager.playCountRank(of: album),
+            listenTimeRank: manager.listenTimeRank(of: album),
+            onSelectMetric: { manager.sortMetric = $0 }
+        )
     }
 
     @ViewBuilder
@@ -996,18 +995,14 @@ private struct ArtistDetailHeader: View {
     }
 
     private var metrics: some View {
-        HStack(spacing: 12) {
-            MediaDetailMetric(
-                title: "Plays",
-                value: artist.playCount.detailFormatted,
-                subtitle: manager.playCountRank(of: artist).map { "Ranked #\($0)" }
-            )
-            MediaDetailMetric(
-                title: "Time Listened",
-                value: artist.totalPlayDuration.formattedListenTime,
-                subtitle: manager.listenTimeRank(of: artist).map { "Ranked #\($0)" }
-            )
-        }
+        MediaDetailPrimaryMetric(
+            sortMetric: manager.sortMetric,
+            playCount: artist.playCount,
+            duration: artist.totalPlayDuration,
+            playCountRank: manager.playCountRank(of: artist),
+            listenTimeRank: manager.listenTimeRank(of: artist),
+            onSelectMetric: { manager.sortMetric = $0 }
+        )
     }
 
     private func handlePlayTapped() {
@@ -1054,6 +1049,84 @@ private struct MediaDetailMetric: View {
         }
         .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
         .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
+    }
+}
+
+private struct MediaDetailPrimaryMetric: View {
+    let sortMetric: MediaLibraryManager.SortMetric
+    let playCount: Int
+    let duration: TimeInterval
+    let playCountRank: Int?
+    let listenTimeRank: Int?
+    let onSelectMetric: (MediaLibraryManager.SortMetric) -> Void
+
+    private var value: String {
+        sortMetric.badgeText(playCount: playCount, duration: duration)
+    }
+
+    private var title: String {
+        sortMetric.toolbarLabel
+    }
+
+    private var supportingText: String {
+        sortMetric.supplementaryDescription(playCount: playCount, duration: duration)
+    }
+
+    private var rank: Int? {
+        switch sortMetric {
+        case .playCount:
+            return playCountRank
+        case .listenTime:
+            return listenTimeRank
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.5)
+                    .lineLimit(1)
+
+                Text(value)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Text(rank.map { "\(supportingText) • Ranked #\($0)" } ?? supportingText)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                ForEach(MediaLibraryManager.SortMetric.allCases) { metric in
+                    Button {
+                        onSelectMetric(metric)
+                    } label: {
+                        Label(metric.menuTitle, systemImage: metric.systemImageName)
+                    }
+                }
+            } label: {
+                Image(systemName: sortMetric.systemImageName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Change metric"))
+        }
+        .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+        .padding(.horizontal, 18)
         .padding(.vertical, 16)
         .libraryGlassSurface(cornerRadius: 20, tintOpacity: 0)
     }

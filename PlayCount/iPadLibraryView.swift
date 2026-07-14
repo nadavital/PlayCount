@@ -108,6 +108,9 @@ struct iPadLibraryView: View {
             }
         }
         .task {
+            if PlayCountNavigationRequestStore.consumeLatestRecapRequest() {
+                selectedTab = .recap
+            }
             guard LibraryTab.screenshotPresentsNowPlaying else { return }
             try? await Task.sleep(for: .milliseconds(350))
             if let song = manager.nowPlayingState?.song {
@@ -127,6 +130,7 @@ struct iPadLibraryView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openMonthlyRecap)) { _ in
+            _ = PlayCountNavigationRequestStore.consumeLatestRecapRequest()
             selectedTab = .recap
             manager.refreshForRecapSequence(reason: .notificationOpen)
         }

@@ -881,6 +881,35 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.topAlbums.map(\.playDelta), [5, 3])
     }
 
+    func testRecapAlbumGroupsUseAlbumArtistForCompilationSubtitles() {
+        let store = makeStore(named: "compilation-album-groups")
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let latestDate = date(year: 2026, month: 5, day: 8)
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "Track Artist A", albumArtist: "Various Artists", albumTitle: "Compilation", playCount: 10, albumPersistentID: 42),
+                song(id: 2, title: "Second Song", artist: "Track Artist B", albumArtist: "Various Artists", albumTitle: "Compilation", playCount: 10, albumPersistentID: 42)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "First Song", artist: "Track Artist A", albumArtist: "Various Artists", albumTitle: "Compilation", playCount: 13, albumPersistentID: 42),
+                song(id: 2, title: "Second Song", artist: "Track Artist B", albumArtist: "Various Artists", albumTitle: "Compilation", playCount: 15, albumPersistentID: 42)
+            ],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let recap = store.recap(forMonthContaining: latestDate)
+
+        XCTAssertEqual(recap.topAlbums.first?.title, "Compilation")
+        XCTAssertEqual(recap.topAlbums.first?.subtitle, "Various Artists")
+        XCTAssertEqual(recap.topAlbums.first?.playDelta, 8)
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)
@@ -910,6 +939,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         id: UInt64,
         title: String,
         artist: String = "Artist",
+        albumArtist: String? = nil,
         albumTitle: String = "Album",
         playCount: Int,
         dateAdded: Date? = nil,
@@ -921,6 +951,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             title: title,
             artist: artist,
             albumTitle: albumTitle,
+            albumArtist: albumArtist ?? artist,
             playCount: playCount,
             skipCount: 0,
             totalPlayDuration: TimeInterval(playCount * 180),

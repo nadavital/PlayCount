@@ -47,6 +47,38 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(manager.songs(for: album).map(\.title), ["Fallback Track", "ID Track"])
     }
 
+    func testSongsForAlbumUsesAlbumArtistForIDLessCompilationFallbacks() {
+        let album = album(id: 0, title: "Compilation", artist: "Various Artists", playCount: 12, artistPersistentID: 0)
+        let manager = manager(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Track A",
+                    artist: "Track Artist A",
+                    albumArtist: "Various Artists",
+                    albumTitle: "Compilation",
+                    playCount: 5,
+                    albumPersistentID: 0,
+                    artistPersistentID: 100
+                ),
+                song(
+                    id: 2,
+                    title: "Track B",
+                    artist: "Track Artist B",
+                    albumArtist: "Various Artists",
+                    albumTitle: "Compilation",
+                    playCount: 7,
+                    albumPersistentID: 0,
+                    artistPersistentID: 200
+                )
+            ],
+            albums: [album],
+            artists: []
+        )
+
+        XCTAssertEqual(manager.songs(for: album).map(\.title), ["Track B", "Track A"])
+    }
+
     func testRankMapsUseSameTieBreakersAsVisibleSongOrder() {
         let olderDate = Date(timeIntervalSince1970: 1_000)
         let newerDate = Date(timeIntervalSince1970: 2_000)
@@ -102,6 +134,65 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(manager.topArtists.map(\.name), ["A Artist", "Z Artist"])
         XCTAssertEqual(manager.playCountRank(of: aArtist), 1)
         XCTAssertEqual(manager.playCountRank(of: zArtist), 2)
+    }
+
+    func testDerivedAlbumsPreserveAlbumArtistForCompilationAlbums() {
+        let firstTrack = song(
+            id: 1,
+            title: "Track A",
+            artist: "Track Artist A",
+            albumArtist: "Various Artists",
+            albumTitle: "Compilation",
+            playCount: 5,
+            albumPersistentID: 42,
+            artistPersistentID: 100
+        )
+        let secondTrack = song(
+            id: 2,
+            title: "Track B",
+            artist: "Track Artist B",
+            albumArtist: "Various Artists",
+            albumTitle: "Compilation",
+            playCount: 7,
+            albumPersistentID: 42,
+            artistPersistentID: 200
+        )
+
+        let albums = MediaLibraryManager.debugAlbumsDerivedFromSongs([firstTrack, secondTrack])
+
+        XCTAssertEqual(albums.count, 1)
+        XCTAssertEqual(albums.first?.title, "Compilation")
+        XCTAssertEqual(albums.first?.artist, "Various Artists")
+        XCTAssertEqual(albums.first?.artistPersistentID, 0)
+        XCTAssertEqual(albums.first?.playCount, 12)
+    }
+
+    func testDerivedAlbumsPreserveArtistIDForSingleArtistAlbums() {
+        let firstTrack = song(
+            id: 1,
+            title: "Track A",
+            artist: "Nova Lane",
+            albumArtist: "Nova Lane",
+            albumTitle: "Glass Coast",
+            playCount: 5,
+            albumPersistentID: 42,
+            artistPersistentID: 100
+        )
+        let secondTrack = song(
+            id: 2,
+            title: "Track B",
+            artist: "Nova Lane",
+            albumArtist: "Nova Lane",
+            albumTitle: "Glass Coast",
+            playCount: 7,
+            albumPersistentID: 42,
+            artistPersistentID: 100
+        )
+
+        let albums = MediaLibraryManager.debugAlbumsDerivedFromSongs([firstTrack, secondTrack])
+
+        XCTAssertEqual(albums.first?.artist, "Nova Lane")
+        XCTAssertEqual(albums.first?.artistPersistentID, 100)
     }
 
     func testYearlyPlayedSongCountIncludesSyncedTopNewSongsOutsideTopSongCap() {
@@ -167,6 +258,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         id: UInt64,
         title: String,
         artist: String,
+        albumArtist: String? = nil,
         albumTitle: String = "Album",
         playCount: Int,
         totalPlayDuration: TimeInterval? = nil,
@@ -180,6 +272,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             title: title,
             artist: artist,
             albumTitle: albumTitle,
+            albumArtist: albumArtist ?? artist,
             playCount: playCount,
             skipCount: 0,
             totalPlayDuration: totalPlayDuration ?? TimeInterval(playCount * 180),
