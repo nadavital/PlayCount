@@ -535,16 +535,32 @@ extension View {
 
 private struct PlayCountCardSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
 
+    private var neutralGlassTint: Color {
+        colorScheme == .dark
+            ? Color.white.opacity(0.025)
+            : Color.black.opacity(0.045)
+    }
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .background(
-                Color(uiColor: .secondarySystemBackground).opacity(0.94),
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.07))
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(
+                    .regular.tint(neutralGlassTint),
+                    in: .rect(cornerRadius: cornerRadius)
+                )
+        } else {
+            content
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06))
+                }
             }
     }
 }

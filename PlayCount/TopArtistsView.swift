@@ -30,6 +30,9 @@ struct TopArtistsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .refreshable {
+            manager.refreshTopItems()
+        }
         .animation(.easeInOut(duration: 0.2), value: hasLoadedInitialSnapshot)
     }
 }

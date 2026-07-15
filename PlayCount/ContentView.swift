@@ -252,7 +252,6 @@ private struct AuthorizedLibraryView: View {
                 ProgressView()
             }
             sortPicker
-            refreshButton
         }
     }
 
@@ -260,12 +259,6 @@ private struct AuthorizedLibraryView: View {
         LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
-    private var refreshButton: some View {
-        Button(action: manager.refreshTopItems) {
-            Label("Refresh", systemImage: "arrow.clockwise")
-        }
-        .disabled(manager.isLoading)
-    }
 }
 
 private struct RequestingAccessView: View {

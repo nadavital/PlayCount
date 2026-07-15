@@ -1092,7 +1092,7 @@ private struct RecapHeroPoster: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isRegularWidth ? 14 : 12) {
+        VStack(alignment: .leading, spacing: isRegularWidth ? 14 : 16) {
             RecapArtworkCollage(artworks: artworks, layout: isRegularWidth ? .regular : .compact)
 
             titleBlock
@@ -1108,7 +1108,7 @@ private struct RecapHeroPoster: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(monthTitle)
-                .font(.system(size: isRegularWidth ? 36 : 34, weight: .bold, design: .rounded))
+                .font(.system(size: isRegularWidth ? 36 : 40, weight: .bold, design: .rounded))
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1167,7 +1167,7 @@ private struct RecapArtworkCollage: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: layout == .regular ? 282 : 142)
+            .frame(height: layout == .regular ? 282 : 228)
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Recap album artwork collage")
@@ -1181,7 +1181,7 @@ private struct RecapArtworkCollage: View {
     private var sideArtworkLimit: Int {
         switch layout {
         case .compact:
-            return 3
+            return 4
         case .regular:
             return 5
         }
@@ -1190,7 +1190,7 @@ private struct RecapArtworkCollage: View {
     private var mainArtworkSize: CGSize {
         switch layout {
         case .compact:
-            return CGSize(width: 112, height: 112)
+            return CGSize(width: 172, height: 172)
         case .regular:
             return CGSize(width: 196, height: 196)
         }
@@ -1201,9 +1201,9 @@ private struct RecapArtworkCollage: View {
         case .compact:
             switch index {
             case 0, 1:
-                return CGSize(width: 76, height: 76)
+                return CGSize(width: 108, height: 108)
             case 2, 3:
-                return CGSize(width: 58, height: 58)
+                return CGSize(width: 82, height: 82)
             default:
                 return CGSize(width: 68, height: 68)
             }
@@ -1238,13 +1238,13 @@ private struct RecapArtworkCollage: View {
         case .compact:
             switch index {
             case 0:
-                return CGSize(width: -72, height: 22)
+                return CGSize(width: -100, height: 34)
             case 1:
-                return CGSize(width: 72, height: 25)
+                return CGSize(width: 100, height: 38)
             case 2:
-                return CGSize(width: -112, height: 4)
+                return CGSize(width: -142, height: 4)
             case 3:
-                return CGSize(width: 112, height: 6)
+                return CGSize(width: 142, height: 8)
             default:
                 return CGSize(width: 0, height: 82)
             }
@@ -1372,8 +1372,8 @@ private struct RecapHeroSpotlight: View {
         HStack(spacing: 12) {
             ArtworkView(
                 artwork: artwork ?? song.artwork,
-                size: CGSize(width: 52, height: 52),
-                cornerRadius: 10
+                size: CGSize(width: 64, height: 64),
+                cornerRadius: 13
             )
 
             VStack(alignment: .leading, spacing: 3) {

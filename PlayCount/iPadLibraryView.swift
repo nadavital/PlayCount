@@ -155,7 +155,6 @@ struct iPadLibraryView: View {
                 ProgressView()
             }
             sortPicker
-            refreshButton
         }
     }
 
@@ -163,12 +162,6 @@ struct iPadLibraryView: View {
         LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
-    private var refreshButton: some View {
-        Button(action: manager.refreshTopItems) {
-            Label("Refresh", systemImage: "arrow.clockwise")
-        }
-        .disabled(manager.isLoading)
-    }
 }
 
 private struct iPadAllTimeDashboardView: View {
@@ -196,6 +189,9 @@ private struct iPadAllTimeDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .refreshable {
+            manager.refreshTopItems()
+        }
         .safeAreaInset(edge: .bottom) {
             Color.clear
                 .frame(height: 84)

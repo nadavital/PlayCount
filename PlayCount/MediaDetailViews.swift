@@ -619,8 +619,8 @@ private struct SongDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 240 }
-        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
+        if isRegularWidth { return 260 }
+        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
     }
 
     var body: some View {
@@ -661,6 +661,7 @@ private struct SongDetailHeader: View {
             size: CGSize(width: artworkSize, height: artworkSize),
             cornerRadius: isRegularWidth ? 22 : 24
         )
+        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
     }
 
     private var infoCard: some View {
@@ -815,8 +816,8 @@ private struct AlbumDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 220 }
-        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
+        if isRegularWidth { return 240 }
+        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
     }
 
     var body: some View {
@@ -844,6 +845,7 @@ private struct AlbumDetailHeader: View {
             size: CGSize(width: artworkSize, height: artworkSize),
             cornerRadius: isRegularWidth ? 22 : 24
         )
+        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
     }
 
     private var infoCard: some View {
@@ -958,8 +960,8 @@ private struct ArtistDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 220 }
-        return dynamicTypeSize.isAccessibilitySize ? 116 : 136
+        if isRegularWidth { return 240 }
+        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
     }
 
     var body: some View {
@@ -987,6 +989,7 @@ private struct ArtistDetailHeader: View {
             name: artist.name,
             diameter: artworkSize
         )
+        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
     }
 
     private var infoCard: some View {
