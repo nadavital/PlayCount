@@ -323,25 +323,7 @@ struct AlbumInfoView: View {
                                 }
                             }
                         }
-                        .background(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .strokeBorder(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.2),
-                                            Color.white.opacity(0.05)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1
-                                )
-                        )
+                        .playCountDetailCardSurface(cornerRadius: 20)
                     }
                 }
             }
@@ -468,24 +450,7 @@ struct ArtistInfoView: View {
                             }
                             .padding(.vertical, 12)
                             .padding(.horizontal, 16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .strokeBorder(
-                                        LinearGradient(
-                                            colors: [
-                                                Color.white.opacity(0.2),
-                                                Color.white.opacity(0.05)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ),
-                                        lineWidth: 1
-                                    )
-                            )
+                            .playCountDetailCardSurface(cornerRadius: 20)
                         }
                     }
                     .id(topSongsSectionID)
@@ -525,24 +490,7 @@ struct ArtistInfoView: View {
                             }
                             .padding(.vertical, 12)
                             .padding(.horizontal, 16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .strokeBorder(
-                                        LinearGradient(
-                                            colors: [
-                                                Color.white.opacity(0.2),
-                                                Color.white.opacity(0.05)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ),
-                                        lineWidth: 1
-                                    )
-                            )
+                            .playCountDetailCardSurface(cornerRadius: 20)
                         }
                     }
                 }
@@ -619,8 +567,8 @@ private struct SongDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 260 }
-        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
+        if isRegularWidth { return 320 }
+        return dynamicTypeSize.isAccessibilitySize ? 260 : 304
     }
 
     var body: some View {
@@ -643,12 +591,10 @@ private struct SongDetailHeader: View {
                     metrics
                 }
             } else {
-                VStack(spacing: 14) {
-                    HStack(alignment: .center, spacing: 16) {
-                        heroArtwork
-                            .frame(width: artworkSize)
-                        infoCard
-                    }
+                VStack(spacing: 16) {
+                    heroArtwork
+                        .frame(width: artworkSize)
+                    infoCard
                     metrics
                 }
             }
@@ -656,12 +602,14 @@ private struct SongDetailHeader: View {
     }
 
     private var heroArtwork: some View {
-        ArtworkView(
-            artwork: song.artwork,
-            size: CGSize(width: artworkSize, height: artworkSize),
-            cornerRadius: isRegularWidth ? 22 : 24
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+            ArtworkView(
+                artwork: song.artwork,
+                size: CGSize(width: resolvedSize, height: resolvedSize),
+                cornerRadius: isRegularWidth ? 22 : 24
+            )
+            .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        }
     }
 
     private var infoCard: some View {
@@ -696,7 +644,7 @@ private struct SongDetailHeader: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegularWidth ? 16 : 12)
         .padding(.vertical, isRegularWidth ? 16 : 10)
-        .playCountCardSurface(cornerRadius: 20)
+        .playCountDetailCardSurface(cornerRadius: 20)
     }
 
     private var compactTextAlignment: HorizontalAlignment {
@@ -816,13 +764,13 @@ private struct AlbumDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 240 }
-        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
+        if isRegularWidth { return 320 }
+        return dynamicTypeSize.isAccessibilitySize ? 260 : 304
     }
 
     var body: some View {
         MediaDetailHeaderGroup {
-            if dynamicTypeSize.isAccessibilitySize && !isRegularWidth {
+            if !isRegularWidth {
                 VStack(spacing: 16) {
                     heroArtwork
                     infoCard
@@ -840,12 +788,14 @@ private struct AlbumDetailHeader: View {
     }
 
     private var heroArtwork: some View {
-        ArtworkView(
-            artwork: album.artwork,
-            size: CGSize(width: artworkSize, height: artworkSize),
-            cornerRadius: isRegularWidth ? 22 : 24
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+            ArtworkView(
+                artwork: album.artwork,
+                size: CGSize(width: resolvedSize, height: resolvedSize),
+                cornerRadius: isRegularWidth ? 22 : 24
+            )
+            .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        }
     }
 
     private var infoCard: some View {
@@ -879,7 +829,7 @@ private struct AlbumDetailHeader: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegularWidth ? 18 : 12)
         .padding(.vertical, isRegularWidth ? 18 : 10)
-        .playCountCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
+        .playCountDetailCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
     }
 
     private var metrics: some View {
@@ -960,13 +910,13 @@ private struct ArtistDetailHeader: View {
     }
 
     private var artworkSize: CGFloat {
-        if isRegularWidth { return 240 }
-        return dynamicTypeSize.isAccessibilitySize ? 150 : 176
+        if isRegularWidth { return 320 }
+        return dynamicTypeSize.isAccessibilitySize ? 260 : 304
     }
 
     var body: some View {
         MediaDetailHeaderGroup {
-            if dynamicTypeSize.isAccessibilitySize && !isRegularWidth {
+            if !isRegularWidth {
                 VStack(spacing: 16) {
                     heroArtwork
                     infoCard
@@ -984,12 +934,14 @@ private struct ArtistDetailHeader: View {
     }
 
     private var heroArtwork: some View {
-        ArtistArtworkView(
-            artwork: artist.artwork,
-            name: artist.name,
-            diameter: artworkSize
-        )
-        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+            ArtistArtworkView(
+                artwork: artist.artwork,
+                name: artist.name,
+                diameter: resolvedSize
+            )
+            .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        }
     }
 
     private var infoCard: some View {
@@ -1019,7 +971,7 @@ private struct ArtistDetailHeader: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegularWidth ? 18 : 12)
         .padding(.vertical, isRegularWidth ? 18 : 10)
-        .playCountCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
+        .playCountDetailCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
     }
 
     private var metrics: some View {
@@ -1078,7 +1030,7 @@ private struct MediaDetailMetric: View {
         .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
-        .playCountCardSurface(cornerRadius: 20)
+        .playCountDetailCardSurface(cornerRadius: 20)
     }
 }
 
@@ -1163,6 +1115,75 @@ private struct MediaDetailHeaderGroup<Content: View>: View {
     }
 }
 
+private struct MediaDetailResponsiveHero<Content: View>: View {
+    let maximumSize: CGFloat
+    private let content: (CGFloat) -> Content
+
+    init(maximumSize: CGFloat, @ViewBuilder content: @escaping (CGFloat) -> Content) {
+        self.maximumSize = maximumSize
+        self.content = content
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let resolvedSize = max(1, min(maximumSize, proxy.size.width, proxy.size.height))
+
+            content(resolvedSize)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(maxWidth: maximumSize)
+        .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+private extension View {
+    func playCountDetailCardSurface(cornerRadius: CGFloat) -> some View {
+        modifier(MediaDetailCardSurfaceModifier(cornerRadius: cornerRadius))
+    }
+}
+
+private struct MediaDetailCardSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var contrastTint: Color {
+        colorScheme == .dark
+            ? Color.black.opacity(0.18)
+            : Color.white.opacity(0.08)
+    }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.22), lineWidth: 0.75)
+                }
+                .shadow(
+                    color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.06),
+                    radius: 14,
+                    x: 0,
+                    y: 7
+                )
+                .glassEffect(
+                    .regular.tint(contrastTint),
+                    in: .rect(cornerRadius: cornerRadius)
+                )
+        } else {
+            content
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08))
+                }
+        }
+    }
+}
+
 private struct AlbumTrackRow: View {
     let song: TopSong
     let sortMetric: MediaLibraryManager.SortMetric
@@ -1214,14 +1235,7 @@ private struct MonthlyDetailSongSection: View {
             MonthlyDetailSongDeltaRow(song: song, subtitle: periodTitle)
                 .padding(.vertical, 12)
                 .padding(.horizontal, 16)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-                )
+                .playCountDetailCardSurface(cornerRadius: 20)
         }
     }
 }
@@ -1299,14 +1313,7 @@ private struct RelatedSongsSection: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-            )
+            .playCountDetailCardSurface(cornerRadius: 20)
         }
     }
 
@@ -1387,14 +1394,7 @@ private struct MonthlyDetailSongsSection: View {
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-            )
+            .playCountDetailCardSurface(cornerRadius: 20)
         }
     }
 
@@ -1465,14 +1465,7 @@ private struct RecapDetailPeriodBreakdownSection: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground).opacity(0.94))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-            )
+            .playCountDetailCardSurface(cornerRadius: 20)
         }
     }
 }
