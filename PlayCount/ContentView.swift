@@ -88,6 +88,14 @@ private struct AuthorizedLibraryView: View {
             #endif
         }
 
+        static var screenshotPresentsAlbumDetail: Bool {
+            #if DEBUG
+            ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotAlbumDetail")
+            #else
+            false
+            #endif
+        }
+
         static var isScreenshotModeEnabled: Bool {
             #if DEBUG
             ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
@@ -103,6 +111,7 @@ private struct AuthorizedLibraryView: View {
     @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
     @State private var presentedScreenshotArtist: TopArtist?
+    @State private var presentedScreenshotAlbum: TopAlbum?
 
     var body: some View {
         if UIDevice.current.userInterfaceIdiom == .pad {
@@ -211,6 +220,11 @@ private struct AuthorizedLibraryView: View {
                 ArtistInfoView(artist: artist, manager: manager)
             }
         }
+        .sheet(item: $presentedScreenshotAlbum) { album in
+            NavigationStack {
+                AlbumInfoView(album: album, manager: manager)
+            }
+        }
         .task {
             if PlayCountNavigationRequestStore.consumeLatestRecapRequest() {
                 selectedTab = .recap
@@ -225,6 +239,11 @@ private struct AuthorizedLibraryView: View {
             guard LibraryTab.screenshotPresentsArtistDetail else { return }
             try? await Task.sleep(for: .milliseconds(350))
             presentedScreenshotArtist = manager.topArtists.first
+        }
+        .task {
+            guard LibraryTab.screenshotPresentsAlbumDetail else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            presentedScreenshotAlbum = manager.topAlbums.first
         }
         .onChange(of: manager.nowPlayingState) { _, state in
             guard let state else {

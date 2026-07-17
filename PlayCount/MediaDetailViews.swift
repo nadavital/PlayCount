@@ -145,6 +145,7 @@ struct SongInfoView: View {
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var showsNavigationTitle = false
 
     init(
         song: TopSong,
@@ -210,9 +211,15 @@ struct SongInfoView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y > 260
+        } action: { _, shouldShowTitle in
+            guard showsNavigationTitle != shouldShowTitle else { return }
+            showsNavigationTitle = shouldShowTitle
+        }
         .background(MediaDetailBackground(artwork: song.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(song.title)
+        .navigationTitle(showsNavigationTitle ? song.title : "")
         .playCountSongEntityIdentifier(song)
     }
 
@@ -246,6 +253,7 @@ struct AlbumInfoView: View {
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var showsNavigationTitle = false
 
     init(
         album: TopAlbum,
@@ -334,9 +342,15 @@ struct AlbumInfoView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y > 260
+        } action: { _, shouldShowTitle in
+            guard showsNavigationTitle != shouldShowTitle else { return }
+            showsNavigationTitle = shouldShowTitle
+        }
         .background(MediaDetailBackground(artwork: album.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(album.title)
+        .navigationTitle(showsNavigationTitle ? album.title : "")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 detailMetricPicker
@@ -364,6 +378,7 @@ struct ArtistInfoView: View {
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var showsNavigationTitle = false
 
     private let displayLimit = 5
     private let topSongsSectionID = "artist-detail-top-songs"
@@ -507,9 +522,15 @@ struct ArtistInfoView: View {
             }
         }
         .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y > 260
+        } action: { _, shouldShowTitle in
+            guard showsNavigationTitle != shouldShowTitle else { return }
+            showsNavigationTitle = shouldShowTitle
+        }
         .background(MediaDetailBackground(artwork: artist.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(artist.name)
+        .navigationTitle(showsNavigationTitle ? artist.name : "")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 detailMetricPicker
@@ -539,6 +560,7 @@ private struct SongDetailHeader: View {
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var identityTitleSize: CGFloat = 24
 
     private var isCurrentSong: Bool {
         manager.nowPlayingState?.song?.id == song.id
@@ -568,7 +590,7 @@ private struct SongDetailHeader: View {
 
     private var artworkSize: CGFloat {
         if isRegularWidth { return 320 }
-        return dynamicTypeSize.isAccessibilitySize ? 260 : 304
+        return dynamicTypeSize.isAccessibilitySize ? 272 : 320
     }
 
     var body: some View {
@@ -578,23 +600,26 @@ private struct SongDetailHeader: View {
                     heroArtwork
                         .frame(width: artworkSize)
 
-                    VStack(spacing: 16) {
-                        infoCard
+                    VStack(spacing: 14) {
+                        identity
+                        playbackButton
                         metrics
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
             } else if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 16) {
+                VStack(spacing: 14) {
                     heroArtwork
-                    infoCard
+                    identity
+                    playbackButton
                     metrics
                 }
             } else {
-                VStack(spacing: 16) {
+                VStack(spacing: 14) {
                     heroArtwork
                         .frame(width: artworkSize)
-                    infoCard
+                    identity
+                    playbackButton
                     metrics
                 }
             }
@@ -612,62 +637,49 @@ private struct SongDetailHeader: View {
         }
     }
 
-    private var infoCard: some View {
-        VStack(alignment: compactTextAlignment, spacing: 10) {
-            VStack(alignment: compactTextAlignment, spacing: 6) {
-                Text(song.title)
-                    .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
-                    .multilineTextAlignment(compactMultilineAlignment)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+    private var identity: some View {
+        VStack(spacing: 5) {
+            Text(song.title)
+                .font(.system(size: identityTitleSize, weight: .bold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
 
-                VStack(alignment: compactTextAlignment, spacing: 4) {
-                    albumLink
-                    artistLink
-                }
-            }
-
-            Button(action: handlePlayTapped) {
-                HStack(spacing: 10) {
-                    Image(systemName: playButtonIcon)
-                        .font(.body.weight(.semibold))
-                    Text(playButtonTitle)
-                        .font(.subheadline.weight(.semibold))
-                }
-                .padding(.horizontal, isRegularWidth ? 32 : 16)
-                .padding(.vertical, isRegularWidth ? 11 : 8)
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .tint(.primary)
+            artistLink
+            albumLink
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, isRegularWidth ? 16 : 12)
-        .padding(.vertical, isRegularWidth ? 16 : 10)
-        .playCountDetailCardSurface(cornerRadius: 20)
+        .padding(.horizontal, 8)
     }
 
-    private var compactTextAlignment: HorizontalAlignment {
-        !isRegularWidth && !dynamicTypeSize.isAccessibilitySize ? .leading : .center
-    }
-
-    private var compactMultilineAlignment: TextAlignment {
-        !isRegularWidth && !dynamicTypeSize.isAccessibilitySize ? .leading : .center
+    private var playbackButton: some View {
+        MediaDetailPlaybackButton(
+            title: playButtonTitle,
+            systemImage: playButtonIcon,
+            action: handlePlayTapped
+        )
     }
 
     private var metrics: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 0) {
             MediaDetailMetric(
                 title: "Plays",
                 value: song.playCount.detailFormatted,
                 subtitle: manager.playCountRank(of: song).map { "Ranked #\($0)" }
             )
+
+            Divider()
+                .frame(height: 34)
+
             MediaDetailMetric(
                 title: "Time Listened",
                 value: song.totalPlayDuration.formattedListenTime,
                 subtitle: manager.listenTimeRank(of: song).map { "Ranked #\($0)" }
             )
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .playCountDetailCardSurface(cornerRadius: 18)
     }
 
     @ViewBuilder
@@ -677,11 +689,11 @@ private struct SongDetailHeader: View {
                 AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
             } label: {
                 Text(album.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(compactMultilineAlignment)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
         } else if !song.albumTitle.isEmpty {
@@ -689,7 +701,7 @@ private struct SongDetailHeader: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
         }
     }
 
@@ -700,19 +712,19 @@ private struct SongDetailHeader: View {
                 ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
             } label: {
                 Text(artist.name)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(compactMultilineAlignment)
-                    .lineLimit(1)
-                    .padding(.vertical, 4)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                    .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
         } else if !song.artist.isEmpty {
             Text(song.artist)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
         }
     }
 
@@ -732,6 +744,7 @@ private struct AlbumDetailHeader: View {
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var identityTitleSize: CGFloat = 24
 
     private var isCurrentAlbum: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -765,22 +778,28 @@ private struct AlbumDetailHeader: View {
 
     private var artworkSize: CGFloat {
         if isRegularWidth { return 320 }
-        return dynamicTypeSize.isAccessibilitySize ? 260 : 304
+        return dynamicTypeSize.isAccessibilitySize ? 272 : 320
     }
 
     var body: some View {
         MediaDetailHeaderGroup {
             if !isRegularWidth {
-                VStack(spacing: 16) {
+                VStack(spacing: 14) {
                     heroArtwork
-                    infoCard
+                    identity
+                    playbackButton
+                    metricsStrip
                 }
             } else {
                 HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
                     heroArtwork
                         .frame(width: artworkSize)
 
-                    infoCard
+                    VStack(spacing: 14) {
+                        identity
+                        playbackButton
+                        metricsStrip
+                    }
                 }
             }
         }
@@ -798,38 +817,33 @@ private struct AlbumDetailHeader: View {
         }
     }
 
-    private var infoCard: some View {
-        VStack(alignment: isRegularWidth ? .center : .leading, spacing: isRegularWidth ? 12 : 8) {
-            VStack(alignment: isRegularWidth ? .center : .leading, spacing: 4) {
-                Text(album.title)
-                    .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
-                    .multilineTextAlignment(isRegularWidth ? .center : .leading)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+    private var identity: some View {
+        VStack(spacing: 5) {
+            Text(album.title)
+                .font(.system(size: identityTitleSize, weight: .bold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
 
-                artistLink
-            }
-
-            metrics
-
-            Button(action: handlePlayTapped) {
-                HStack(spacing: 7) {
-                    Image(systemName: playButtonIcon)
-                        .font(.body.weight(.semibold))
-                    Text(playButtonTitle)
-                        .font(.subheadline.weight(.semibold))
-                }
-                .padding(.horizontal, isRegularWidth ? 32 : 16)
-                .padding(.vertical, isRegularWidth ? 11 : 8)
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .tint(.primary)
+            artistLink
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, isRegularWidth ? 18 : 12)
-        .padding(.vertical, isRegularWidth ? 18 : 10)
-        .playCountDetailCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
+        .padding(.horizontal, 8)
+    }
+
+    private var playbackButton: some View {
+        MediaDetailPlaybackButton(
+            title: playButtonTitle,
+            systemImage: playButtonIcon,
+            action: handlePlayTapped
+        )
+    }
+
+    private var metricsStrip: some View {
+        metrics
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .playCountDetailCardSurface(cornerRadius: 18)
     }
 
     private var metrics: some View {
@@ -849,18 +863,19 @@ private struct AlbumDetailHeader: View {
                 ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
             } label: {
                 Text(artist.name)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(isRegularWidth ? .center : .leading)
-                    .lineLimit(1)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                    .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
         } else if !album.artist.isEmpty {
             Text(album.artist)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
         }
     }
 
@@ -878,6 +893,7 @@ private struct ArtistDetailHeader: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title) private var identityTitleSize: CGFloat = 26
 
     private var isCurrentArtist: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -917,16 +933,22 @@ private struct ArtistDetailHeader: View {
     var body: some View {
         MediaDetailHeaderGroup {
             if !isRegularWidth {
-                VStack(spacing: 16) {
+                VStack(spacing: 14) {
                     heroArtwork
-                    infoCard
+                    identity
+                    playbackButton
+                    metricsStrip
                 }
             } else {
                 HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
                     heroArtwork
                         .frame(width: artworkSize)
 
-                    infoCard
+                    VStack(spacing: 14) {
+                        identity
+                        playbackButton
+                        metricsStrip
+                    }
                 }
             }
         }
@@ -944,34 +966,31 @@ private struct ArtistDetailHeader: View {
         }
     }
 
-    private var infoCard: some View {
-        VStack(alignment: isRegularWidth ? .center : .leading, spacing: isRegularWidth ? 12 : 8) {
+    private var identity: some View {
+        VStack(spacing: 5) {
             Text(artist.name)
-                .font(.system(size: isRegularWidth ? 26 : 20, weight: .bold))
-                .multilineTextAlignment(isRegularWidth ? .center : .leading)
+                .font(.system(size: identityTitleSize, weight: .bold))
+                .multilineTextAlignment(.center)
                 .foregroundStyle(.primary)
-                .lineLimit(2)
-
-            metrics
-
-            Button(action: handlePlayTapped) {
-                HStack(spacing: 7) {
-                    Image(systemName: playButtonIcon)
-                        .font(.body.weight(.semibold))
-                    Text(playButtonTitle)
-                        .font(.subheadline.weight(.semibold))
-                }
-                .padding(.horizontal, isRegularWidth ? 32 : 16)
-                .padding(.vertical, isRegularWidth ? 11 : 8)
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .tint(.primary)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, isRegularWidth ? 18 : 12)
-        .padding(.vertical, isRegularWidth ? 18 : 10)
-        .playCountDetailCardSurface(cornerRadius: isRegularWidth ? 20 : 18)
+        .padding(.horizontal, 8)
+    }
+
+    private var playbackButton: some View {
+        MediaDetailPlaybackButton(
+            title: playButtonTitle,
+            systemImage: playButtonIcon,
+            action: handlePlayTapped
+        )
+    }
+
+    private var metricsStrip: some View {
+        metrics
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .playCountDetailCardSurface(cornerRadius: 18)
     }
 
     private var metrics: some View {
@@ -1006,9 +1025,9 @@ private struct MediaDetailMetric: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 4) {
             Text(value)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -1022,15 +1041,51 @@ private struct MediaDetailMetric: View {
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .playCountDetailCardSurface(cornerRadius: 20)
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .center)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct MediaDetailPlaybackButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.body.weight(.semibold))
+                .frame(minWidth: 132)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .modifier(MediaDetailPlaybackSurfaceModifier())
+    }
+}
+
+private struct MediaDetailPlaybackSurfaceModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.75)
+                }
+        }
     }
 }
 
@@ -1111,7 +1166,13 @@ private struct MediaDetailHeaderGroup<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        content
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 14) {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -1144,30 +1205,13 @@ private extension View {
 
 private struct MediaDetailCardSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var contrastTint: Color {
-        colorScheme == .dark
-            ? Color.black.opacity(0.18)
-            : Color.white.opacity(0.08)
-    }
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.22), lineWidth: 0.75)
-                }
-                .shadow(
-                    color: Color.black.opacity(colorScheme == .dark ? 0.12 : 0.06),
-                    radius: 14,
-                    x: 0,
-                    y: 7
-                )
                 .glassEffect(
-                    .regular.tint(contrastTint),
+                    .regular,
                     in: .rect(cornerRadius: cornerRadius)
                 )
         } else {
@@ -1493,7 +1537,7 @@ private struct RecapDetailPeriodBreakdownRow: View {
 
                 Text(summary.listeningDuration.formattedListeningMinutes)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 10)
@@ -1534,7 +1578,7 @@ private struct MonthlyDetailSongDeltaRow: View {
 
                 Text(song.listeningDuration.formattedListeningMinutes)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 12)
@@ -1665,6 +1709,7 @@ private struct ArtistAlbumsListView: View {
 
 private struct MediaDetailBackground: View {
     let artwork: MPMediaItemArtwork?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -1678,8 +1723,15 @@ private struct MediaDetailBackground: View {
                 Color(.systemGroupedBackground)
             }
 
-            Color(.systemBackground)
-                .opacity(0.12)
+            LinearGradient(
+                colors: [
+                    Color(.systemBackground).opacity(colorScheme == .dark ? 0.08 : 0.02),
+                    Color(.systemBackground).opacity(colorScheme == .dark ? 0.2 : 0.12),
+                    Color(.systemBackground).opacity(colorScheme == .dark ? 0.42 : 0.3)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
         .ignoresSafeArea()
     }
@@ -1689,25 +1741,29 @@ private struct MediaDetailBackground: View {
             return nil
         }
 
-        let start = Color(
-            red: darken(components.0, amount: 0.35),
-            green: darken(components.1, amount: 0.35),
-            blue: darken(components.2, amount: 0.35)
-        )
-
-        let mid = Color(
-            red: boost(components.0, amount: 0.15),
-            green: boost(components.1, amount: 0.15),
-            blue: boost(components.2, amount: 0.15)
-        )
-
-        let end = Color(
-            red: boost(components.0, amount: 0.4),
-            green: boost(components.1, amount: 0.4),
-            blue: boost(components.2, amount: 0.4)
-        )
+        let start = adjustedColor(components, darkening: colorScheme == .dark ? 0.42 : 0.1)
+        let mid = adjustedColor(components, darkening: colorScheme == .dark ? 0.2 : -0.08)
+        let end = adjustedColor(components, darkening: colorScheme == .dark ? 0.5 : -0.18)
 
         return [start, mid, end]
+    }
+
+    private func adjustedColor(
+        _ components: (Double, Double, Double),
+        darkening amount: Double
+    ) -> Color {
+        Color(
+            red: adjust(components.0, darkening: amount),
+            green: adjust(components.1, darkening: amount),
+            blue: adjust(components.2, darkening: amount)
+        )
+    }
+
+    private func adjust(_ component: Double, darkening amount: Double) -> Double {
+        if amount >= 0 {
+            return darken(component, amount: amount)
+        }
+        return boost(component, amount: -amount)
     }
 
     private func darken(_ component: Double, amount: Double) -> Double {

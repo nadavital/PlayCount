@@ -286,7 +286,7 @@ struct MediaListRow<Artwork: View>: View {
 
                 Text(detail)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -352,7 +352,6 @@ struct MonthlyRecapView: View {
             } else {
                 VStack(alignment: .leading, spacing: 22) {
                     RecapHeroPoster(
-                        monthTitle: monthTitle,
                         recap: recap,
                         artworks: cachedArtworkHighlights,
                         leadingSong: recap.topSongs.first,
@@ -1070,7 +1069,6 @@ struct MonthlyRecapView: View {
 }
 
 private struct RecapHeroPoster: View {
-    let monthTitle: String
     let recap: MonthlyRecap
     let artworks: [MPMediaItemArtwork]
     let leadingSong: MonthlyRecap.RankedSong?
@@ -1106,26 +1104,18 @@ private struct RecapHeroPoster: View {
     }
 
     private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(monthTitle)
-                .font(.system(size: isRegularWidth ? 36 : 40, weight: .bold, design: .rounded))
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            RecapPeriodStrip(
-                selectedYear: selectedYear,
-                months: months,
-                isYearSelected: isYearSelected,
-                selectedMonthStart: selectedMonthStart,
-                canSelectPrevious: canSelectPrevious,
-                canSelectNext: canSelectNext,
-                onSelectPrevious: onSelectPrevious,
-                onSelectNext: onSelectNext,
-                onSelectYear: onSelectYear,
-                onSelectMonth: onSelectMonth
-            )
-        }
+        RecapPeriodStrip(
+            selectedYear: selectedYear,
+            months: months,
+            isYearSelected: isYearSelected,
+            selectedMonthStart: selectedMonthStart,
+            canSelectPrevious: canSelectPrevious,
+            canSelectNext: canSelectNext,
+            onSelectPrevious: onSelectPrevious,
+            onSelectNext: onSelectNext,
+            onSelectYear: onSelectYear,
+            onSelectMonth: onSelectMonth
+        )
     }
 }
 
@@ -1291,6 +1281,11 @@ private struct RecapPeriodStrip: View {
     let onSelectNext: () -> Void
     let onSelectYear: () -> Void
     let onSelectMonth: (Date) -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    private var isRegularWidth: Bool {
+        horizontalSizeClass == .regular
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1314,19 +1309,16 @@ private struct RecapPeriodStrip: View {
             } label: {
                 HStack(spacing: 7) {
                     Text(selectedPeriodTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
+                        .font(.system(size: isRegularWidth ? 36 : 34, weight: .bold, design: .rounded))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.72)
                     Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(.subheadline.weight(.bold))
                 }
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(Color.primary.opacity(0.055), in: Capsule(style: .continuous))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                }
+                .frame(minHeight: 48)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
 
@@ -1339,18 +1331,26 @@ private struct RecapPeriodStrip: View {
         isYearSelected ? String(selectedYear) : Self.fullMonthFormatter.string(from: selectedMonthStart)
     }
 
+    @ViewBuilder
     private func navigationButton(systemImage: String, label: String, isEnabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let button = Button(action: action) {
             Image(systemName: systemImage)
                 .font(.subheadline.weight(.bold))
-                .frame(width: 40, height: 40)
-                .background(Color.primary.opacity(0.055), in: Circle())
+                .frame(width: 44, height: 44)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.35)
         .accessibilityLabel(label)
+
+        if #available(iOS 26.0, *) {
+            button
+                .glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            button
+                .background(.ultraThinMaterial, in: Circle())
+        }
     }
 
     private func periodMenuLabel(title: String, isSelected: Bool) -> some View {
