@@ -1,6 +1,17 @@
 import MediaPlayer
 import SwiftUI
 
+private extension View {
+    @ViewBuilder
+    func recapFloatingGlassButton() -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            background(.ultraThinMaterial, in: Circle())
+        }
+    }
+}
+
 struct MonthlyRecapView: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -408,6 +419,11 @@ struct MonthlyRecapView: View {
                 .padding(.top, 8)
                 .padding(.trailing, 18)
         }
+        .overlay(alignment: .topLeading) {
+            recapShareButton
+                .padding(.top, 8)
+                .padding(.leading, 18)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .animation(.smooth(duration: 0.26), value: selectedMonthStartOrCurrent)
         .simultaneousGesture(monthSwipeGesture)
@@ -441,6 +457,28 @@ struct MonthlyRecapView: View {
 
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
+    }
+
+    @ViewBuilder
+    private var recapShareButton: some View {
+        if recap.hasActivity {
+            ShareLink(
+                item: RecapSharePayload(
+                    recap: recap,
+                    periodTitle: monthTitle,
+                    artwork: recap.topSongs.first.flatMap(resolvedArtwork(for:))
+                ),
+                preview: SharePreview("My \(monthTitle) PlayCount Recap")
+            ) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share recap")
+            .recapFloatingGlassButton()
+        }
     }
 
     @ViewBuilder

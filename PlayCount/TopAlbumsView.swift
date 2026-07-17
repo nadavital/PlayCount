@@ -10,7 +10,7 @@ struct TopAlbumsView: View {
         List {
             if albums.isEmpty {
                 if !hasLoadedInitialSnapshot {
-                    LoadingListSection(title: "Loading your top albums…")
+                    LoadingListSection(title: manager.loadingStage.message ?? "Loading your top albums…")
                 } else {
                     EmptyLibrarySection(
                         systemImage: "rectangle.stack.badge.slash",
@@ -19,6 +19,29 @@ struct TopAlbumsView: View {
                     )
                 }
             } else {
+                if let monthlyAlbum = manager.monthlyRecap.topAlbums.first,
+                   let resolvedAlbum = UInt64(monthlyAlbum.id).flatMap(manager.album(withPersistentID:))
+                    ?? manager.album(matchingTitle: monthlyAlbum.title, artist: monthlyAlbum.subtitle) {
+                    Section("This Month") {
+                        NavigationLink {
+                            AlbumInfoView(album: resolvedAlbum, manager: manager)
+                        } label: {
+                            MonthlyInsightRow(
+                                eyebrow: "Top Album",
+                                title: monthlyAlbum.title,
+                                subtitle: monthlyAlbum.subtitle,
+                                metric: "+\(monthlyAlbum.playDelta)"
+                            ) {
+                                ArtworkView(
+                                    artwork: monthlyAlbum.artwork ?? resolvedAlbum.artwork,
+                                    size: CGSize(width: 58, height: 58),
+                                    cornerRadius: 11
+                                )
+                            }
+                        }
+                    }
+                }
+
                 ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
                     NavigationLink {
                         AlbumInfoView(album: album, manager: manager)

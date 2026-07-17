@@ -2,6 +2,34 @@ import XCTest
 @testable import PlayCount
 
 final class MonthlyRecapSnapshotStoreTests: XCTestCase {
+    func testRecordDoesNotPersistWhenCommitGateIsClosed() {
+        let store = makeStore(named: "record-gated")
+        _ = store.record(
+            songs: [song(id: 1, title: "Private", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground,
+            shouldCommit: { false }
+        )
+
+        XCTAssertTrue(store.syncPayloads().isEmpty)
+    }
+
+    func testMergeDoesNotPersistWhenCommitGateClosesInsideTransaction() {
+        let source = makeStore(named: "merge-gated-source")
+        let target = makeStore(named: "merge-gated-target")
+        _ = source.record(
+            songs: [song(id: 1, title: "Remote", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        let gate = SnapshotCommitGate(allowedChecks: 1)
+
+        XCTAssertFalse(target.mergeSyncPayloads(source.syncPayloads()) {
+            gate.shouldCommit()
+        })
+        XCTAssertTrue(target.syncPayloads().isEmpty)
+    }
+
     func testRecapPayloadRoundTripMergesIntoFreshStore() {
         let sourceStore = makeStore(named: "source")
         let baselineDate = date(year: 2026, month: 4, day: 30, hour: 23)
@@ -1020,5 +1048,22 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             day: day,
             hour: hour
         ).date!
+    }
+}
+
+private final class SnapshotCommitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remainingAllowedChecks: Int
+
+    init(allowedChecks: Int) {
+        remainingAllowedChecks = allowedChecks
+    }
+
+    func shouldCommit() -> Bool {
+        lock.withLock {
+            guard remainingAllowedChecks > 0 else { return false }
+            remainingAllowedChecks -= 1
+            return true
+        }
     }
 }

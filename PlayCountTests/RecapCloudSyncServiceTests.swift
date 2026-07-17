@@ -65,6 +65,28 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
+    func testSyncStopsBeforeMergingWhenContinuationGateClosesAfterFetch() async {
+        let remoteStore = makeStore(named: "remote-cancelled")
+        let localStore = makeStore(named: "local-cancelled")
+        let remoteDate = date(year: 2026, month: 5, day: 3)
+        _ = remoteStore.record(
+            songs: [song(id: 1, title: "Remote", playCount: 5)],
+            at: remoteDate,
+            reason: .foreground
+        )
+
+        let client = FakeRecapCloudSyncClient(remotePayloads: remoteStore.syncPayloads())
+        let gate = SyncContinuationGate(allowedChecks: 1)
+        let didMerge = await RecapCloudSyncService(client: client).sync(
+            snapshotStore: localStore,
+            shouldContinue: { await gate.shouldContinue() }
+        )
+
+        XCTAssertFalse(didMerge)
+        XCTAssertTrue(localStore.syncPayloads().isEmpty)
+        XCTAssertTrue(client.savedPayloads.isEmpty)
+    }
+
     func testBothDevicesCanUploadWithoutReplacingManifestWithLocalOnlySnapshots() async {
         let phoneStore = makeStore(named: "phone-uploader")
         let iPadStore = makeStore(named: "ipad-uploader")
@@ -381,9 +403,28 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
         return remotePayloads
     }
 
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws {
+    func saveSnapshotPayloads(
+        _ payloads: [RecapSnapshotSyncPayload],
+        deletingPayloadIDs: [String],
+        shouldContinue: @escaping @Sendable () async -> Bool
+    ) async throws {
+        guard await shouldContinue() else { throw CancellationError() }
         savedPayloads = payloads
         savedPayloadCalls.append(payloads)
         deletedPayloadIDs = deletingPayloadIDs
+    }
+}
+
+private actor SyncContinuationGate {
+    private var remainingAllowedChecks: Int
+
+    init(allowedChecks: Int) {
+        remainingAllowedChecks = allowedChecks
+    }
+
+    func shouldContinue() -> Bool {
+        guard remainingAllowedChecks > 0 else { return false }
+        remainingAllowedChecks -= 1
+        return true
     }
 }

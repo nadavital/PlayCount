@@ -360,6 +360,41 @@ struct MetricBadge: View {
     }
 }
 
+struct MonthlyInsightRow<Artwork: View>: View {
+    let eyebrow: String
+    let title: String
+    let subtitle: String
+    let metric: String
+    @ViewBuilder let artwork: Artwork
+
+    var body: some View {
+        HStack(spacing: 14) {
+            artwork
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(eyebrow.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.6)
+
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 10)
+
+            MetricBadge(text: metric)
+        }
+        .padding(.vertical, 6)
+    }
+}
+
 struct RankBadgeView: View {
     enum Style {
         case prominentTopThree
@@ -453,12 +488,9 @@ struct LoadingListSection: View {
     let title: String
 
     var body: some View {
-        Section {
-            VStack(spacing: 16) {
-                EmptyLibraryArtworkCluster(systemImage: "music.note.list")
-                    .opacity(0.72)
-
-                HStack(spacing: 8) {
+        Group {
+            Section {
+                HStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.small)
 
@@ -466,10 +498,53 @@ struct LoadingListSection: View {
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+                .accessibilityElement(children: .combine)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 32)
+
+            Section {
+                ForEach(0..<5, id: \.self) { _ in
+                    LoadingMediaRow()
+                        .accessibilityHidden(true)
+                }
+            }
         }
+    }
+}
+
+private struct LoadingMediaRow: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(.secondary.opacity(0.14))
+                .frame(width: 34, height: 34)
+
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.secondary.opacity(0.14))
+                .frame(width: 56, height: 56)
+
+            VStack(alignment: .leading, spacing: 7) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.secondary.opacity(0.14))
+                    .frame(maxWidth: 170)
+                    .frame(height: 13)
+
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(.secondary.opacity(0.1))
+                    .frame(maxWidth: 118)
+                    .frame(height: 10)
+            }
+
+            Spacer(minLength: 8)
+
+            Capsule()
+                .fill(.secondary.opacity(0.12))
+                .frame(width: 44, height: 28)
+        }
+        .frame(minHeight: 64)
+        .padding(.vertical, 4)
+        .redacted(reason: .placeholder)
     }
 }
 
@@ -520,6 +595,7 @@ struct LibraryMetricPicker: View {
             }
             .accessibilityLabel(Text("Ranking metric: \(selection.toolbarLabel)"))
         }
+        .sensoryFeedback(.selection, trigger: selection)
     }
 }
 

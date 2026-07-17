@@ -1,5 +1,5 @@
 import Foundation
-import MediaPlayer
+@preconcurrency import MediaPlayer
 
 enum RecapSnapshotReason: String, Codable, Equatable {
     case appLaunch
@@ -33,7 +33,7 @@ enum RecapSnapshotReason: String, Codable, Equatable {
     }
 }
 
-struct MonthlyRecap: Equatable {
+struct MonthlyRecap: Equatable, @unchecked Sendable {
     struct RankedSong: Identifiable, Equatable {
         let id: UInt64
         let title: String
@@ -912,10 +912,18 @@ final class MonthlyRecapSnapshotStore {
         albums: [TopAlbum] = [],
         artists: [TopArtist] = [],
         at capturedAt: Date,
-        reason: RecapSnapshotReason
+        reason: RecapSnapshotReason,
+        shouldCommit: @Sendable () -> Bool = { true }
     ) -> MonthlyRecap {
         accessQueue.sync {
-            recordLocked(songs: songs, albums: albums, artists: artists, at: capturedAt, reason: reason)
+            recordLocked(
+                songs: songs,
+                albums: albums,
+                artists: artists,
+                at: capturedAt,
+                reason: reason,
+                shouldCommit: shouldCommit
+            )
         }
     }
 
@@ -1045,7 +1053,9 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    func syncPayloads() -> [RecapSnapshotSyncPayload] {
+    func syncPayloads(
+        shouldCommit: @Sendable () -> Bool = { true }
+    ) -> [RecapSnapshotSyncPayload] {
         accessQueue.sync {
             var stored = loadLocked()
             var didChange = backfillAggregateCounters(in: &stored)
@@ -1056,6 +1066,7 @@ final class MonthlyRecapSnapshotStore {
                 didChange = true
             }
             if didChange {
+                guard shouldCommit() else { return [] }
                 saveLocked(stored)
             }
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
@@ -1120,10 +1131,15 @@ final class MonthlyRecapSnapshotStore {
     }
 
     @discardableResult
-    func mergeSyncPayloads(_ payloads: [RecapSnapshotSyncPayload], now: Date = Date()) -> Bool {
+    func mergeSyncPayloads(
+        _ payloads: [RecapSnapshotSyncPayload],
+        now: Date = Date(),
+        shouldCommit: @Sendable () -> Bool = { true }
+    ) -> Bool {
         guard !payloads.isEmpty else { return false }
 
         return accessQueue.sync {
+            guard shouldCommit() else { return false }
             var stored = loadLocked()
             var snapshotsByID: [String: LibrarySnapshot] = [:]
             for snapshot in stored.snapshots {
@@ -1160,6 +1176,7 @@ final class MonthlyRecapSnapshotStore {
                 now: now
             )
             _ = updateSyncedRecaps(in: &stored, snapshots: stored.snapshots)
+            guard shouldCommit() else { return false }
             saveLocked(stored)
             return true
         }
@@ -1207,7 +1224,8 @@ final class MonthlyRecapSnapshotStore {
         albums: [TopAlbum],
         artists: [TopArtist],
         at capturedAt: Date,
-        reason: RecapSnapshotReason
+        reason: RecapSnapshotReason,
+        shouldCommit: @Sendable () -> Bool
     ) -> MonthlyRecap {
         var stored = loadLocked()
         let snapshot = LibrarySnapshot(
@@ -1221,10 +1239,14 @@ final class MonthlyRecapSnapshotStore {
         )
 
         if shouldAppend(snapshot, after: stored.snapshots.last) {
-            stored.snapshots.append(snapshot)
-            stored.snapshots = retainedCanonicalSnapshots(from: stored.snapshots, now: capturedAt)
-            _ = updateSyncedRecaps(in: &stored, snapshots: stored.snapshots)
-            saveLocked(stored)
+            var updated = stored
+            updated.snapshots.append(snapshot)
+            updated.snapshots = retainedCanonicalSnapshots(from: updated.snapshots, now: capturedAt)
+            _ = updateSyncedRecaps(in: &updated, snapshots: updated.snapshots)
+            if shouldCommit() {
+                saveLocked(updated)
+                stored = updated
+            }
         }
 
         return recap(

@@ -32,6 +32,15 @@ enum PlayCountIntentError: LocalizedError, Sendable {
     }
 }
 
+enum PlayCountIntentAuthorization {
+    static func requireMediaLibraryAccess() throws {
+        guard MPMediaLibrary.authorizationStatus() == .authorized else {
+            PlayCountIntentLibraryCache.shared.invalidate()
+            throw PlayCountIntentError.mediaLibraryPermissionRequired
+        }
+    }
+}
+
 struct PlayCountIntentLibrarySnapshot {
     let songs: [TopSong]
     let albums: [TopAlbum]
@@ -87,6 +96,7 @@ struct PlayCountIntentLibrary: Sendable {
     func songs() throws -> [TopSong] {
         try requireAuthorization()
         let songs = cache.snapshot().songs
+        try requireAuthorization()
         guard !songs.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return songs
     }
@@ -94,6 +104,7 @@ struct PlayCountIntentLibrary: Sendable {
     func albums() throws -> [TopAlbum] {
         try requireAuthorization()
         let albums = cache.snapshot().albums
+        try requireAuthorization()
         guard !albums.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return albums
     }
@@ -101,6 +112,7 @@ struct PlayCountIntentLibrary: Sendable {
     func artists() throws -> [TopArtist] {
         try requireAuthorization()
         let artists = cache.snapshot().artists
+        try requireAuthorization()
         guard !artists.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return artists
     }
@@ -119,10 +131,7 @@ struct PlayCountIntentLibrary: Sendable {
     }
 
     private func requireAuthorization() throws {
-        guard MPMediaLibrary.authorizationStatus() == .authorized else {
-            cache.invalidate()
-            throw PlayCountIntentError.mediaLibraryPermissionRequired
-        }
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
     }
 }
 
@@ -502,9 +511,10 @@ struct LatestRecapIntent: AppIntent {
     @Dependency private var manager: MediaLibraryManager
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        guard let recap = PlayCountIntentRecaps.latestUsable(
-            from: [manager.monthlyRecap] + manager.recaps(forMonthsContaining: manager.availableRecapMonths)
-        ) else {
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        let recaps = await manager.storedRecapsForIntents()
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        guard let recap = PlayCountIntentRecaps.latestUsable(from: recaps) else {
             throw PlayCountIntentError.recapUnavailable
         }
         guard recap.totalPlayDelta > 0, let topSong = recap.topSongs.first else {
@@ -525,9 +535,11 @@ struct BiggestGainerIntent: AppIntent {
     @Dependency private var manager: MediaLibraryManager
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        guard let recap = PlayCountIntentRecaps.latestUsable(
-            from: [manager.monthlyRecap] + manager.recaps(forMonthsContaining: manager.availableRecapMonths)
-        ), let song = recap.biggestGainers.first else {
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        let recaps = await manager.storedRecapsForIntents()
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        guard let recap = PlayCountIntentRecaps.latestUsable(from: recaps),
+              let song = recap.biggestGainers.first else {
             throw PlayCountIntentError.recapUnavailable
         }
         let response = "\(song.title) by \(song.artist) climbed \(song.rankChange) places in your latest recap."
@@ -558,9 +570,10 @@ struct TopSongsThisMonthIntent: AppIntent {
     static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     func perform() async throws -> some IntentResult & ReturnsValue<[String]> & ProvidesDialog {
-        guard let recap = PlayCountIntentRecaps.latestUsable(
-            from: [manager.monthlyRecap] + manager.recaps(forMonthsContaining: manager.availableRecapMonths)
-        ) else {
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        let recaps = await manager.storedRecapsForIntents()
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        guard let recap = PlayCountIntentRecaps.latestUsable(from: recaps) else {
             throw PlayCountIntentError.recapUnavailable
         }
         let songs = Array(recap.topSongs.prefix(limit))
@@ -580,8 +593,11 @@ struct TopArtistThisYearIntent: AppIntent {
     static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
         let year = Calendar.current.component(.year, from: Date())
-        guard let artist = manager.yearlyRecap(for: year).topArtists.first else {
+        let recap = await manager.storedYearlyRecapForIntent(year: year)
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        guard let artist = recap?.topArtists.first else {
             throw PlayCountIntentError.recapUnavailable
         }
         let response = "Your top artist of \(year) is \(artist.title), with \(artist.playDelta) plays."
@@ -600,9 +616,10 @@ struct OpenLatestRecapIntent: AppIntent {
     static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     func perform() async throws -> some IntentResult {
-        guard let recap = PlayCountIntentRecaps.latestUsable(
-            from: [manager.monthlyRecap] + manager.recaps(forMonthsContaining: manager.availableRecapMonths)
-        ) else {
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        let recaps = await manager.storedRecapsForIntents()
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        guard let recap = PlayCountIntentRecaps.latestUsable(from: recaps) else {
             throw PlayCountIntentError.recapUnavailable
         }
         await MainActor.run {

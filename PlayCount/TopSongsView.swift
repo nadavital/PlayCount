@@ -10,7 +10,7 @@ struct TopSongsView: View {
         List {
             if songs.isEmpty {
                 if !hasLoadedInitialSnapshot {
-                    LoadingListSection(title: "Loading your top songs…")
+                    LoadingListSection(title: manager.loadingStage.message ?? "Loading your top songs…")
                 } else {
                     EmptyLibrarySection(
                         systemImage: "music.note.slash",
@@ -19,6 +19,29 @@ struct TopSongsView: View {
                     )
                 }
             } else {
+                if let monthlySong = manager.monthlyRecap.topSongs.first,
+                   let resolvedSong = manager.song(withPersistentID: monthlySong.id)
+                    ?? manager.song(matchingTitle: monthlySong.title, artist: monthlySong.artist) {
+                    Section("This Month") {
+                        NavigationLink {
+                            SongInfoView(song: resolvedSong, manager: manager)
+                        } label: {
+                            MonthlyInsightRow(
+                                eyebrow: "Most Played",
+                                title: monthlySong.title,
+                                subtitle: monthlySong.artist,
+                                metric: "+\(monthlySong.playDelta)"
+                            ) {
+                                ArtworkView(
+                                    artwork: monthlySong.artwork ?? resolvedSong.artwork,
+                                    size: CGSize(width: 58, height: 58),
+                                    cornerRadius: 11
+                                )
+                            }
+                        }
+                    }
+                }
+
                 ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
                     NavigationLink {
                         SongInfoView(song: song, manager: manager)

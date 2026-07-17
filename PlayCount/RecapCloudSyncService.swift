@@ -4,7 +4,11 @@ import Foundation
 protocol RecapCloudSyncClient {
     func isAvailable() async -> Bool
     func fetchSnapshotPayloads() async throws -> [RecapSnapshotSyncPayload]
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws
+    func saveSnapshotPayloads(
+        _ payloads: [RecapSnapshotSyncPayload],
+        deletingPayloadIDs: [String],
+        shouldContinue: @escaping @Sendable () async -> Bool
+    ) async throws
 }
 
 final class RecapCloudSyncService {
@@ -21,7 +25,12 @@ final class RecapCloudSyncService {
     }
 
     @discardableResult
-    func sync(snapshotStore: MonthlyRecapSnapshotStore) async -> Bool {
+    func sync(
+        snapshotStore: MonthlyRecapSnapshotStore,
+        shouldContinue: @escaping @Sendable () async -> Bool = { true },
+        shouldCommit: @escaping @Sendable () -> Bool = { true }
+    ) async -> Bool {
+        guard !Task.isCancelled, await shouldContinue() else { return false }
         guard await client.isAvailable() else {
             #if DEBUG
             print("Recap CloudKit sync skipped: account unavailable")
@@ -39,12 +48,18 @@ final class RecapCloudSyncService {
                 }
                 remotePayloads = []
             }
+            guard !Task.isCancelled, await shouldContinue() else { return false }
             #if DEBUG
             print("Recap CloudKit sync fetched \(remotePayloads.count) remote payloads")
             #endif
-            let didMergeRemote = snapshotStore.mergeSyncPayloads(remotePayloads)
+            let didMergeRemote = snapshotStore.mergeSyncPayloads(
+                remotePayloads,
+                shouldCommit: shouldCommit
+            )
             if uploadsEnabled {
-                let uploadPayloads = snapshotStore.syncPayloads()
+                guard !Task.isCancelled, await shouldContinue() else { return false }
+                let uploadPayloads = snapshotStore.syncPayloads(shouldCommit: shouldCommit)
+                guard !Task.isCancelled, await shouldContinue() else { return false }
                 let uploadPayloadIDs = Set(uploadPayloads.map(\.id))
                 let deletingPayloadIDs = remotePayloads
                     .map(\.id)
@@ -52,7 +67,12 @@ final class RecapCloudSyncService {
                 #if DEBUG
                 print("Recap CloudKit sync saving \(uploadPayloads.count) compact payloads, deleting \(deletingPayloadIDs.count); didMergeRemote=\(didMergeRemote)")
                 #endif
-                try await client.saveSnapshotPayloads(uploadPayloads, deletingPayloadIDs: deletingPayloadIDs)
+                guard !Task.isCancelled, await shouldContinue() else { return false }
+                try await client.saveSnapshotPayloads(
+                    uploadPayloads,
+                    deletingPayloadIDs: deletingPayloadIDs,
+                    shouldContinue: shouldContinue
+                )
             } else {
                 #if DEBUG
                 print("Recap CloudKit sync upload skipped; didMergeRemote=\(didMergeRemote)")
@@ -150,8 +170,13 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
     }
 
-    func saveSnapshotPayloads(_ payloads: [RecapSnapshotSyncPayload], deletingPayloadIDs: [String]) async throws {
+    func saveSnapshotPayloads(
+        _ payloads: [RecapSnapshotSyncPayload],
+        deletingPayloadIDs: [String],
+        shouldContinue: @escaping @Sendable () async -> Bool
+    ) async throws {
         guard !payloads.isEmpty || !deletingPayloadIDs.isEmpty else { return }
+        guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
         try await saveRecordZoneIfNeeded()
 
         var seenPayloadIDs = Set<String>()
@@ -179,12 +204,15 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
 
         for chunk in records.chunked(into: saveBatchSize) {
+            guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
             try await modify(recordsToSave: chunk, recordIDsToDelete: [])
         }
         for chunk in recordIDsToDelete.chunked(into: saveBatchSize) {
+            guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
             try await modify(recordsToSave: [], recordIDsToDelete: chunk)
         }
 
+        guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
         try await saveManifest(payloadIDs: Self.manifestPayloadIDs(for: uniquePayloads))
     }
 
@@ -329,11 +357,12 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         recordIDsToDelete: [CKRecord.ID] = [],
         savePolicy: CKModifyRecordsOperation.RecordSavePolicy = .allKeys
     ) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let operation = CKModifyRecordsOperation(
-                recordsToSave: records.isEmpty ? nil : records,
-                recordIDsToDelete: recordIDsToDelete.isEmpty ? nil : recordIDsToDelete
-            )
+        let operation = CKModifyRecordsOperation(
+            recordsToSave: records.isEmpty ? nil : records,
+            recordIDsToDelete: recordIDsToDelete.isEmpty ? nil : recordIDsToDelete
+        )
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             operation.savePolicy = savePolicy
             operation.qualityOfService = .utility
             let errors = CloudKitRecordSaveErrors()
@@ -355,6 +384,9 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
                 }
             }
             database.add(operation)
+            }
+        } onCancel: {
+            operation.cancel()
         }
     }
 

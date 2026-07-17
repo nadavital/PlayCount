@@ -10,7 +10,7 @@ struct TopArtistsView: View {
         List {
             if artists.isEmpty {
                 if !hasLoadedInitialSnapshot {
-                    LoadingListSection(title: "Loading your top artists…")
+                    LoadingListSection(title: manager.loadingStage.message ?? "Loading your top artists…")
                 } else {
                     EmptyLibrarySection(
                         systemImage: "person.crop.circle.badge.exclam",
@@ -19,6 +19,29 @@ struct TopArtistsView: View {
                     )
                 }
             } else {
+                if let monthlyArtist = manager.monthlyRecap.topArtists.first,
+                   let resolvedArtist = UInt64(monthlyArtist.id).flatMap(manager.artist(withPersistentID:))
+                    ?? manager.artist(matchingName: monthlyArtist.title) {
+                    Section("This Month") {
+                        NavigationLink {
+                            ArtistInfoView(artist: resolvedArtist, manager: manager)
+                        } label: {
+                            MonthlyInsightRow(
+                                eyebrow: "Top Artist",
+                                title: monthlyArtist.title,
+                                subtitle: monthlyArtist.listeningDuration.formattedListeningMinutes,
+                                metric: "+\(monthlyArtist.playDelta)"
+                            ) {
+                                ArtistArtworkView(
+                                    artwork: monthlyArtist.artwork ?? resolvedArtist.artwork,
+                                    name: resolvedArtist.name,
+                                    diameter: 58
+                                )
+                            }
+                        }
+                    }
+                }
+
                 ForEach(Array(artists.enumerated()), id: \.element.id) { index, artist in
                     NavigationLink {
                         ArtistInfoView(artist: artist, manager: manager)

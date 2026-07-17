@@ -37,6 +37,8 @@ struct PlayCountApp: App {
             ContentView(libraryManager: mediaLibraryManager)
                 .task {
                     if !Self.isRunningTests {
+                        await Task.yield()
+                        PlayCountAppShortcuts.updateAppShortcutParameters()
                         RecapBackgroundRefreshScheduler.schedule()
                     }
                 }

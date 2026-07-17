@@ -201,15 +201,13 @@ private struct AuthorizedLibraryView: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
-        .tabViewBottomAccessory{
-
-            NowPlayingBarView(manager: manager) { state in
-                if let song = state.song {
-                    presentedNowPlayingSong = song
-                }
-            }
-                .environment(\.colorScheme, colorScheme)
-        }
+        .modifier(
+            NowPlayingAccessoryModifier(
+                manager: manager,
+                colorScheme: colorScheme,
+                presentedSong: $presentedNowPlayingSong
+            )
+        )
         .sheet(item: $presentedNowPlayingSong) { song in
             NavigationStack {
                 SongInfoView(song: song, manager: manager)
@@ -279,6 +277,37 @@ private struct AuthorizedLibraryView: View {
     }
 
 }
+
+private struct NowPlayingAccessoryModifier: ViewModifier {
+    @ObservedObject var manager: MediaLibraryManager
+    let colorScheme: ColorScheme
+    @Binding var presentedSong: TopSong?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.1, *) {
+            content.tabViewBottomAccessory(isEnabled: manager.nowPlayingState != nil) {
+                accessory
+            }
+        } else {
+            content.tabViewBottomAccessory {
+                if manager.nowPlayingState != nil {
+                    accessory
+                }
+            }
+        }
+    }
+
+    private var accessory: some View {
+        NowPlayingBarView(manager: manager) { state in
+            if let song = state.song {
+                presentedSong = song
+            }
+        }
+        .environment(\.colorScheme, colorScheme)
+    }
+}
+
 
 private struct RequestingAccessView: View {
     var body: some View {

@@ -26,6 +26,8 @@ private struct MediaLibrarySnapshot {
     let songs: [TopSong]
     let albums: [TopAlbum]
     let artists: [TopArtist]
+
+    static let empty = MediaLibrarySnapshot(songs: [], albums: [], artists: [])
 }
 
 struct TopAlbum: Identifiable {
@@ -81,6 +83,17 @@ struct LibrarySummary {
         self.artistCount = artistCount
         self.totalPlayCount = totalPlayCount
         self.totalListeningDuration = totalListeningDuration
+    }
+}
+
+private final class MutationValidityToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+
+    var isValid: Bool { lock.withLock { valid } }
+
+    func invalidate() {
+        lock.withLock { valid = false }
     }
 }
 
@@ -147,6 +160,23 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }()
     }
 
+    enum LoadingStage: Equatable {
+        case idle
+        case readingLibrary
+        case preparingInsights
+
+        var message: String? {
+            switch self {
+            case .idle:
+                return nil
+            case .readingLibrary:
+                return "Reading your Apple Music library…"
+            case .preparingInsights:
+                return "Preparing your listening insights…"
+            }
+        }
+    }
+
     @Published private(set) var topSongs: [TopSong] = []
     @Published private(set) var topAlbums: [TopAlbum] = []
     @Published private(set) var topArtists: [TopArtist] = []
@@ -156,6 +186,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var librarySummary: LibrarySummary = .empty
     @Published var authorizationStatus: MPMediaLibraryAuthorizationStatus
     @Published var isLoading: Bool = false
+    @Published private(set) var loadingStage: LoadingStage = .idle
     @Published var errorMessage: String?
     @Published var sortMetric: SortMetric = .playCount {
         didSet {
@@ -186,6 +217,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private var yearlyMonthlyHighlightsCache: [Int: [YearlyRecapMonthlyHighlight]] = [:]
     private var isRecapCloudSyncInFlight = false
     private var pendingRecapCloudSync = false
+    private var snapshotMutationGeneration = 0
+    private var isBackgroundRefreshInFlight = false
+    private var cloudSyncGeneration = 0
+    private var recapCloudSyncTask: Task<Void, Never>?
+    private var snapshotMutationToken: MutationValidityToken?
+    private var cloudSyncToken: MutationValidityToken?
     private var songsByPersistentID: [UInt64: TopSong] = [:]
     private var albumsByPersistentID: [UInt64: TopAlbum] = [:]
     private var artistsByPersistentID: [UInt64: TopArtist] = [:]
@@ -225,8 +262,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         #endif
 
         authorizationStatus = MPMediaLibrary.authorizationStatus()
-        monthlyRecap = self.snapshotStore.currentMonthRecap()
-        availableRecapMonths = self.snapshotStore.availableMonthStarts()
+        let currentMonth = Calendar.current.startOfMonth(containing: Date())
+        monthlyRecap = .empty(for: currentMonth)
+        availableRecapMonths = [currentMonth]
 
         guard startsAutomatically else {
             return
@@ -237,10 +275,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         configureObservers()
         updateNowPlayingState()
 
-        if authorizationStatus == .authorized {
-            refreshTopItems()
-        }
-        scheduleRecapCloudSync()
+        // The root view starts the first refresh after it appears. Avoiding recap
+        // disk decoding, media queries, and CloudKit work here keeps construction
+        // cheap enough for SwiftUI to present the tab interface immediately.
     }
 
     #if DEBUG
@@ -281,6 +318,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         switch currentStatus {
         case .notDetermined:
             isLoading = true
+            loadingStage = .readingLibrary
             MPMediaLibrary.requestAuthorization { [weak self] status in
                 guard let self else { return }
 
@@ -288,12 +326,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.authorizationStatus = status
 
                     if status == .authorized {
+                        self.isLoading = false
+                        self.loadingStage = .idle
                         self.refreshTopItems()
                     } else {
-                        self.isLoading = false
                         if status == .denied || status == .restricted {
-                            self.errorMessage = "Media library access is required to show listening data."
-                            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
+                            self.handleAuthorizationLostDuringRefresh(status: status)
+                        } else {
+                            self.isLoading = false
+                            self.loadingStage = .idle
                         }
                     }
                 }
@@ -301,9 +342,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         case .authorized:
             refreshTopItems()
         case .denied, .restricted:
-            isLoading = false
-            errorMessage = "Media library access is required to show listening data."
-            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
+            handleAuthorizationLostDuringRefresh(status: currentStatus)
         default:
             break
         }
@@ -372,31 +411,67 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
         #endif
 
-        guard MPMediaLibrary.authorizationStatus() == .authorized else {
-            return false
+        let operation: (generation: Int, token: MutationValidityToken)? = await MainActor.run {
+            guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                self.handleAuthorizationLostDuringRefresh()
+                return nil
+            }
+            guard !self.isLoading, !self.isBackgroundRefreshInFlight else { return nil }
+            self.isBackgroundRefreshInFlight = true
+            self.snapshotMutationGeneration &+= 1
+            let token = MutationValidityToken()
+            self.snapshotMutationToken?.invalidate()
+            self.snapshotMutationToken = token
+            return (self.snapshotMutationGeneration, token)
         }
+        guard let operation else { return false }
+        let generation = operation.generation
+        let token = operation.token
 
-        let result = await Task.detached(priority: .utility) { [snapshotStore] in
+        let result: (MediaLibrarySnapshot, MonthlyRecap)? = await Task.detached(priority: .utility) { [snapshotStore] in
             let snapshot = Self.fetchLibrarySnapshot()
+            guard MPMediaLibrary.authorizationStatus() == .authorized else { return nil }
+            guard await MainActor.run(body: {
+                self.snapshotMutationGeneration == generation
+            }) else { return nil }
             let recap = snapshotStore.record(
                 songs: snapshot.songs,
                 albums: snapshot.albums,
                 artists: snapshot.artists,
                 at: Date(),
-                reason: reason
+                reason: reason,
+                shouldCommit: {
+                    token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                }
             )
             return (snapshot, recap)
         }.value
 
-        await MainActor.run {
+        guard let result else {
+            await MainActor.run {
+                if MPMediaLibrary.authorizationStatus() == .authorized {
+                    self.finishBackgroundRefreshOperation(generation: generation)
+                } else {
+                    self.handleAuthorizationLostDuringRefresh()
+                }
+            }
+            return false
+        }
+
+        return await MainActor.run {
+            guard self.snapshotMutationGeneration == generation else { return false }
+            guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                self.handleAuthorizationLostDuringRefresh()
+                return false
+            }
             self.invalidateRecapCaches()
             self.applyLibrarySnapshot(result.0, recap: result.1)
             self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
             self.hasLoadedInitialSnapshot = true
             self.scheduleRecapCloudSync()
+            self.finishBackgroundRefreshOperation(generation: generation)
+            return true
         }
-
-        return true
     }
 
     func recap(forMonthContaining date: Date) -> MonthlyRecap {
@@ -437,6 +512,40 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
 
         return monthStarts.map { recapCache[$0] ?? .empty(for: $0) }
+    }
+
+    /// Returns an immutable persisted snapshot for App Intents that may run before
+    /// SwiftUI presents the root scene. Callers enforce media authorization before
+    /// reading it, and intents never touch the UI-owned caches.
+    func storedRecapsForIntents() async -> [MonthlyRecap] {
+        let store = snapshotStore
+        return await Task.detached(priority: .userInitiated) {
+            let months = store.availableMonthStarts()
+            return store.recaps(forMonthsContaining: months)
+        }.value
+    }
+
+    func storedYearlyRecapForIntent(year: Int) async -> MonthlyRecap? {
+        let store = snapshotStore
+        return await Task.detached(priority: .userInitiated) {
+            if let synced = store.syncedYearlyRecap(for: year) {
+                return synced
+            }
+
+            let calendar = Calendar.current
+            let months = store.availableMonthStarts().filter {
+                calendar.component(.year, from: $0) == year
+            }
+            let recaps = store.recaps(forMonthsContaining: months)
+            guard let first = recaps.first else { return nil }
+            return MonthlyRecap.yearly(
+                for: year,
+                months: months,
+                monthlyRecaps: recaps,
+                fallbackMonth: first.monthStart,
+                fallbackRecap: first
+            )
+        }.value
     }
 
     func yearlyRecap(for year: Int) -> MonthlyRecap {
@@ -495,19 +604,45 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     private func scheduleRecapCloudSync() {
         guard let recapCloudSyncService else { return }
+        guard MPMediaLibrary.authorizationStatus() == .authorized else {
+            handleAuthorizationLostDuringRefresh()
+            return
+        }
         guard !isRecapCloudSyncInFlight else {
             pendingRecapCloudSync = true
             return
         }
 
         isRecapCloudSyncInFlight = true
+        cloudSyncGeneration &+= 1
+        let generation = cloudSyncGeneration
+        let token = MutationValidityToken()
+        cloudSyncToken?.invalidate()
+        cloudSyncToken = token
 
-        Task { [weak self, snapshotStore, recapCloudSyncService] in
-            _ = await recapCloudSyncService.sync(snapshotStore: snapshotStore)
+        let task = Task { [weak self, snapshotStore, recapCloudSyncService] in
+            _ = await recapCloudSyncService.sync(
+                snapshotStore: snapshotStore,
+                shouldContinue: {
+                    !Task.isCancelled
+                        && token.isValid
+                        && MPMediaLibrary.authorizationStatus() == .authorized
+                },
+                shouldCommit: {
+                    token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                }
+            )
 
             let shouldSyncAgain = await MainActor.run { [weak self] in
                 guard let self else { return false }
+                guard self.cloudSyncGeneration == generation else { return false }
+                guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                    self.handleAuthorizationLostDuringRefresh()
+                    return false
+                }
                 self.isRecapCloudSyncInFlight = false
+                self.recapCloudSyncTask = nil
+                self.cloudSyncToken = nil
                 self.invalidateRecapCaches()
                 self.monthlyRecap = self.recap(forMonthContaining: Date())
                 self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
@@ -522,6 +657,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 }
             }
         }
+        recapCloudSyncTask = task
     }
 
     func recapDebugSummary() -> String {
@@ -736,49 +872,112 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
 
         guard currentStatus == .authorized else {
-            isLoading = false
-            errorMessage = "Media library access is required to show listening data."
-            Task { await PlayCountSiriIntegration.purgeSearchIndex() }
+            handleAuthorizationLostDuringRefresh(status: currentStatus)
             return
         }
 
-        guard !isLoading else {
+        guard !isLoading, !isBackgroundRefreshInFlight else {
             pendingSnapshotReason = snapshotReason
             return
         }
 
         isLoading = true
+        loadingStage = .readingLibrary
         errorMessage = nil
+        snapshotMutationGeneration &+= 1
+        let generation = snapshotMutationGeneration
+        let token = MutationValidityToken()
+        snapshotMutationToken?.invalidate()
+        snapshotMutationToken = token
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
             let snapshot = Self.fetchLibrarySnapshot()
-            let recap = self.snapshotStore.record(
-                songs: snapshot.songs,
-                albums: snapshot.albums,
-                artists: snapshot.artists,
-                at: Date(),
-                reason: snapshotReason
-            )
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.invalidateRecapCaches()
+                guard self.snapshotMutationGeneration == generation else { return }
+                guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                    self.handleAuthorizationLostDuringRefresh()
+                    return
+                }
                 self.applyLibrarySnapshot(
                     snapshot,
-                    recap: recap,
-                    updatesSearchIndex: snapshotReason != .playbackChanged
+                    recap: self.monthlyRecap,
+                    updatesSearchIndex: false
                 )
-                self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
-
-                self.isLoading = false
                 self.hasLoadedInitialSnapshot = true
-                self.scheduleRecapCloudSync()
+                self.loadingStage = .preparingInsights
+
+                if snapshotReason != .playbackChanged {
+                    let indexedSongs = self.topSongs
+                    let indexedAlbums = self.topAlbums
+                    let indexedArtists = self.topArtists
+                    Task {
+                        await PlayCountSiriIntegration.updateSearchIndex(
+                            songs: indexedSongs,
+                            albums: indexedAlbums,
+                            artists: indexedArtists
+                        )
+                    }
+                }
 
                 if snapshot.songs.isEmpty && snapshot.albums.isEmpty && snapshot.artists.isEmpty {
                     self.errorMessage = "We couldn't find any listening data in your media library."
                 }
+
+                self.finishRefresh(
+                    snapshot: snapshot,
+                    snapshotReason: snapshotReason,
+                    generation: generation,
+                    token: token
+                )
+            }
+        }
+    }
+
+    private func finishRefresh(
+        snapshot: MediaLibrarySnapshot,
+        snapshotReason: RecapSnapshotReason,
+        generation: Int,
+        token: MutationValidityToken
+    ) {
+        DispatchQueue.global(qos: .utility).async { [weak self, snapshotStore] in
+            guard let self else { return }
+            guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.handleAuthorizationLostDuringRefresh()
+                }
+                return
+            }
+
+            let recap = snapshotStore.record(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists,
+                at: Date(),
+                reason: snapshotReason,
+                shouldCommit: {
+                    token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                }
+            )
+            let availableMonths = snapshotStore.availableMonthStarts()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.snapshotMutationGeneration == generation else { return }
+                guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                    self.handleAuthorizationLostDuringRefresh()
+                    return
+                }
+                self.invalidateRecapCaches()
+                self.monthlyRecap = recap
+                self.availableRecapMonths = availableMonths
+                self.isLoading = false
+                self.loadingStage = .idle
+
+                self.scheduleRecapCloudSync()
 
                 if let pendingSnapshotReason = self.pendingSnapshotReason {
                     self.pendingSnapshotReason = nil
@@ -787,6 +986,43 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     }
                 }
             }
+        }
+    }
+
+    private func handleAuthorizationLostDuringRefresh(
+        status: MPMediaLibraryAuthorizationStatus? = nil
+    ) {
+        snapshotMutationGeneration &+= 1
+        cloudSyncGeneration &+= 1
+        snapshotMutationToken?.invalidate()
+        snapshotMutationToken = nil
+        cloudSyncToken?.invalidate()
+        cloudSyncToken = nil
+        recapCloudSyncTask?.cancel()
+        recapCloudSyncTask = nil
+        authorizationStatus = status ?? MPMediaLibrary.authorizationStatus()
+        isLoading = false
+        loadingStage = .idle
+        pendingSnapshotReason = nil
+        isBackgroundRefreshInFlight = false
+        isRecapCloudSyncInFlight = false
+        pendingRecapCloudSync = false
+        errorMessage = "Media library access is required to show listening data."
+        invalidateRecapCaches()
+        let currentMonth = Calendar.current.startOfMonth(containing: Date())
+        monthlyRecap = .empty(for: currentMonth)
+        availableRecapMonths = []
+        applyLibrarySnapshot(.empty, recap: monthlyRecap, updatesSearchIndex: false)
+        hasLoadedInitialSnapshot = false
+        Task { await PlayCountSiriIntegration.purgeSearchIndex() }
+    }
+
+    private func finishBackgroundRefreshOperation(generation: Int) {
+        guard snapshotMutationGeneration == generation else { return }
+        isBackgroundRefreshInFlight = false
+        if let pendingSnapshotReason {
+            self.pendingSnapshotReason = nil
+            refreshTopItems(snapshotReason: pendingSnapshotReason)
         }
     }
 
@@ -1819,7 +2055,25 @@ extension MediaLibraryManager {
             ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
     }
 
+    private static var screenshotShowsLoadingState: Bool {
+        ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotLoadingState")
+    }
+
     private func loadScreenshotFixture() {
+        if Self.screenshotShowsLoadingState {
+            topSongs = []
+            topAlbums = []
+            topArtists = []
+            librarySongs = []
+            libraryAlbums = []
+            libraryArtists = []
+            librarySummary = .empty
+            hasLoadedInitialSnapshot = false
+            isLoading = true
+            loadingStage = .readingLibrary
+            return
+        }
+
         let songs = Self.screenshotSongs
         librarySongs = songs
         libraryAlbums = Self.screenshotAlbums(from: songs)
@@ -1832,6 +2086,8 @@ extension MediaLibraryManager {
         monthlyRecap = Self.screenshotRecap(from: songs)
         availableRecapMonths = Self.screenshotRecapMonths(endingAt: monthlyRecap.monthStart)
         hasLoadedInitialSnapshot = true
+        isLoading = false
+        loadingStage = .idle
         nowPlayingState = NowPlayingState(
             title: songs[0].title,
             subtitle: "\(songs[0].artist) — \(songs[0].albumTitle)",

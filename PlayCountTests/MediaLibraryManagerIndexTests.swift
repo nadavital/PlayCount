@@ -1,7 +1,114 @@
 import XCTest
+import UIKit
 @testable import PlayCount
 
 final class MediaLibraryManagerIndexTests: XCTestCase {
+    @MainActor
+    func testRecapShareCardRendersCompletePortraitCanvas() throws {
+        let song = MonthlyRecap.RankedSong(
+            id: 1,
+            title: "A Long Enough Song Title to Exercise Layout",
+            artist: "Nova Lane",
+            albumTitle: "Glass Coast",
+            playDelta: 42,
+            skipDelta: 0,
+            listeningDuration: 7_560,
+            artwork: nil
+        )
+        let recap = MonthlyRecap(
+            monthStart: Date(),
+            generatedAt: Date(),
+            lastCaptureReason: .foreground,
+            trackingStart: Date(),
+            snapshotCount: 2,
+            totalPlayDelta: 218,
+            totalSkipDelta: 3,
+            totalListeningDuration: 45_660,
+            playedSongCount: 12,
+            newSongCount: 1,
+            topSongs: [song],
+            topArtists: [],
+            topAlbums: [],
+            biggestGainers: [],
+            topNewSongs: []
+        )
+
+        let image = try XCTUnwrap(
+            RecapShareRenderer.image(recap: recap, periodTitle: "July 2026", artwork: nil)
+        )
+        XCTAssertEqual(image.size.width, 390, accuracy: 0.5)
+        XCTAssertEqual(image.size.height, 700, accuracy: 0.5)
+        XCTAssertEqual(image.cgImage?.width, 1_170)
+        XCTAssertEqual(image.cgImage?.height, 2_100)
+        XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 10_000)
+    }
+
+    func testInitializationDefersStoredRecapLoading() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLaunch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = MonthlyRecapSnapshotStore(directoryURL: directory, deviceIdentifier: "launch-test")
+        let now = Date()
+        _ = store.record(
+            songs: [song(id: 1, title: "Stored Song", artist: "Nova Lane", playCount: 10)],
+            at: now.addingTimeInterval(-3_600),
+            reason: .appLaunch
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Stored Song", artist: "Nova Lane", playCount: 14)],
+            at: now,
+            reason: .foreground
+        )
+        XCTAssertTrue(store.currentMonthRecap(at: now).hasActivity)
+
+        let manager = MediaLibraryManager(
+            snapshotStore: store,
+            recapCloudSyncService: nil,
+            startsAutomatically: false
+        )
+
+        XCTAssertFalse(manager.monthlyRecap.hasActivity)
+        XCTAssertEqual(manager.availableRecapMonths.count, 1)
+        XCTAssertFalse(manager.hasLoadedInitialSnapshot)
+        XCTAssertEqual(manager.loadingStage, .idle)
+    }
+
+    func testIntentSnapshotLoadsPriorMonthWithoutStartingLibraryRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountIntentHydration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let calendar = Calendar.current
+        let now = Date()
+        let currentMonth = calendar.dateInterval(of: .month, for: now)!.start
+        let priorMonth = calendar.date(byAdding: .month, value: -1, to: currentMonth)!
+        let baseline = calendar.date(byAdding: .hour, value: 1, to: priorMonth)!
+        let latest = calendar.date(byAdding: .hour, value: 2, to: priorMonth)!
+        let store = MonthlyRecapSnapshotStore(directoryURL: directory, deviceIdentifier: "intent-test")
+        _ = store.record(
+            songs: [song(id: 1, title: "Prior Song", artist: "Nova Lane", playCount: 10)],
+            at: baseline,
+            reason: .appLaunch
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Prior Song", artist: "Nova Lane", playCount: 15)],
+            at: latest,
+            reason: .foreground
+        )
+
+        let manager = MediaLibraryManager(
+            snapshotStore: store,
+            recapCloudSyncService: nil,
+            startsAutomatically: false
+        )
+        let recaps = await manager.storedRecapsForIntents()
+        let latestUsable = PlayCountIntentRecaps.latestUsable(from: recaps)
+        XCTAssertEqual(latestUsable?.monthStart, priorMonth)
+        XCTAssertEqual(latestUsable?.topSongs.first?.playDelta, 5)
+        XCTAssertFalse(manager.hasLoadedInitialSnapshot)
+    }
+
     func testAlbumsForArtistMergesIDAndNameMatches() {
         let artist = artist(id: 10, name: "Nova Lane")
         let manager = manager(
@@ -265,7 +372,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         lastPlayedDate: Date? = nil,
         dateAdded: Date? = nil,
         albumPersistentID: UInt64 = 1,
-        artistPersistentID: UInt64
+        artistPersistentID: UInt64 = 0
     ) -> TopSong {
         TopSong(
             id: id,

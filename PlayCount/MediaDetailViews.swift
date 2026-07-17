@@ -184,21 +184,32 @@ struct SongInfoView: View {
 
     private static let relatedSongLimit = 6
 
+    private var detailRecapContext: RecapDrilldownContext? {
+        if let recapContext {
+            return recapContext
+        }
+        guard manager.monthlyRecap.hasActivity else { return nil }
+        return RecapDrilldownContext(
+            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: manager.monthlyRecap.topSongs
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
-                SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: recapContext)
+                SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: detailRecapContext)
                     .frame(maxWidth: .infinity)
 
-                if let monthlySong = recapContext?.rankedSong(for: song) {
+                if let monthlySong = detailRecapContext?.rankedSong(for: song) {
                     MonthlyDetailSongSection(
-                        title: recapContext?.songSectionTitle ?? "This Month",
-                        periodTitle: recapContext?.monthTitle ?? "This Month",
+                        title: detailRecapContext?.songSectionTitle ?? "This Month",
+                        periodTitle: detailRecapContext?.monthTitle ?? "This Month",
                         song: monthlySong
                     )
                 }
 
-                if let periodSummaries = recapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
+                if let periodSummaries = detailRecapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
                     RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
 
@@ -236,11 +247,11 @@ struct SongInfoView: View {
         if !albumCompanionSongs.isEmpty || !artistCompanionSongs.isEmpty {
             LazyVGrid(columns: relatedColumns, alignment: .leading, spacing: 16) {
                 if !albumCompanionSongs.isEmpty {
-                    RelatedSongsSection(title: "On This Album", songs: albumCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: recapContext)
+                    RelatedSongsSection(title: "On This Album", songs: albumCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: detailRecapContext)
                 }
 
                 if !artistCompanionSongs.isEmpty {
-                    RelatedSongsSection(title: "More by \(song.artist)", songs: artistCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: recapContext)
+                    RelatedSongsSection(title: "More by \(song.artist)", songs: artistCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: detailRecapContext)
                 }
             }
         }
@@ -275,8 +286,19 @@ struct AlbumInfoView: View {
         sortedSongs(manager.songs(for: album), by: manager.sortMetric)
     }
 
+    private var detailRecapContext: RecapDrilldownContext? {
+        if let recapContext {
+            return recapContext
+        }
+        guard manager.monthlyRecap.hasActivity else { return nil }
+        return RecapDrilldownContext(
+            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: manager.monthlyRecap.topSongs
+        )
+    }
+
     private var monthlySongs: [MonthlyRecap.RankedSong] {
-        recapContext?.songs(for: album) ?? []
+        detailRecapContext?.songs(for: album) ?? []
     }
 
     private var topAlbumSongs: [TopSong] {
@@ -286,25 +308,25 @@ struct AlbumInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
-                AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: recapContext)
+                AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: detailRecapContext)
                     .frame(maxWidth: .infinity)
 
-                if let recapContext, !monthlySongs.isEmpty {
+                if let detailRecapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
-                        title: recapContext.songsSectionTitle,
-                        subtitle: recapContext.monthTitle,
+                        title: detailRecapContext.songsSectionTitle,
+                        subtitle: detailRecapContext.monthTitle,
                         songs: monthlySongs,
                         manager: manager,
-                        recapContext: recapContext
+                        recapContext: detailRecapContext
                     )
                 }
 
-                if let periodSummaries = recapContext?.periodSummaries(for: album), !periodSummaries.isEmpty {
+                if let periodSummaries = detailRecapContext?.periodSummaries(for: album), !periodSummaries.isEmpty {
                     RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
 
                 if !topAlbumSongs.isEmpty {
-                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: manager.sortMetric, displayLimit: 6, recapContext: recapContext)
+                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: manager.sortMetric, displayLimit: 6, recapContext: detailRecapContext)
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
@@ -319,7 +341,7 @@ struct AlbumInfoView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(albumSongs) { song in
                                 NavigationLink {
-                                    SongInfoView(song: song, manager: manager, recapContext: recapContext)
+                                    SongInfoView(song: song, manager: manager, recapContext: detailRecapContext)
                                 } label: {
                                     AlbumTrackRow(song: song, sortMetric: manager.sortMetric)
                                 }
@@ -403,12 +425,23 @@ struct ArtistInfoView: View {
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
     }
 
+    private var detailRecapContext: RecapDrilldownContext? {
+        if let recapContext {
+            return recapContext
+        }
+        guard manager.monthlyRecap.hasActivity else { return nil }
+        return RecapDrilldownContext(
+            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: manager.monthlyRecap.topSongs
+        )
+    }
+
     var body: some View {
         let songs = sortedSongs(manager.songs(for: artist), by: manager.sortMetric)
         let albums = sortedAlbums(manager.albums(for: artist), by: manager.sortMetric)
         let topSongs = Array(songs.prefix(displayLimit))
         let topAlbums = Array(albums.prefix(displayLimit))
-        let monthlySongs = recapContext?.songs(for: artist) ?? []
+        let monthlySongs = detailRecapContext?.songs(for: artist) ?? []
 
         ScrollViewReader { proxy in
             ScrollView {
@@ -416,17 +449,17 @@ struct ArtistInfoView: View {
                     ArtistDetailHeader(artist: artist, manager: manager)
                         .frame(maxWidth: .infinity)
 
-                    if let recapContext, !monthlySongs.isEmpty {
+                    if let detailRecapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
-                            title: recapContext.songsSectionTitle,
-                            subtitle: recapContext.monthTitle,
+                            title: detailRecapContext.songsSectionTitle,
+                            subtitle: detailRecapContext.monthTitle,
                             songs: monthlySongs,
                             manager: manager,
-                            recapContext: recapContext
+                            recapContext: detailRecapContext
                         )
                     }
 
-                    if let periodSummaries = recapContext?.periodSummaries(for: artist), !periodSummaries.isEmpty {
+                    if let periodSummaries = detailRecapContext?.periodSummaries(for: artist), !periodSummaries.isEmpty {
                         RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                     }
 
@@ -437,7 +470,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if songs.count > displayLimit {
                                 NavigationLink {
-                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: recapContext)
+                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: detailRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -456,7 +489,7 @@ struct ArtistInfoView: View {
                             LazyVStack(spacing: 12) {
                                 ForEach(Array(topSongs.enumerated()), id: \.element.id) { index, song in
                                     NavigationLink {
-                                        SongInfoView(song: song, manager: manager, recapContext: recapContext)
+                                        SongInfoView(song: song, manager: manager, recapContext: detailRecapContext)
                                     } label: {
                                         SongRow(song: song, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
@@ -477,7 +510,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if albums.count > displayLimit {
                                 NavigationLink {
-                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: recapContext)
+                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: detailRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -496,7 +529,7 @@ struct ArtistInfoView: View {
                             LazyVStack(spacing: 12) {
                                 ForEach(Array(topAlbums.enumerated()), id: \.element.id) { index, album in
                                     NavigationLink {
-                                        AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
+                                        AlbumInfoView(album: album, manager: manager, recapContext: detailRecapContext)
                                     } label: {
                                         AlbumRow(album: album, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
