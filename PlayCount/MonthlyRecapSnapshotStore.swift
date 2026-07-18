@@ -866,6 +866,7 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private let fileURL: URL
+    private let summaryFileURL: URL
     private let calendar: Calendar
     private let deviceIdentifier: String
     private let accessQueue = DispatchQueue(label: "com.playcount.monthly-recap-snapshots")
@@ -905,6 +906,28 @@ final class MonthlyRecapSnapshotStore {
         }
         try? fileManager.createDirectory(at: resolvedDirectoryURL, withIntermediateDirectories: true)
         fileURL = resolvedDirectoryURL.appendingPathComponent("monthly-recap-snapshots.json")
+        summaryFileURL = resolvedDirectoryURL.appendingPathComponent("recap-summaries.json")
+    }
+
+    func cachedRecapSummaries(
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = []
+    ) -> [MonthlyRecap] {
+        accessQueue.sync {
+            guard let data = try? Data(contentsOf: summaryFileURL),
+                  let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) else {
+                return []
+            }
+            let artworkLookup = ArtworkLookup(
+                sourceSongs: sourceSongs,
+                sourceAlbums: sourceAlbums,
+                sourceArtists: sourceArtists
+            )
+            return summaries.monthlyRecaps
+                .map { $0.monthlyRecap(artworkLookup: artworkLookup) }
+                .sorted { $0.monthStart < $1.monthStart }
+        }
     }
 
     func record(
@@ -2261,6 +2284,13 @@ final class MonthlyRecapSnapshotStore {
         do {
             let data = try JSONEncoder.playCount.encode(stored)
             try data.write(to: fileURL, options: [.atomic])
+            let summaries = SyncedRecapSummaries(
+                monthlyRecaps: stored.syncedRecaps,
+                yearlyRecaps: stored.syncedYearlyRecaps
+            )
+            if let summaryData = try? JSONEncoder.playCount.encode(summaries) {
+                try? summaryData.write(to: summaryFileURL, options: [.atomic])
+            }
             loadedSnapshots = stored
         } catch {
             assertionFailure("Failed to save monthly recap snapshots: \(error)")

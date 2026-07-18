@@ -35,7 +35,8 @@ enum PlayCountIntentError: LocalizedError, Sendable {
 enum PlayCountIntentAuthorization {
     static func requireMediaLibraryAccess() throws {
         guard MPMediaLibrary.authorizationStatus() == .authorized else {
-            PlayCountIntentLibraryCache.shared.invalidate()
+            LibraryPresentationCache.shared.remove()
+            PlayCountShortcutParameterRefresh.invalidate()
             throw PlayCountIntentError.mediaLibraryPermissionRequired
         }
     }
@@ -83,6 +84,11 @@ final class PlayCountIntentLibraryCache: @unchecked Sendable {
 
     func invalidate() {
         lock.withLock { cached = nil }
+    }
+
+    func replace(songs: [TopSong], albums: [TopAlbum], artists: [TopArtist], now: Date = Date()) {
+        let snapshot = PlayCountIntentLibrarySnapshot(songs: songs, albums: albums, artists: artists)
+        lock.withLock { cached = (now, snapshot) }
     }
 }
 

@@ -1508,6 +1508,7 @@ private struct MonthlyDetailSongsListView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle(title)
+        .playCountPushedTitleDisplayMode()
     }
 
     private func resolvedSong(for song: MonthlyRecap.RankedSong) -> TopSong? {
@@ -1652,6 +1653,7 @@ private struct ArtistSongsListView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Songs")
+        .playCountPushedTitleDisplayMode()
     }
 }
 
@@ -1737,6 +1739,7 @@ private struct ArtistAlbumsListView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Albums")
+        .playCountPushedTitleDisplayMode()
     }
 }
 

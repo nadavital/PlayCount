@@ -65,7 +65,7 @@ struct LibrarySearchView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle("Search")
-        .navigationBarTitleDisplayMode(.large)
+        .playCountPrimaryTitleDisplayMode()
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(selectedDomain.searchPrompt))
         .searchScopes($selectedDomain) {
             ForEach(SearchDomain.allCases) { domain in

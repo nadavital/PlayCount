@@ -19,6 +19,12 @@ struct TopAlbumsView: View {
                     )
                 }
             } else {
+                if manager.isShowingCachedLibrary {
+                    Section {
+                        CachedLibraryStatusRow(lastUpdated: manager.libraryLastUpdated)
+                    }
+                }
+
                 if let monthlyAlbum = manager.monthlyRecap.topAlbums.first,
                    let resolvedAlbum = UInt64(monthlyAlbum.id).flatMap(manager.album(withPersistentID:))
                     ?? manager.album(matchingTitle: monthlyAlbum.title, artist: monthlyAlbum.subtitle) {
@@ -40,6 +46,10 @@ struct TopAlbumsView: View {
                             }
                         }
                     }
+                } else if manager.isPreparingInsights {
+                    Section("This Month") {
+                        MonthlyInsightLoadingRow()
+                    }
                 }
 
                 ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
@@ -56,7 +66,6 @@ struct TopAlbumsView: View {
         .refreshable {
             manager.refreshTopItems()
         }
-        .animation(.easeInOut(duration: 0.2), value: hasLoadedInitialSnapshot)
     }
 }
 

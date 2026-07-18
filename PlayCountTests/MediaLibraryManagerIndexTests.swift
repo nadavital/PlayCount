@@ -302,6 +302,125 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(albums.first?.artistPersistentID, 100)
     }
 
+    func testLibraryPresentationCacheRoundTripsLightweightSongMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountPresentationCache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = LibraryPresentationCache(directoryURL: directory)
+        let capturedAt = Date(timeIntervalSince1970: 1_750_000_000)
+        let source = song(
+            id: 42,
+            title: "Cached Song",
+            artist: "Nova Lane",
+            albumArtist: "Nova Lane",
+            albumTitle: "Glass Coast",
+            playCount: 18,
+            totalPlayDuration: 4_320,
+            lastPlayedDate: capturedAt.addingTimeInterval(-60),
+            albumPersistentID: 84,
+            artistPersistentID: 126
+        )
+
+        cache.save(songs: [source], capturedAt: capturedAt)
+        let loaded = try XCTUnwrap(cache.load())
+
+        XCTAssertEqual(loaded.capturedAt, capturedAt)
+        XCTAssertEqual(loaded.songs.map(\.id), [42])
+        XCTAssertEqual(loaded.songs.first?.title, "Cached Song")
+        XCTAssertEqual(loaded.songs.first?.playCount, 18)
+        XCTAssertEqual(loaded.songs.first?.totalPlayDuration, 4_320)
+        XCTAssertNil(loaded.songs.first?.artwork)
+        XCTAssertNotNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(59)))
+        XCTAssertNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(61)))
+
+        let replacement = song(id: 43, title: "Rejected Song", artist: "Nova Lane", playCount: 20)
+        cache.save(songs: [replacement], shouldCommit: { false })
+        XCTAssertEqual(cache.load()?.songs.map(\.id), [42])
+
+        cache.save(songs: [])
+        XCTAssertNil(cache.load())
+    }
+
+    func testAuthorizationRevocationClearsVisibleAndCachedLibraryMetadata() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountRevocationCache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = LibraryPresentationCache(directoryURL: directory)
+        let storedSong = song(id: 42, title: "Private Song", artist: "Nova Lane", playCount: 18)
+        cache.save(songs: [storedSong])
+        let manager = MediaLibraryManager(
+            presentationCache: cache,
+            recapCloudSyncService: nil,
+            startsAutomatically: false
+        )
+        manager.debugLoadLibraryFixture(songs: [storedSong], albums: [], artists: [])
+
+        XCTAssertFalse(manager.debugRevalidateAuthorizationStatus(.denied))
+
+        XCTAssertTrue(manager.topSongs.isEmpty)
+        XCTAssertTrue(manager.librarySongs.isEmpty)
+        XCTAssertFalse(manager.hasLoadedInitialSnapshot)
+        XCTAssertNil(cache.load())
+    }
+
+    func testPlaybackRefreshDelayKeepsTrailingEdgeForShortSession() {
+        let lastRefresh = Date(timeIntervalSince1970: 1_750_000_000)
+        let stoppedAt = lastRefresh.addingTimeInterval(180)
+
+        XCTAssertEqual(
+            MediaLibraryManager.playbackRefreshDelay(
+                now: stoppedAt,
+                lastRefresh: lastRefresh,
+                interval: 300
+            ),
+            120,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MediaLibraryManager.playbackRefreshDelay(
+                now: lastRefresh.addingTimeInterval(301),
+                lastRefresh: lastRefresh,
+                interval: 300
+            ),
+            0,
+            accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testTrailingPlaybackRefreshReschedulesAndFiresExactlyOnce() async {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let startedAt = Date()
+        var executionDates: [Date] = []
+
+        manager.debugTriggerThrottledPlaybackRefresh(after: 0.03) {
+            executionDates.append(Date())
+        }
+        manager.debugTriggerThrottledPlaybackRefresh(after: 0.07) {
+            executionDates.append(Date())
+        }
+
+        try? await Task.sleep(for: .milliseconds(160))
+
+        XCTAssertEqual(executionDates.count, 1)
+        guard let executionDate = executionDates.first else {
+            XCTFail("Expected the trailing playback refresh to execute")
+            return
+        }
+        XCTAssertGreaterThanOrEqual(
+            executionDate.timeIntervalSince(startedAt),
+            0.05
+        )
+    }
+
+    func testShortcutInvalidationClearsPersistedFingerprint() {
+        UserDefaults.standard.set("stale", forKey: PlayCountShortcutParameterRefresh.fingerprintKey)
+
+        PlayCountShortcutParameterRefresh.invalidate()
+
+        XCTAssertNil(UserDefaults.standard.string(forKey: PlayCountShortcutParameterRefresh.fingerprintKey))
+    }
+
     func testYearlyPlayedSongCountIncludesSyncedTopNewSongsOutsideTopSongCap() {
         let sourceStore = makeStore(named: "yearly-source")
         let targetStore = makeStore(named: "yearly-target")

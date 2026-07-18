@@ -976,6 +976,42 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.topAlbums.first?.playDelta, 8)
     }
 
+    func testCompactRecapSummarySurvivesAColdStoreInstance() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountRecapSummary-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let latestDate = date(year: 2026, month: 5, day: 8)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-source"
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Summary Song", playCount: 10)],
+            at: baselineDate,
+            reason: .appLaunch
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Summary Song", playCount: 16)],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        let coldStore = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-reader"
+        )
+        let cached = try XCTUnwrap(coldStore.cachedRecapSummaries().last)
+
+        XCTAssertEqual(cached.monthStart, date(year: 2026, month: 5, day: 1, hour: 0))
+        XCTAssertEqual(cached.topSongs.first?.title, "Summary Song")
+        XCTAssertEqual(cached.topSongs.first?.playDelta, 6)
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)

@@ -70,7 +70,7 @@ struct SystemIntegrationView: View {
             }
         }
         .navigationTitle("Siri & Shortcuts")
-        .navigationBarTitleDisplayMode(.inline)
+        .playCountPushedTitleDisplayMode()
         .task {
             repeat {
                 indexStatus = await PlayCountSiriIntegration.searchIndexStatus()

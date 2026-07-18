@@ -354,10 +354,15 @@ struct MonthlyRecapView: View {
 
     var body: some View {
         ScrollView {
-            if !manager.hasLoadedInitialSnapshot && recap.snapshotCount == 0 {
+            if (!manager.hasLoadedInitialSnapshot && recap.snapshotCount == 0)
+                || (manager.isPreparingInsights && !recap.hasActivity) {
                 VStack {
                     ProgressView()
                         .controlSize(.large)
+                    Text("Preparing your recap…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 10)
                 }
                 .frame(maxWidth: .infinity, minHeight: 280)
             } else {
@@ -1560,6 +1565,7 @@ private struct RecapFullSongsView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle(title)
+        .playCountPushedTitleDisplayMode()
         .toolbar(.visible, for: .navigationBar)
     }
 
@@ -1600,6 +1606,7 @@ private struct RecapFullGroupsView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle(title)
+        .playCountPushedTitleDisplayMode()
         .toolbar(.visible, for: .navigationBar)
     }
 
@@ -1645,6 +1652,7 @@ private struct RecapFullMovementView: View {
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
         .navigationTitle(title)
+        .playCountPushedTitleDisplayMode()
         .toolbar(.visible, for: .navigationBar)
     }
 
@@ -1850,6 +1858,7 @@ private struct RecapUnavailableDetail: View {
             description: Text("This item is no longer available in your library.")
         )
         .navigationTitle(title)
+        .playCountPushedTitleDisplayMode()
     }
 }
 

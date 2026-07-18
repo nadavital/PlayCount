@@ -55,7 +55,7 @@ struct iPadLibraryView: View {
                     NavigationStack {
                         iPadAllTimeDashboardView(manager: manager)
                             .navigationTitle("All-Time")
-                            .navigationBarTitleDisplayMode(.large)
+                            .playCountPrimaryTitleDisplayMode()
                             .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                             .toolbar { toolbarContent }
                     }
@@ -151,9 +151,6 @@ struct iPadLibraryView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            if manager.isLoading {
-                ProgressView()
-            }
             sortPicker
         }
     }
@@ -232,6 +229,7 @@ private struct iPadAllTimeDashboardView: View {
                 manager: manager
             )
             .navigationTitle("Top Songs")
+            .playCountPushedTitleDisplayMode()
         } content: {
             ForEach(Array(manager.topSongs.prefix(12).enumerated()), id: \.element.id) { index, song in
                 NavigationLink {
@@ -258,6 +256,7 @@ private struct iPadAllTimeDashboardView: View {
                 manager: manager
             )
             .navigationTitle("Top Albums")
+            .playCountPushedTitleDisplayMode()
         } content: {
             ForEach(Array(manager.topAlbums.prefix(12).enumerated()), id: \.element.id) { index, album in
                 NavigationLink {
@@ -284,6 +283,7 @@ private struct iPadAllTimeDashboardView: View {
                 manager: manager
             )
             .navigationTitle("Top Artists")
+            .playCountPushedTitleDisplayMode()
         } content: {
             ForEach(Array(manager.topArtists.prefix(12).enumerated()), id: \.element.id) { index, artist in
                 NavigationLink {

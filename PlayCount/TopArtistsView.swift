@@ -19,6 +19,12 @@ struct TopArtistsView: View {
                     )
                 }
             } else {
+                if manager.isShowingCachedLibrary {
+                    Section {
+                        CachedLibraryStatusRow(lastUpdated: manager.libraryLastUpdated)
+                    }
+                }
+
                 if let monthlyArtist = manager.monthlyRecap.topArtists.first,
                    let resolvedArtist = UInt64(monthlyArtist.id).flatMap(manager.artist(withPersistentID:))
                     ?? manager.artist(matchingName: monthlyArtist.title) {
@@ -40,6 +46,10 @@ struct TopArtistsView: View {
                             }
                         }
                     }
+                } else if manager.isPreparingInsights {
+                    Section("This Month") {
+                        MonthlyInsightLoadingRow()
+                    }
                 }
 
                 ForEach(Array(artists.enumerated()), id: \.element.id) { index, artist in
@@ -56,7 +66,6 @@ struct TopArtistsView: View {
         .refreshable {
             manager.refreshTopItems()
         }
-        .animation(.easeInOut(duration: 0.2), value: hasLoadedInitialSnapshot)
     }
 }
 

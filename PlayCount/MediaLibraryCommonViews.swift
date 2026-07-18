@@ -599,7 +599,75 @@ struct LibraryMetricPicker: View {
     }
 }
 
+struct MonthlyInsightLoadingRow: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(.secondary.opacity(0.14))
+                .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Updating this month")
+                    .font(.caption.weight(.semibold))
+                Text("Your latest listening insight")
+                    .font(.headline)
+                Text("Preparing…")
+                    .font(.subheadline)
+            }
+            .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+        }
+        .frame(minHeight: 66)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Updating this month's listening insight")
+    }
+}
+
+struct CachedLibraryStatusRow: View {
+    let lastUpdated: Date?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Updating rankings")
+                    .font(.caption.weight(.semibold))
+                if let lastUpdated {
+                    Text("Showing saved data from \(lastUpdated.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                } else {
+                    Text("Showing saved data")
+                        .font(.caption2)
+                }
+            }
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 extension View {
+    @ViewBuilder
+    func playCountPrimaryTitleDisplayMode() -> some View {
+        if #available(iOS 27.0, *) {
+            toolbarTitleDisplayMode(.inlineLarge)
+        } else {
+            navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    @ViewBuilder
+    func playCountPushedTitleDisplayMode() -> some View {
+        if #available(iOS 27.0, *) {
+            toolbarTitleDisplayMode(.inlineLarge)
+        } else {
+            navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
     func libraryStatusOverlay(isLoading: Bool, message: String?) -> some View {
         modifier(LibraryStatusOverlayModifier(isLoading: isLoading, message: message))
     }

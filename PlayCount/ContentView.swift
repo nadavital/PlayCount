@@ -159,7 +159,7 @@ private struct AuthorizedLibraryView: View {
                         manager: manager
                     )
                         .navigationTitle("Top Songs")
-                        .navigationBarTitleDisplayMode(.large)
+                        .playCountPrimaryTitleDisplayMode()
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
@@ -169,7 +169,7 @@ private struct AuthorizedLibraryView: View {
                 NavigationStack {
                     TopAlbumsView(albums: manager.topAlbums, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Albums")
-                        .navigationBarTitleDisplayMode(.large)
+                        .playCountPrimaryTitleDisplayMode()
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
@@ -179,7 +179,7 @@ private struct AuthorizedLibraryView: View {
                 NavigationStack {
                     TopArtistsView(artists: manager.topArtists, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
                         .navigationTitle("Top Artists")
-                        .navigationBarTitleDisplayMode(.large)
+                        .playCountPrimaryTitleDisplayMode()
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
                 }
@@ -265,9 +265,6 @@ private struct AuthorizedLibraryView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup() {
-            if manager.isLoading {
-                ProgressView()
-            }
             sortPicker
         }
     }

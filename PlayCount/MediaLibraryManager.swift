@@ -186,6 +186,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var librarySummary: LibrarySummary = .empty
     @Published var authorizationStatus: MPMediaLibraryAuthorizationStatus
     @Published var isLoading: Bool = false
+    @Published private(set) var isPreparingInsights = false
     @Published private(set) var loadingStage: LoadingStage = .idle
     @Published var errorMessage: String?
     @Published var sortMetric: SortMetric = .playCount {
@@ -196,6 +197,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
     }
     @Published private(set) var hasLoadedInitialSnapshot = false
+    @Published private(set) var isShowingCachedLibrary = false
+    @Published private(set) var libraryLastUpdated: Date?
     @Published private(set) var nowPlayingState: NowPlayingState?
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
     @Published private(set) var availableRecapMonths: [Date] = []
@@ -205,13 +208,21 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private lazy var mediaLibrary = MPMediaLibrary.default()
     private lazy var musicPlayer = MPMusicPlayerController.systemMusicPlayer
     private let snapshotStore: MonthlyRecapSnapshotStore
+    private let presentationCache: LibraryPresentationCache
     private let recapCloudSyncService: RecapCloudSyncService?
     private var notificationObservers: [NSObjectProtocol] = []
     private var progressTimer: AnyCancellable?
-    private var delayedRefreshWorkItem: DispatchWorkItem?
+    private var trailingPlaybackRefreshTask: Task<Void, Never>?
     private var lastPlaybackDrivenRefresh: Date = .distantPast
+    #if DEBUG
+    private var debugPlaybackRefreshHandler: (() -> Void)?
+    #endif
+    private var lastLibraryRefreshCompletedAt: Date?
+    private var hasStartedInitialRefresh = false
     private var pendingSnapshotReason: RecapSnapshotReason?
-    private let playbackRefreshInterval: TimeInterval = 20
+    private let playbackRefreshInterval: TimeInterval = 300
+    private let foregroundRefreshInterval: TimeInterval = 300
+    private let maximumPresentationCacheAge: TimeInterval = 7 * 24 * 60 * 60
     private var recapCache: [Date: MonthlyRecap] = [:]
     private var yearlyRecapCache: [Int: MonthlyRecap] = [:]
     private var yearlyMonthlyHighlightsCache: [Int: [YearlyRecapMonthlyHighlight]] = [:]
@@ -245,11 +256,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     init(
         fetchLimit: Int = 0,
         snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
+        presentationCache: LibraryPresentationCache = .shared,
         recapCloudSyncService: RecapCloudSyncService? = MediaLibraryManager.defaultRecapCloudSyncService(),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
         self.snapshotStore = snapshotStore
+        self.presentationCache = presentationCache
         self.recapCloudSyncService = recapCloudSyncService
 
         #if DEBUG
@@ -297,6 +310,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     #endif
 
     deinit {
+        trailingPlaybackRefreshTask?.cancel()
         teardownObservers()
         mediaLibrary.endGeneratingLibraryChangeNotifications()
         musicPlayer.endGeneratingPlaybackNotifications()
@@ -328,7 +342,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     if status == .authorized {
                         self.isLoading = false
                         self.loadingStage = .idle
-                        self.refreshTopItems()
+                        self.startInitialRefreshIfNeeded(reason: .appLaunch)
                     } else {
                         if status == .denied || status == .restricted {
                             self.handleAuthorizationLostDuringRefresh(status: status)
@@ -340,7 +354,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 }
             }
         case .authorized:
-            refreshTopItems()
+            if hasStartedInitialRefresh {
+                refreshTopItems()
+            } else {
+                startInitialRefreshIfNeeded(reason: .appLaunch)
+            }
         case .denied, .restricted:
             handleAuthorizationLostDuringRefresh(status: currentStatus)
         default:
@@ -381,19 +399,82 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func refreshForRecapSequence(reason: RecapSnapshotReason) {
-        refreshForRecap(reason: reason)
+        guard revalidateAuthorizationStatus() else { return }
 
-        guard reason == .appLaunch || reason == .foreground || reason == .notificationOpen else {
-            return
+        switch reason {
+        case .appLaunch:
+            startInitialRefreshIfNeeded(reason: reason)
+        case .foreground:
+            guard hasStartedInitialRefresh else {
+                startInitialRefreshIfNeeded(reason: reason)
+                return
+            }
+            guard !isLoading, !isPreparingInsights,
+                  Date().timeIntervalSince(lastLibraryRefreshCompletedAt ?? .distantPast) >= foregroundRefreshInterval else {
+                return
+            }
+            refreshForRecap(reason: reason)
+        default:
+            refreshForRecap(reason: reason)
         }
+    }
 
-        delayedRefreshWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.delayedRefreshWorkItem = nil
-            self?.refreshForRecap(reason: .delayedForeground)
+    @discardableResult
+    private func revalidateAuthorizationStatus(
+        _ currentStatus: MPMediaLibraryAuthorizationStatus = MPMediaLibrary.authorizationStatus()
+    ) -> Bool {
+        if authorizationStatus != currentStatus {
+            authorizationStatus = currentStatus
         }
-        delayedRefreshWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0, execute: workItem)
+        guard currentStatus == .authorized else {
+            handleAuthorizationLostDuringRefresh(status: currentStatus)
+            return false
+        }
+        return true
+    }
+
+    #if DEBUG
+    func debugRevalidateAuthorizationStatus(_ status: MPMediaLibraryAuthorizationStatus) -> Bool {
+        revalidateAuthorizationStatus(status)
+    }
+    #endif
+
+    private func startInitialRefreshIfNeeded(reason: RecapSnapshotReason) {
+        guard !hasStartedInitialRefresh else { return }
+        hasStartedInitialRefresh = true
+        isLoading = true
+        loadingStage = .readingLibrary
+
+        DispatchQueue.global(qos: .utility).async { [weak self, presentationCache, snapshotStore] in
+            guard let self else { return }
+            let cached = presentationCache.load(maximumAge: self.maximumPresentationCacheAge)
+            let cachedSnapshot = cached.map { Self.librarySnapshot(from: $0.songs) }
+            let cachedRecaps = snapshotStore.cachedRecapSummaries(
+                sourceSongs: cachedSnapshot?.songs ?? [],
+                sourceAlbums: cachedSnapshot?.albums ?? [],
+                sourceArtists: cachedSnapshot?.artists ?? []
+            )
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard MPMediaLibrary.authorizationStatus() == .authorized else {
+                    self.handleAuthorizationLostDuringRefresh()
+                    return
+                }
+                if let cached, let cachedSnapshot, !self.hasLoadedInitialSnapshot {
+                    let currentMonth = Calendar.current.startOfMonth(containing: Date())
+                    let cachedRecap = cachedRecaps.last { $0.monthStart == currentMonth }
+                        ?? .empty(for: currentMonth)
+                    self.applyLibrarySnapshot(cachedSnapshot, recap: cachedRecap, updatesSearchIndex: false)
+                    self.availableRecapMonths = cachedRecaps.map(\.monthStart)
+                    self.hasLoadedInitialSnapshot = true
+                    self.isShowingCachedLibrary = true
+                    self.libraryLastUpdated = cached.capturedAt
+                }
+                self.isLoading = false
+                self.refreshForRecap(reason: reason)
+            }
+        }
     }
 
     func syncRecapFromCloud() {
@@ -416,7 +497,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.handleAuthorizationLostDuringRefresh()
                 return nil
             }
-            guard !self.isLoading, !self.isBackgroundRefreshInFlight else { return nil }
+            guard !self.isLoading, !self.isPreparingInsights, !self.isBackgroundRefreshInFlight else { return nil }
             self.isBackgroundRefreshInFlight = true
             self.snapshotMutationGeneration &+= 1
             let token = MutationValidityToken()
@@ -458,7 +539,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             return false
         }
 
-        return await MainActor.run {
+        let didApply = await MainActor.run {
             guard self.snapshotMutationGeneration == generation else { return false }
             guard MPMediaLibrary.authorizationStatus() == .authorized else {
                 self.handleAuthorizationLostDuringRefresh()
@@ -468,10 +549,23 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             self.applyLibrarySnapshot(result.0, recap: result.1)
             self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
             self.hasLoadedInitialSnapshot = true
+            self.hasStartedInitialRefresh = true
+            self.isShowingCachedLibrary = false
+            self.libraryLastUpdated = Date()
+            self.lastLibraryRefreshCompletedAt = Date()
+            self.lastPlaybackDrivenRefresh = Date()
             self.scheduleRecapCloudSync()
             self.finishBackgroundRefreshOperation(generation: generation)
             return true
         }
+        if didApply {
+            await Task.detached(priority: .background) { [presentationCache] in
+                presentationCache.save(songs: result.0.songs) {
+                    token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                }
+            }.value
+        }
+        return didApply
     }
 
     func recap(forMonthContaining date: Date) -> MonthlyRecap {
@@ -876,7 +970,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             return
         }
 
-        guard !isLoading, !isBackgroundRefreshInFlight else {
+        guard !isLoading, !isPreparingInsights, !isBackgroundRefreshInFlight else {
             pendingSnapshotReason = snapshotReason
             return
         }
@@ -908,18 +1002,35 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     updatesSearchIndex: false
                 )
                 self.hasLoadedInitialSnapshot = true
+                self.isShowingCachedLibrary = false
+                self.libraryLastUpdated = Date()
+                self.lastLibraryRefreshCompletedAt = Date()
+                self.lastPlaybackDrivenRefresh = Date()
+                self.isLoading = false
+                self.isPreparingInsights = true
                 self.loadingStage = .preparingInsights
 
                 if snapshotReason != .playbackChanged {
                     let indexedSongs = self.topSongs
                     let indexedAlbums = self.topAlbums
                     let indexedArtists = self.topArtists
-                    Task {
+                    Task(priority: .utility) {
                         await PlayCountSiriIntegration.updateSearchIndex(
                             songs: indexedSongs,
                             albums: indexedAlbums,
                             artists: indexedArtists
                         )
+                        await MainActor.run {
+                            guard token.isValid,
+                                  MPMediaLibrary.authorizationStatus() == .authorized else {
+                                return
+                            }
+                            PlayCountShortcutParameterRefresh.updateIfNeeded(
+                                songs: indexedSongs,
+                                albums: indexedAlbums,
+                                artists: indexedArtists
+                            )
+                        }
                     }
                 }
 
@@ -975,6 +1086,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.monthlyRecap = recap
                 self.availableRecapMonths = availableMonths
                 self.isLoading = false
+                self.isPreparingInsights = false
                 self.loadingStage = .idle
 
                 self.scheduleRecapCloudSync()
@@ -985,6 +1097,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                         self?.refreshTopItems(snapshotReason: pendingSnapshotReason)
                     }
                 }
+            }
+            self.presentationCache.save(songs: snapshot.songs) {
+                token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
             }
         }
     }
@@ -1002,6 +1117,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         recapCloudSyncTask = nil
         authorizationStatus = status ?? MPMediaLibrary.authorizationStatus()
         isLoading = false
+        isPreparingInsights = false
         loadingStage = .idle
         pendingSnapshotReason = nil
         isBackgroundRefreshInFlight = false
@@ -1014,6 +1130,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         availableRecapMonths = []
         applyLibrarySnapshot(.empty, recap: monthlyRecap, updatesSearchIndex: false)
         hasLoadedInitialSnapshot = false
+        isShowingCachedLibrary = false
+        libraryLastUpdated = nil
+        presentationCache.remove()
+        PlayCountIntentLibraryCache.shared.invalidate()
+        trailingPlaybackRefreshTask?.cancel()
+        trailingPlaybackRefreshTask = nil
+        Task { @MainActor in PlayCountShortcutParameterRefresh.invalidate() }
         Task { await PlayCountSiriIntegration.purgeSearchIndex() }
     }
 
@@ -1027,6 +1150,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func handleMediaLibraryDidChange() {
+        guard hasStartedInitialRefresh else { return }
         refreshForRecap(reason: .libraryChanged)
     }
 
@@ -1468,7 +1592,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     private func handleNowPlayingChange() {
         updateNowPlayingState()
-        refreshFromPlaybackIfNeeded(force: true)
+        refreshFromPlaybackIfNeeded(scheduleTrailingIfThrottled: true)
     }
 
     private func handlePlaybackStateChange() {
@@ -1480,7 +1604,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             refreshFromPlaybackIfNeeded()
         default:
             stopProgressUpdates()
-            refreshFromPlaybackIfNeeded(force: true)
+            refreshFromPlaybackIfNeeded(scheduleTrailingIfThrottled: true)
         }
     }
 
@@ -1588,18 +1712,81 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func refreshFromPlaybackIfNeeded(force: Bool = false) {
+    private func refreshFromPlaybackIfNeeded(
+        scheduleTrailingIfThrottled: Bool = false,
+        now: Date = Date()
+    ) {
         guard authorizationStatus == .authorized else { return }
-        guard !isLoading else { return }
+        guard hasStartedInitialRefresh else { return }
 
-        let now = Date()
-        if !force, now.timeIntervalSince(lastPlaybackDrivenRefresh) < playbackRefreshInterval {
+        let delay = Self.playbackRefreshDelay(
+            now: now,
+            lastRefresh: lastPlaybackDrivenRefresh,
+            interval: playbackRefreshInterval
+        )
+        if delay > 0 {
+            if scheduleTrailingIfThrottled {
+                scheduleTrailingPlaybackRefresh(after: delay)
+            }
+            return
+        }
+        guard !isLoading, !isPreparingInsights else {
+            if scheduleTrailingIfThrottled {
+                scheduleTrailingPlaybackRefresh(after: 1)
+            }
             return
         }
 
+        trailingPlaybackRefreshTask?.cancel()
+        trailingPlaybackRefreshTask = nil
         lastPlaybackDrivenRefresh = now
+        #if DEBUG
+        if let debugPlaybackRefreshHandler {
+            debugPlaybackRefreshHandler()
+            return
+        }
+        #endif
         refreshForRecap(reason: .playbackChanged)
     }
+
+    private func scheduleTrailingPlaybackRefresh(after delay: TimeInterval) {
+        trailingPlaybackRefreshTask?.cancel()
+        trailingPlaybackRefreshTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(delay, 0.05)))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            self.trailingPlaybackRefreshTask = nil
+            self.refreshFromPlaybackIfNeeded(scheduleTrailingIfThrottled: true)
+        }
+    }
+
+    static func playbackRefreshDelay(
+        now: Date,
+        lastRefresh: Date,
+        interval: TimeInterval
+    ) -> TimeInterval {
+        max(interval - now.timeIntervalSince(lastRefresh), 0)
+    }
+
+    #if DEBUG
+    func debugTriggerThrottledPlaybackRefresh(
+        after delay: TimeInterval,
+        onRefresh: @escaping () -> Void
+    ) {
+        let now = Date()
+        authorizationStatus = .authorized
+        hasStartedInitialRefresh = true
+        isLoading = false
+        isPreparingInsights = false
+        lastPlaybackDrivenRefresh = now.addingTimeInterval(-(playbackRefreshInterval - delay))
+        debugPlaybackRefreshHandler = onRefresh
+        refreshFromPlaybackIfNeeded(scheduleTrailingIfThrottled: true, now: now)
+    }
+    #endif
 
     private func sortAlbums(_ albums: [TopAlbum]) -> [TopAlbum] {
         albums.sorted { lhs, rhs in
@@ -1694,6 +1881,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     private static func fetchLibrarySnapshot() -> MediaLibrarySnapshot {
         let songs = fetchTopSongs()
+        return librarySnapshot(from: songs)
+    }
+
+    private static func librarySnapshot(from songs: [TopSong]) -> MediaLibrarySnapshot {
         return MediaLibrarySnapshot(
             songs: songs,
             albums: albums(from: songs),
@@ -1705,7 +1896,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     /// performed before the shared manager finishes its asynchronous UI refresh,
     /// so they must not depend on `librarySongs` or `topSongs` already being filled.
     static func intentLibrarySnapshot() -> (songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
+        let presentationCache = LibraryPresentationCache.shared
+        if let cached = presentationCache.load(maximumAge: 15 * 60) {
+            let snapshot = librarySnapshot(from: cached.songs)
+            return (snapshot.songs, snapshot.albums, snapshot.artists)
+        }
         let snapshot = fetchLibrarySnapshot()
+        presentationCache.save(songs: snapshot.songs) {
+            MPMediaLibrary.authorizationStatus() == .authorized
+        }
         return (snapshot.songs, snapshot.albums, snapshot.artists)
     }
 

@@ -1,4 +1,30 @@
 import AppIntents
+import CryptoKit
+import Foundation
+
+@MainActor
+enum PlayCountShortcutParameterRefresh {
+    nonisolated static let fingerprintKey = "PlayCountShortcutParameterFingerprint"
+
+    static func updateIfNeeded(songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
+        PlayCountIntentLibraryCache.shared.replace(songs: songs, albums: albums, artists: artists)
+
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let source = "\(appVersion)|" + PlayCountSearchFingerprint.make(songs: songs, albums: albums, artists: artists)
+        let fingerprint = SHA256.hash(data: Data(source.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        guard UserDefaults.standard.string(forKey: fingerprintKey) != fingerprint else { return }
+
+        PlayCountAppShortcuts.updateAppShortcutParameters()
+        UserDefaults.standard.set(fingerprint, forKey: fingerprintKey)
+    }
+
+    nonisolated static func invalidate() {
+        UserDefaults.standard.removeObject(forKey: fingerprintKey)
+        PlayCountIntentLibraryCache.shared.invalidate()
+    }
+}
 
 struct PlayCountAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
