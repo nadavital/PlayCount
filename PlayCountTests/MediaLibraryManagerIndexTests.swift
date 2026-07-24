@@ -109,6 +109,58 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertFalse(manager.hasLoadedInitialSnapshot)
     }
 
+    func testRecapPageSwitchUsesCompactMemoryCacheWithoutLoadingFullSnapshotStore() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountRecapSwitch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar.current
+        let writer = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "recap-switch-writer"
+        )
+        let mayStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 5, day: 1, hour: 12)))
+        let mayEnd = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 5, day: 8, hour: 12)))
+        let julyStart = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 1, hour: 12)))
+        let julyEnd = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 8, hour: 12)))
+        _ = writer.record(songs: [song(id: 1, title: "May Song", artist: "Artist", playCount: 10)], at: mayStart, reason: .appLaunch)
+        _ = writer.record(songs: [song(id: 1, title: "May Song", artist: "Artist", playCount: 16)], at: mayEnd, reason: .foreground)
+        _ = writer.record(songs: [song(id: 2, title: "July Song", artist: "Artist", playCount: 4)], at: julyStart, reason: .appLaunch)
+        _ = writer.record(songs: [song(id: 2, title: "July Song", artist: "Artist", playCount: 11)], at: julyEnd, reason: .foreground)
+
+        let coldStore = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "recap-switch-reader"
+        )
+        let presentation = coldStore.cachedRecapPresentation(through: julyEnd)
+        let manager = MediaLibraryManager(
+            snapshotStore: coldStore,
+            recapCloudSyncService: nil,
+            startsAutomatically: false
+        )
+
+        XCTAssertFalse(coldStore.debugHasLoadedFullSnapshotStore)
+        XCTAssertEqual(presentation.monthlyRecaps.count, 2)
+        XCTAssertEqual(presentation.availableMonthStarts.count, 3)
+        XCTAssertEqual(calendar.component(.month, from: presentation.availableMonthStarts[1]), 6)
+        manager.seedRecapCaches(from: presentation)
+
+        let cachedMay = try XCTUnwrap(presentation.monthlyRecaps.first {
+            calendar.isDate($0.monthStart, equalTo: mayEnd, toGranularity: .month)
+        })
+        let cachedJuly = try XCTUnwrap(presentation.monthlyRecaps.first {
+            calendar.isDate($0.monthStart, equalTo: julyEnd, toGranularity: .month)
+        })
+        let cachedYear = try XCTUnwrap(presentation.yearlyRecaps[2026])
+        let june = presentation.availableMonthStarts[1]
+        XCTAssertEqual(manager.recap(forMonthContaining: mayEnd), cachedMay)
+        XCTAssertEqual(manager.recap(forMonthContaining: june), .empty(for: june))
+        XCTAssertEqual(manager.recap(forMonthContaining: julyEnd), cachedJuly)
+        XCTAssertEqual(manager.yearlyRecap(for: 2026), cachedYear)
+        XCTAssertFalse(coldStore.debugHasLoadedFullSnapshotStore)
+    }
+
     func testAlbumsForArtistMergesIDAndNameMatches() {
         let artist = artist(id: 10, name: "Nova Lane")
         let manager = manager(

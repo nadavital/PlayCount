@@ -138,6 +138,18 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
     }
 }
 
+struct CachedRecapPresentation: @unchecked Sendable {
+    let monthlyRecaps: [MonthlyRecap]
+    let yearlyRecaps: [Int: MonthlyRecap]
+    let availableMonthStarts: [Date]
+
+    static let empty = CachedRecapPresentation(
+        monthlyRecaps: [],
+        yearlyRecaps: [:],
+        availableMonthStarts: []
+    )
+}
+
 struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
     let id: String
     let capturedAt: Date
@@ -914,21 +926,65 @@ final class MonthlyRecapSnapshotStore {
         sourceAlbums: [TopAlbum] = [],
         sourceArtists: [TopArtist] = []
     ) -> [MonthlyRecap] {
+        cachedRecapPresentation(
+            sourceSongs: sourceSongs,
+            sourceAlbums: sourceAlbums,
+            sourceArtists: sourceArtists
+        ).monthlyRecaps
+    }
+
+    func cachedRecapPresentation(
+        sourceSongs: [TopSong] = [],
+        sourceAlbums: [TopAlbum] = [],
+        sourceArtists: [TopArtist] = [],
+        through date: Date = Date()
+    ) -> CachedRecapPresentation {
         accessQueue.sync {
             guard let data = try? Data(contentsOf: summaryFileURL),
                   let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) else {
-                return []
+                return .empty
             }
             let artworkLookup = ArtworkLookup(
                 sourceSongs: sourceSongs,
                 sourceAlbums: sourceAlbums,
                 sourceArtists: sourceArtists
             )
-            return summaries.monthlyRecaps
+            let monthlyRecaps = summaries.monthlyRecaps
                 .map { $0.monthlyRecap(artworkLookup: artworkLookup) }
                 .sorted { $0.monthStart < $1.monthStart }
+            let yearlyRecaps = Dictionary(
+                summaries.yearlyRecaps.map { yearly in
+                    (yearly.year, yearly.monthlyRecap(artworkLookup: artworkLookup))
+                },
+                uniquingKeysWith: { _, latest in latest }
+            )
+            let currentMonth = calendar.startOfMonth(containing: date)
+            let availableMonthStarts: [Date]
+            if let firstMonth = monthlyRecaps.first?.monthStart {
+                let normalizedFirstMonth = calendar.startOfMonth(containing: firstMonth)
+                let monthCount = max(
+                    0,
+                    calendar.dateComponents([.month], from: normalizedFirstMonth, to: currentMonth).month ?? 0
+                )
+                availableMonthStarts = (0...monthCount).compactMap {
+                    calendar.date(byAdding: .month, value: $0, to: normalizedFirstMonth)
+                }
+            } else {
+                availableMonthStarts = []
+            }
+            return CachedRecapPresentation(
+                monthlyRecaps: monthlyRecaps,
+                yearlyRecaps: yearlyRecaps,
+                availableMonthStarts: availableMonthStarts
+            )
         }
     }
+
+    #if DEBUG
+    var debugHasLoadedFullSnapshotStore: Bool {
+        accessQueue.sync { loadedSnapshots != nil }
+    }
+    #endif
 
     func record(
         songs: [TopSong],

@@ -449,7 +449,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             guard let self else { return }
             let cached = presentationCache.load(maximumAge: self.maximumPresentationCacheAge)
             let cachedSnapshot = cached.map { Self.librarySnapshot(from: $0.songs) }
-            let cachedRecaps = snapshotStore.cachedRecapSummaries(
+            let cachedPresentation = snapshotStore.cachedRecapPresentation(
                 sourceSongs: cachedSnapshot?.songs ?? [],
                 sourceAlbums: cachedSnapshot?.albums ?? [],
                 sourceArtists: cachedSnapshot?.artists ?? []
@@ -463,10 +463,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 }
                 if let cached, let cachedSnapshot, !self.hasLoadedInitialSnapshot {
                     let currentMonth = Calendar.current.startOfMonth(containing: Date())
-                    let cachedRecap = cachedRecaps.last { $0.monthStart == currentMonth }
+                    let cachedRecap = cachedPresentation.monthlyRecaps.last {
+                        Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
+                    }
                         ?? .empty(for: currentMonth)
                     self.applyLibrarySnapshot(cachedSnapshot, recap: cachedRecap, updatesSearchIndex: false)
-                    self.availableRecapMonths = cachedRecaps.map(\.monthStart)
+                    self.seedRecapCaches(from: cachedPresentation, currentRecap: cachedRecap)
+                    self.availableRecapMonths = cachedPresentation.availableMonthStarts
                     self.hasLoadedInitialSnapshot = true
                     self.isShowingCachedLibrary = true
                     self.libraryLastUpdated = cached.capturedAt
@@ -509,7 +512,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let generation = operation.generation
         let token = operation.token
 
-        let result: (MediaLibrarySnapshot, MonthlyRecap)? = await Task.detached(priority: .utility) { [snapshotStore] in
+        let result: (MediaLibrarySnapshot, MonthlyRecap, CachedRecapPresentation)? = await Task.detached(priority: .utility) { [snapshotStore] in
             let snapshot = Self.fetchLibrarySnapshot()
             guard MPMediaLibrary.authorizationStatus() == .authorized else { return nil }
             guard await MainActor.run(body: {
@@ -525,7 +528,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 }
             )
-            return (snapshot, recap)
+            let cachedPresentation = snapshotStore.cachedRecapPresentation(
+                sourceSongs: snapshot.songs,
+                sourceAlbums: snapshot.albums,
+                sourceArtists: snapshot.artists
+            )
+            return (snapshot, recap, cachedPresentation)
         }.value
 
         guard let result else {
@@ -545,9 +553,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.handleAuthorizationLostDuringRefresh()
                 return false
             }
-            self.invalidateRecapCaches()
             self.applyLibrarySnapshot(result.0, recap: result.1)
-            self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
+            self.seedRecapCaches(from: result.2, currentRecap: result.1)
+            self.availableRecapMonths = result.2.availableMonthStarts
             self.hasLoadedInitialSnapshot = true
             self.hasStartedInitialRefresh = true
             self.isShowingCachedLibrary = false
@@ -696,6 +704,26 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         yearlyMonthlyHighlightsCache.removeAll()
     }
 
+    func seedRecapCaches(
+        from presentation: CachedRecapPresentation,
+        currentRecap: MonthlyRecap? = nil
+    ) {
+        recapCache = Dictionary(
+            presentation.monthlyRecaps.map {
+                (Calendar.current.startOfMonth(containing: $0.monthStart), $0)
+            },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        for monthStart in presentation.availableMonthStarts where recapCache[monthStart] == nil {
+            recapCache[monthStart] = .empty(for: monthStart)
+        }
+        if let currentRecap {
+            recapCache[Calendar.current.startOfMonth(containing: currentRecap.monthStart)] = currentRecap
+        }
+        yearlyRecapCache = presentation.yearlyRecaps
+        yearlyMonthlyHighlightsCache.removeAll()
+    }
+
     private func scheduleRecapCloudSync() {
         guard let recapCloudSyncService else { return }
         guard MPMediaLibrary.authorizationStatus() == .authorized else {
@@ -713,6 +741,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let token = MutationValidityToken()
         cloudSyncToken?.invalidate()
         cloudSyncToken = token
+        let sourceSongs = librarySongs
+        let sourceAlbums = libraryAlbums
+        let sourceArtists = libraryArtists
 
         let task = Task { [weak self, snapshotStore, recapCloudSyncService] in
             _ = await recapCloudSyncService.sync(
@@ -726,6 +757,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 }
             )
+            let cachedPresentation = snapshotStore.cachedRecapPresentation(
+                sourceSongs: sourceSongs,
+                sourceAlbums: sourceAlbums,
+                sourceArtists: sourceArtists
+            )
 
             let shouldSyncAgain = await MainActor.run { [weak self] in
                 guard let self else { return false }
@@ -737,9 +773,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.isRecapCloudSyncInFlight = false
                 self.recapCloudSyncTask = nil
                 self.cloudSyncToken = nil
-                self.invalidateRecapCaches()
-                self.monthlyRecap = self.recap(forMonthContaining: Date())
-                self.availableRecapMonths = self.snapshotStore.availableMonthStarts()
+                let currentMonth = Calendar.current.startOfMonth(containing: Date())
+                let currentRecap = cachedPresentation.monthlyRecaps.last {
+                    Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
+                } ?? self.monthlyRecap
+                self.seedRecapCaches(from: cachedPresentation, currentRecap: currentRecap)
+                self.monthlyRecap = currentRecap
+                if !cachedPresentation.availableMonthStarts.isEmpty {
+                    self.availableRecapMonths = cachedPresentation.availableMonthStarts
+                }
                 let shouldSyncAgain = self.pendingRecapCloudSync
                 self.pendingRecapCloudSync = false
                 return shouldSyncAgain
@@ -1073,7 +1115,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 }
             )
-            let availableMonths = snapshotStore.availableMonthStarts()
+            let cachedPresentation = snapshotStore.cachedRecapPresentation(
+                sourceSongs: snapshot.songs,
+                sourceAlbums: snapshot.albums,
+                sourceArtists: snapshot.artists
+            )
+            let availableMonths = cachedPresentation.availableMonthStarts.isEmpty
+                ? snapshotStore.availableMonthStarts()
+                : cachedPresentation.availableMonthStarts
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -1082,7 +1131,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.handleAuthorizationLostDuringRefresh()
                     return
                 }
-                self.invalidateRecapCaches()
+                self.seedRecapCaches(from: cachedPresentation, currentRecap: recap)
                 self.monthlyRecap = recap
                 self.availableRecapMonths = availableMonths
                 self.isLoading = false

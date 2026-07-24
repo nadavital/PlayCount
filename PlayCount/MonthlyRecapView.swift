@@ -17,7 +17,6 @@ struct MonthlyRecapView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedMonthStart: Date?
     @State private var isShowingYearAggregate = false
-    @State private var monthTransitionEdge: Edge = .trailing
     @State private var monthDragOffset: CGFloat = 0
     @State private var monthDragAxis: MonthDragAxis = .undecided
     @State private var isSuppressingRecapNavigation = false
@@ -43,6 +42,10 @@ struct MonthlyRecapView: View {
         case song(id: UInt64, title: String, artist: String)
         case album(id: UInt64, title: String, artist: String)
         case artist(id: UInt64, name: String)
+    }
+
+    private enum ScrollAnchor {
+        static let recapTop = "recap-top"
     }
 
     private var recap: MonthlyRecap {
@@ -105,6 +108,13 @@ struct MonthlyRecapView: View {
 
     private var selectedRecapYear: Int {
         Calendar.current.component(.year, from: selectedMonthStartOrCurrent)
+    }
+
+    private var selectedRecapPageIdentifier: String {
+        if isShowingYearAggregate {
+            return "year-\(selectedRecapYear)"
+        }
+        return "month-\(selectedMonthStartOrCurrent.timeIntervalSinceReferenceDate)"
     }
 
     private var selectedYearMonths: [Date] {
@@ -353,60 +363,67 @@ struct MonthlyRecapView: View {
     }
 
     var body: some View {
-        ScrollView {
-            if (!manager.hasLoadedInitialSnapshot && recap.snapshotCount == 0)
-                || (manager.isPreparingInsights && !recap.hasActivity) {
-                VStack {
-                    ProgressView()
-                        .controlSize(.large)
-                    Text("Preparing your recap…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 10)
-                }
-                .frame(maxWidth: .infinity, minHeight: 280)
-            } else {
-                VStack(alignment: .leading, spacing: 22) {
-                    RecapHeroPoster(
-                        recap: recap,
-                        artworks: cachedArtworkHighlights,
-                        leadingSong: recap.topSongs.first,
-                        leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:)),
-                        selectedYear: selectedRecapYear,
-                        months: selectedYearMonths,
-                        isYearSelected: isShowingYearAggregate,
-                        selectedMonthStart: selectedMonthStartOrCurrent,
-                        canSelectPrevious: canSelectPreviousMonth,
-                        canSelectNext: canSelectNextMonth,
-                        onSelectPrevious: selectPreviousMonth,
-                        onSelectNext: selectNextMonth,
-                        onSelectYear: selectYearAggregate,
-                        onSelectMonth: { selectMonth($0) }
-                    )
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                Color.clear
+                    .frame(height: 0)
+                    .id(ScrollAnchor.recapTop)
 
-                    if recap.hasActivity {
-                        recapSections
-                    } else {
-                        baselineSection
+                if (!manager.hasLoadedInitialSnapshot && recap.snapshotCount == 0)
+                    || (manager.isPreparingInsights && !recap.hasActivity) {
+                    VStack {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Preparing your recap…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 10)
                     }
+                    .frame(maxWidth: .infinity, minHeight: 280)
+                } else {
+                    VStack(alignment: .leading, spacing: 22) {
+                        RecapHeroPoster(
+                            recap: recap,
+                            artworks: cachedArtworkHighlights,
+                            leadingSong: recap.topSongs.first,
+                            leadingSongArtwork: recap.topSongs.first.flatMap(resolvedArtwork(for:)),
+                            selectedYear: selectedRecapYear,
+                            months: selectedYearMonths,
+                            isYearSelected: isShowingYearAggregate,
+                            selectedMonthStart: selectedMonthStartOrCurrent,
+                            canSelectPrevious: canSelectPreviousMonth,
+                            canSelectNext: canSelectNextMonth,
+                            onSelectPrevious: selectPreviousMonth,
+                            onSelectNext: selectNextMonth,
+                            onSelectYear: selectYearAggregate,
+                            onSelectMonth: { selectMonth($0) }
+                        )
 
-                    #if DEBUG
-                    debugSection
-                    #endif
+                        if recap.hasActivity {
+                            recapSections
+                        } else {
+                            baselineSection
+                        }
+
+                        #if DEBUG
+                        debugSection
+                        #endif
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, isRegularWidth ? 132 : 154)
+                    .frame(maxWidth: 1120, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .offset(x: monthDragDisplayOffset)
+                    .disabled(isSuppressingRecapNavigation)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, isRegularWidth ? 132 : 154)
-                .frame(maxWidth: 1120, alignment: .topLeading)
-                .frame(maxWidth: .infinity, alignment: .top)
-                .offset(x: monthDragDisplayOffset)
-                .disabled(isSuppressingRecapNavigation)
-                .id(selectedMonthStartOrCurrent)
-                .transition(monthContentTransition)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDisabled(monthDragAxis == .horizontal)
+            .onChange(of: selectedRecapPageIdentifier) { _, _ in
+                scrollProxy.scrollTo(ScrollAnchor.recapTop, anchor: .top)
             }
         }
-        .scrollIndicators(.hidden)
-        .scrollDisabled(monthDragAxis == .horizontal)
         .safeAreaInset(edge: .bottom) {
             if isRegularWidth {
                 Color.clear
@@ -430,7 +447,6 @@ struct MonthlyRecapView: View {
                 .padding(.leading, 18)
         }
         .toolbar(.hidden, for: .navigationBar)
-        .animation(.smooth(duration: 0.26), value: selectedMonthStartOrCurrent)
         .simultaneousGesture(monthSwipeGesture)
         .task(id: artworkHighlightsSignature) {
             updateCachedArtworkHighlightsIfNeeded()
@@ -909,13 +925,6 @@ struct MonthlyRecapView: View {
         clampedMonthDragOffset(monthDragOffset)
     }
 
-    private var monthContentTransition: AnyTransition {
-        .asymmetric(
-            insertion: .move(edge: monthTransitionEdge).combined(with: .opacity),
-            removal: .opacity
-        )
-    }
-
     private func clampedMonthDragOffset(_ offset: CGFloat) -> CGFloat {
         let hasDestination = offset > 0 ? canSelectPreviousMonth : canSelectNextMonth
         let resistance = hasDestination ? 1 : 0.22
@@ -1023,36 +1032,26 @@ struct MonthlyRecapView: View {
         guard let selectedMonthIndex else { return }
 
         if selectedMonthIndex > 0 {
-            selectMonth(availableMonthStarts[selectedMonthIndex - 1], transitionEdge: .leading)
+            selectMonth(availableMonthStarts[selectedMonthIndex - 1])
             return
         }
 
-        selectYearAggregate(selectedRecapYear, anchorMonth: selectedMonthStartOrCurrent, transitionEdge: .leading)
+        selectYearAggregate(selectedRecapYear, anchorMonth: selectedMonthStartOrCurrent)
     }
 
     private func selectNextMonth() {
         if isShowingYearAggregate {
             guard let firstMonth = selectedYearMonths.first else { return }
-            selectMonth(firstMonth, transitionEdge: .trailing)
+            selectMonth(firstMonth)
             return
         }
         guard let selectedMonthIndex, selectedMonthIndex < availableMonthStarts.count - 1 else { return }
-        selectMonth(availableMonthStarts[selectedMonthIndex + 1], transitionEdge: .trailing)
+        selectMonth(availableMonthStarts[selectedMonthIndex + 1])
     }
 
-    private func selectMonth(_ month: Date, transitionEdge explicitEdge: Edge? = nil) {
-        let nextMonth = normalizedMonth(month)
-        let currentMonth = selectedMonthStartOrCurrent
-        if let explicitEdge {
-            monthTransitionEdge = explicitEdge
-        } else {
-            monthTransitionEdge = nextMonth < currentMonth ? .leading : .trailing
-        }
-
-        withAnimation(.smooth(duration: 0.26)) {
-            isShowingYearAggregate = false
-            selectedMonthStart = nextMonth
-        }
+    private func selectMonth(_ month: Date) {
+        isShowingYearAggregate = false
+        selectedMonthStart = normalizedMonth(month)
     }
 
     private func selectYear(_ year: Int) {
@@ -1071,7 +1070,7 @@ struct MonthlyRecapView: View {
     }
 
     private func selectYearAggregate() {
-        selectYearAggregate(selectedRecapYear, anchorMonth: selectedMonthStartOrCurrent, transitionEdge: nil)
+        selectYearAggregate(selectedRecapYear, anchorMonth: selectedMonthStartOrCurrent)
     }
 
     private func selectAdjacentYear(offset: Int) {
@@ -1081,14 +1080,10 @@ struct MonthlyRecapView: View {
         selectYear(availableRecapYears[nextIndex])
     }
 
-    private func selectYearAggregate(_ year: Int, anchorMonth: Date, transitionEdge explicitEdge: Edge? = nil) {
+    private func selectYearAggregate(_ year: Int, anchorMonth: Date) {
         let nextMonth = normalizedMonth(anchorMonth)
-        monthTransitionEdge = explicitEdge ?? (nextMonth < selectedMonthStartOrCurrent ? .leading : .trailing)
-
-        withAnimation(.smooth(duration: 0.26)) {
-            selectedMonthStart = nextMonth
-            isShowingYearAggregate = true
-        }
+        selectedMonthStart = nextMonth
+        isShowingYearAggregate = true
     }
 
     private func normalizedMonth(_ date: Date) -> Date {
