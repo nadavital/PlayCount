@@ -1231,6 +1231,12 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    private enum LegacyStreamError: Error {
+        case snapshotsArrayMissing
+        case malformedSnapshotArray
+        case truncatedSnapshot
+    }
+
     private struct SongDelta {
         let latest: SongSnapshot
         let playDelta: Int
@@ -3426,18 +3432,14 @@ final class MonthlyRecapSnapshotStore {
             return stored
         }
 
-        guard let data = try? Data(contentsOf: fileURL) else {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
             let empty = StoredSnapshots(schemaVersion: 2, snapshots: [])
             loadedSnapshots = empty
             return empty
         }
 
         do {
-            var legacy = try JSONDecoder.playCount.decode(StoredSnapshots.self, from: data)
-            _ = backfillAggregateCounters(in: &legacy)
-            _ = updateSyncedRecaps(in: &legacy, snapshots: legacy.snapshots)
-            legacy.snapshots = compactSnapshotsForLocalStorage(from: legacy.snapshots)
-            legacy.schemaVersion = 2
+            let legacy = try streamedLegacyArchive()
 
             do {
                 try ledger.save(legacy)
@@ -3464,6 +3466,147 @@ final class MonthlyRecapSnapshotStore {
             loadedSnapshots = empty
             return empty
         }
+    }
+
+    /// Reads the old JSON archive one snapshot at a time. A real archive can be
+    /// hundreds of megabytes; decoding the top-level object would temporarily
+    /// retain every library scan and exceed iOS's foreground memory budget.
+    private func streamedLegacyArchive() throws -> StoredSnapshots {
+        var stored = StoredSnapshots(schemaVersion: 2, snapshots: [])
+
+        try forEachLegacySnapshot { decodedSnapshot in
+            let snapshot: LibrarySnapshot
+            if decodedSnapshot.aggregateCounters == nil {
+                snapshot = LibrarySnapshot(
+                    capturedAt: decodedSnapshot.capturedAt,
+                    reason: decodedSnapshot.reason,
+                    appVersion: decodedSnapshot.appVersion,
+                    scannedSongCount: decodedSnapshot.scannedSongCount,
+                    deviceIdentifier: decodedSnapshot.deviceIdentifier,
+                    aggregateCounters: Self.aggregateCounters(
+                        from: decodedSnapshot.songs,
+                        capturedAt: decodedSnapshot.capturedAt,
+                        calendar: calendar
+                    ),
+                    songs: decodedSnapshot.songs
+                )
+            } else {
+                snapshot = decodedSnapshot
+            }
+
+            guard shouldAppend(snapshot, after: stored.snapshots.last) else { return }
+            let previous = stored.snapshots.last(where: {
+                $0.capturedAt < snapshot.capturedAt && $0.isSameDevice(as: snapshot)
+            })
+            stored.snapshots.append(snapshot)
+            stored.snapshots = retainedCanonicalSnapshots(
+                from: stored.snapshots,
+                now: snapshot.capturedAt
+            )
+            updateIncrementalRecap(in: &stored, previous: previous, current: snapshot)
+            stored.snapshots = compactSnapshotsForLocalStorage(from: stored.snapshots)
+        }
+
+        // Preserve any higher-quality Cloud summary that was already cached.
+        if let data = try? Data(contentsOf: summaryFileURL),
+           let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) {
+            stored.monthlyLedgers = Self.mergedSyncedRecaps(
+                stored.monthlyLedgers + summaries.monthlyRecaps
+            )
+            stored.syncedRecaps = Self.mergedSyncedRecaps(
+                stored.syncedRecaps + summaries.monthlyRecaps
+            )
+            stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+                stored.syncedYearlyRecaps + summaries.yearlyRecaps
+            )
+        }
+        return stored
+    }
+
+    private func forEachLegacySnapshot(
+        _ body: (LibrarySnapshot) throws -> Void
+    ) throws {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let key = Array("\"snapshots\"".utf8)
+        var keyIndex = 0
+        var foundKey = false
+        var foundArray = false
+        var object = Data()
+        object.reserveCapacity(1_000_000)
+        var depth = 0
+        var inString = false
+        var isEscaped = false
+
+        while let chunk = try handle.read(upToCount: 256 * 1_024), !chunk.isEmpty {
+            for byte in chunk {
+                if !foundKey {
+                    if byte == key[keyIndex] {
+                        keyIndex += 1
+                        if keyIndex == key.count {
+                            foundKey = true
+                        }
+                    } else {
+                        keyIndex = byte == key[0] ? 1 : 0
+                    }
+                    continue
+                }
+
+                if !foundArray {
+                    if byte == Character("[").asciiValue {
+                        foundArray = true
+                    }
+                    continue
+                }
+
+                if depth == 0 {
+                    if byte == Character("]").asciiValue {
+                        return
+                    }
+                    guard byte == Character("{").asciiValue || byte.isJSONWhitespaceOrComma else {
+                        throw LegacyStreamError.malformedSnapshotArray
+                    }
+                    guard byte == Character("{").asciiValue else { continue }
+                    object.removeAll(keepingCapacity: true)
+                    object.append(byte)
+                    depth = 1
+                    inString = false
+                    isEscaped = false
+                    continue
+                }
+
+                object.append(byte)
+                if inString {
+                    if isEscaped {
+                        isEscaped = false
+                    } else if byte == Character("\\").asciiValue {
+                        isEscaped = true
+                    } else if byte == Character("\"").asciiValue {
+                        inString = false
+                    }
+                    continue
+                }
+
+                if byte == Character("\"").asciiValue {
+                    inString = true
+                } else if byte == Character("{").asciiValue {
+                    depth += 1
+                } else if byte == Character("}").asciiValue {
+                    depth -= 1
+                    if depth == 0 {
+                        try autoreleasepool {
+                            try body(JSONDecoder.playCount.decode(LibrarySnapshot.self, from: object))
+                        }
+                    }
+                }
+            }
+        }
+
+        guard foundKey, foundArray else {
+            throw LegacyStreamError.snapshotsArrayMissing
+        }
+        throw LegacyStreamError.truncatedSnapshot
     }
 
     private func saveLocked(_ stored: StoredSnapshots) {
@@ -3627,6 +3770,16 @@ private extension MonthlyRecapSnapshotStore.SongSnapshot {
             normalizedRecapIdentityComponent(albumTitle),
             String(Int(playbackDuration.rounded()))
         ].joined(separator: "|")
+    }
+}
+
+private extension UInt8 {
+    var isJSONWhitespaceOrComma: Bool {
+        self == Character(",").asciiValue ||
+            self == Character(" ").asciiValue ||
+            self == Character("\n").asciiValue ||
+            self == Character("\r").asciiValue ||
+            self == Character("\t").asciiValue
     }
 }
 
