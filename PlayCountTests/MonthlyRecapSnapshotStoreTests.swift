@@ -1253,6 +1253,126 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(cached.topSongs.first?.playDelta, 6)
     }
 
+    func testDeltaLedgerStorageScalesWithChangesInsteadOfFullLibraryCopies() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountDeltaLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "delta-ledger"
+        )
+        let baselineDate = date(year: 2026, month: 7, day: 1)
+        var currentSongs = (1...1_000).map {
+            song(id: UInt64($0), title: "Library Song \($0)", playCount: 10)
+        }
+        _ = store.record(songs: currentSongs, at: baselineDate, reason: .appLaunch)
+
+        for update in 1...40 {
+            currentSongs[update - 1] = song(
+                id: UInt64(update),
+                title: "Library Song \(update)",
+                playCount: 10 + update
+            )
+            _ = store.record(
+                songs: currentSongs,
+                at: baselineDate.addingTimeInterval(TimeInterval(update * 3_600)),
+                reason: .manualRefresh
+            )
+        }
+
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        let legacyURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ledgerURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+
+        let ledgerBytes = [ledgerURL.path, ledgerURL.path + "-wal", ledgerURL.path + "-shm"]
+            .compactMap { try? FileManager.default.attributesOfItem(atPath: $0)[.size] as? NSNumber }
+            .reduce(Int64(0)) { $0 + $1.int64Value }
+        XCTAssertLessThan(ledgerBytes, 3_000_000)
+
+        let coldStore = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "delta-ledger"
+        )
+        let recap = coldStore.recap(forMonthContaining: baselineDate)
+        XCTAssertEqual(recap.totalPlayDelta, (1...40).reduce(0, +))
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 40)
+    }
+
+    func testLegacyArchiveMigratesOnlyAfterMonthlyAndYearlyParity() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "migration-device"
+        )
+        let mayBaseline = date(year: 2026, month: 5, day: 1)
+        let mayLatest = date(year: 2026, month: 5, day: 20)
+        let julyBaseline = date(year: 2026, month: 7, day: 1)
+        let julyDeletion = date(year: 2026, month: 7, day: 10)
+        let julyLatest = date(year: 2026, month: 7, day: 20)
+
+        _ = source.record(
+            songs: [song(id: 1, title: "Migrated Epoch", playCount: 100)],
+            at: mayBaseline,
+            reason: .appLaunch
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Migrated Epoch", playCount: 125)],
+            at: mayLatest,
+            reason: .manualRefresh
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Migrated Epoch", playCount: 125)],
+            at: julyBaseline,
+            reason: .appLaunch
+        )
+        _ = source.record(songs: [], at: julyDeletion, reason: .libraryChanged)
+        _ = source.record(
+            songs: [song(id: 2, title: "Migrated Epoch", playCount: 30, dateAdded: julyDeletion)],
+            at: julyLatest,
+            reason: .appLaunch
+        )
+
+        let expectedMay = source.recap(forMonthContaining: mayLatest)
+        let expectedJuly = source.recap(forMonthContaining: julyLatest)
+        let expectedYear = try XCTUnwrap(source.syncedYearlyRecap(for: 2026))
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let legacyURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+
+        let migrated = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "migration-device"
+        )
+        XCTAssertEqual(migrated.recap(forMonthContaining: mayLatest).totalPlayDelta, expectedMay.totalPlayDelta)
+        XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).totalPlayDelta, expectedJuly.totalPlayDelta)
+        XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.totalPlayDelta, expectedYear.totalPlayDelta)
+        XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.topSongs.first?.playDelta, expectedYear.topSongs.first?.playDelta)
+        XCTAssertEqual(migrated.availableMonthStarts(through: julyLatest).count, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("recap-ledger.sqlite").path))
+
+        let postMigrationDate = date(year: 2026, month: 7, day: 21)
+        let advanced = migrated.record(
+            songs: [song(id: 2, title: "Migrated Epoch", playCount: 35, dateAdded: julyDeletion)],
+            at: postMigrationDate,
+            reason: .foreground
+        )
+        XCTAssertEqual(advanced.totalPlayDelta, expectedJuly.totalPlayDelta + 5)
+        XCTAssertEqual(
+            migrated.syncedYearlyRecap(for: 2026)?.totalPlayDelta,
+            expectedYear.totalPlayDelta + 5
+        )
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountTests-\(UUID().uuidString)-\(name)", isDirectory: true)

@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import MediaPlayer
+import SQLite3
 
 enum RecapSnapshotReason: String, Codable, Equatable {
     case appLaunch
@@ -542,7 +543,7 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    fileprivate struct SongSnapshot: Codable {
+    fileprivate struct SongSnapshot: Codable, Equatable {
         let id: UInt64
         let title: String
         let artist: String
@@ -702,7 +703,7 @@ final class MonthlyRecapSnapshotStore {
             totalPlayDelta == 0 || !topSongs.isEmpty || !topArtists.isEmpty || !topAlbums.isEmpty
         }
 
-        init(recap: MonthlyRecap) {
+        init(recap: MonthlyRecap, preservingAllRankings: Bool = false) {
             monthStart = recap.monthStart
             generatedAt = recap.generatedAt
             lastCaptureReason = recap.lastCaptureReason
@@ -713,7 +714,13 @@ final class MonthlyRecapSnapshotStore {
             totalListeningDuration = recap.totalListeningDuration
             playedSongCount = recap.playedSongCount
             newSongCount = recap.newSongCount
-            topSongs = recap.topSongs.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedSongCount).map {
+            let rankedSongs = preservingAllRankings
+                ? Array(recap.topSongs[...])
+                : Array(recap.topSongs.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedSongCount))
+            let rankedGroupsLimit = preservingAllRankings ? Int.max : MonthlyRecapSnapshotStore.maxSyncedRecapRankedGroupCount
+            let movementLimit = preservingAllRankings ? Int.max : MonthlyRecapSnapshotStore.maxSyncedRecapMovementSongCount
+            let newSongsLimit = preservingAllRankings ? Int.max : MonthlyRecapSnapshotStore.maxSyncedRecapRankedSongCount
+            topSongs = rankedSongs.map {
                 RankedSong(
                     id: $0.id,
                     title: $0.title,
@@ -726,7 +733,7 @@ final class MonthlyRecapSnapshotStore {
                     playbackStoreID: $0.playbackStoreID
                 )
             }
-            topArtists = recap.topArtists.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedGroupCount).map {
+            topArtists = recap.topArtists.prefix(rankedGroupsLimit).map {
                 RankedGroup(
                     id: $0.id,
                     title: $0.title,
@@ -735,7 +742,7 @@ final class MonthlyRecapSnapshotStore {
                     listeningDuration: $0.listeningDuration
                 )
             }
-            topAlbums = recap.topAlbums.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedGroupCount).map {
+            topAlbums = recap.topAlbums.prefix(rankedGroupsLimit).map {
                 RankedGroup(
                     id: $0.id,
                     title: $0.title,
@@ -744,7 +751,7 @@ final class MonthlyRecapSnapshotStore {
                     listeningDuration: $0.listeningDuration
                 )
             }
-            biggestGainers = recap.biggestGainers.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapMovementSongCount).map {
+            biggestGainers = recap.biggestGainers.prefix(movementLimit).map {
                 MovementSong(
                     id: $0.id,
                     title: $0.title,
@@ -755,7 +762,7 @@ final class MonthlyRecapSnapshotStore {
                     previousRank: $0.previousRank
                 )
             }
-            topNewSongs = recap.topNewSongs.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedSongCount).map {
+            topNewSongs = recap.topNewSongs.prefix(newSongsLimit).map {
                 RankedSong(
                     id: $0.id,
                     title: $0.title,
@@ -837,10 +844,16 @@ final class MonthlyRecapSnapshotStore {
                         playDelta: $0.playDelta,
                         skipDelta: $0.skipDelta,
                         listeningDuration: $0.listeningDuration,
-                        artwork: artworkLookup.songs[$0.id]
+                        artwork: artworkLookup.songs[$0.id],
+                        recordingIdentity: $0.recordingIdentity,
+                        playbackStoreID: $0.playbackStoreID
                     )
                 }
             )
+        }
+
+        func compacted() -> SyncedMonthlyRecap {
+            SyncedMonthlyRecap(recap: monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: [])))
         }
     }
 
@@ -868,17 +881,20 @@ final class MonthlyRecapSnapshotStore {
     private struct StoredSnapshots: Codable {
         var schemaVersion: Int
         var snapshots: [LibrarySnapshot]
+        var monthlyLedgers: [SyncedMonthlyRecap]
         var syncedRecaps: [SyncedMonthlyRecap]
         var syncedYearlyRecaps: [SyncedYearlyRecap]
 
         init(
             schemaVersion: Int,
             snapshots: [LibrarySnapshot],
+            monthlyLedgers: [SyncedMonthlyRecap] = [],
             syncedRecaps: [SyncedMonthlyRecap] = [],
             syncedYearlyRecaps: [SyncedYearlyRecap] = []
         ) {
             self.schemaVersion = schemaVersion
             self.snapshots = snapshots
+            self.monthlyLedgers = monthlyLedgers
             self.syncedRecaps = syncedRecaps
             self.syncedYearlyRecaps = syncedYearlyRecaps
         }
@@ -886,6 +902,7 @@ final class MonthlyRecapSnapshotStore {
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
             case snapshots
+            case monthlyLedgers
             case syncedRecaps
             case syncedYearlyRecaps
         }
@@ -894,8 +911,323 @@ final class MonthlyRecapSnapshotStore {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
             snapshots = try container.decode([LibrarySnapshot].self, forKey: .snapshots)
+            monthlyLedgers = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .monthlyLedgers) ?? []
             syncedRecaps = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .syncedRecaps) ?? []
             syncedYearlyRecaps = try container.decodeIfPresent([SyncedYearlyRecap].self, forKey: .syncedYearlyRecaps) ?? []
+        }
+    }
+
+    /// A compact, delta-encoded persistence layer. Each row stores only songs that
+    /// changed since the preceding observation for that device, while finalized recap
+    /// summaries remain independently readable from the small summary cache.
+    private final class LedgerDatabase {
+        private static let schemaVersion = 2
+        private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+        private struct SnapshotHeader: Codable {
+            let capturedAt: Date
+            let reason: RecapSnapshotReason?
+            let appVersion: String?
+            let scannedSongCount: Int?
+            let deviceIdentifier: String?
+            let aggregateCounters: AggregateCounters?
+            let changes: [SongChange]
+        }
+
+        private struct SongChange: Codable {
+            let id: UInt64
+            let song: SongSnapshot?
+        }
+
+        private enum LedgerError: Error {
+            case open(String)
+            case sqlite(String)
+            case corrupt(String)
+        }
+
+        let url: URL
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        var exists: Bool {
+            FileManager.default.fileExists(atPath: url.path)
+        }
+
+        func load() throws -> StoredSnapshots? {
+            guard exists else { return nil }
+            let database = try open()
+            defer { sqlite3_close(database) }
+            try configure(database)
+
+            guard try metadataInteger("schemaVersion", in: database) == Self.schemaVersion else {
+                throw LedgerError.corrupt("Unsupported recap ledger schema")
+            }
+
+            let syncedRecaps: [SyncedMonthlyRecap] = try metadataCodable("monthlyRecaps", in: database) ?? []
+            let monthlyLedgers: [SyncedMonthlyRecap] = try metadataCodable("monthlyLedgers", in: database) ?? syncedRecaps
+            let syncedYearlyRecaps: [SyncedYearlyRecap] = try metadataCodable("yearlyRecaps", in: database) ?? []
+            let sql = "SELECT record FROM snapshots ORDER BY sequence ASC"
+            let statement = try prepare(sql, in: database)
+            defer { sqlite3_finalize(statement) }
+
+            var statesByDevice: [String: [UInt64: SongSnapshot]] = [:]
+            var snapshots: [LibrarySnapshot] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let record = try data(at: 0, from: statement)
+                let header = try JSONDecoder.playCount.decode(SnapshotHeader.self, from: record)
+                let deviceKey = header.deviceIdentifier ?? "legacy"
+                var state = statesByDevice[deviceKey] ?? [:]
+                for change in header.changes {
+                    if let song = change.song {
+                        state[change.id] = song
+                    } else {
+                        state.removeValue(forKey: change.id)
+                    }
+                }
+                statesByDevice[deviceKey] = state
+                snapshots.append(
+                    LibrarySnapshot(
+                        capturedAt: header.capturedAt,
+                        reason: header.reason,
+                        appVersion: header.appVersion,
+                        scannedSongCount: header.scannedSongCount,
+                        deviceIdentifier: header.deviceIdentifier,
+                        aggregateCounters: header.aggregateCounters,
+                        songs: state.values.sorted { $0.id < $1.id }
+                    )
+                )
+            }
+            guard sqlite3_errcode(database) == SQLITE_OK || sqlite3_errcode(database) == SQLITE_DONE else {
+                throw error(for: database)
+            }
+
+            return StoredSnapshots(
+                schemaVersion: Self.schemaVersion,
+                snapshots: snapshots,
+                monthlyLedgers: monthlyLedgers,
+                syncedRecaps: syncedRecaps,
+                syncedYearlyRecaps: syncedYearlyRecaps
+            )
+        }
+
+        func save(_ stored: StoredSnapshots) throws {
+            let database = try open()
+            defer { sqlite3_close(database) }
+            try configure(database)
+            try execute("BEGIN IMMEDIATE TRANSACTION", in: database)
+
+            do {
+                let existingIDs = try snapshotIdentifiers(in: database)
+                let intendedIDs = stored.snapshots.map(\.syncIdentifier)
+                let canAppend = existingIDs.count <= intendedIDs.count &&
+                    Array(intendedIDs.prefix(existingIDs.count)) == existingIDs
+
+                let startIndex: Int
+                if canAppend {
+                    startIndex = existingIDs.count
+                } else {
+                    try execute("DELETE FROM snapshots", in: database)
+                    startIndex = 0
+                }
+
+                if startIndex < stored.snapshots.count {
+                    for index in startIndex..<stored.snapshots.count {
+                        let snapshot = stored.snapshots[index]
+                        let previous = stored.snapshots[..<index].last {
+                            ($0.deviceIdentifier ?? "legacy") == (snapshot.deviceIdentifier ?? "legacy")
+                        }
+                        try insert(
+                            snapshot,
+                            previous: previous,
+                            sequence: index,
+                            into: database
+                        )
+                    }
+                }
+
+                try setMetadataInteger(Self.schemaVersion, for: "schemaVersion", in: database)
+                try setMetadataCodable(stored.monthlyLedgers, for: "monthlyLedgers", in: database)
+                try setMetadataCodable(stored.syncedRecaps, for: "monthlyRecaps", in: database)
+                try setMetadataCodable(stored.syncedYearlyRecaps, for: "yearlyRecaps", in: database)
+                try execute("COMMIT", in: database)
+            } catch {
+                try? execute("ROLLBACK", in: database)
+                throw error
+            }
+        }
+
+        private func insert(
+            _ snapshot: LibrarySnapshot,
+            previous: LibrarySnapshot?,
+            sequence: Int,
+            into database: OpaquePointer
+        ) throws {
+            let previousSongs = Dictionary(uniqueKeysWithValues: (previous?.songs ?? []).map { ($0.id, $0) })
+            let currentSongs = Dictionary(uniqueKeysWithValues: snapshot.songs.map { ($0.id, $0) })
+            var changes = currentSongs.compactMap { id, song -> SongChange? in
+                previousSongs[id] == song ? nil : SongChange(id: id, song: song)
+            }
+            changes.append(contentsOf: previousSongs.keys.compactMap { id in
+                currentSongs[id] == nil ? SongChange(id: id, song: nil) : nil
+            })
+            changes.sort { $0.id < $1.id }
+
+            let header = SnapshotHeader(
+                capturedAt: snapshot.capturedAt,
+                reason: snapshot.reason,
+                appVersion: snapshot.appVersion,
+                scannedSongCount: snapshot.scannedSongCount,
+                deviceIdentifier: snapshot.deviceIdentifier,
+                aggregateCounters: snapshot.aggregateCounters,
+                changes: changes
+            )
+            let encoded = try JSONEncoder.playCount.encode(header)
+            let statement = try prepare(
+                "INSERT INTO snapshots(sequence, identifier, record) VALUES (?, ?, ?)",
+                in: database
+            )
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_int64(statement, 1, sqlite3_int64(sequence))
+            try bind(snapshot.syncIdentifier, at: 2, to: statement)
+            try bind(encoded, at: 3, to: statement)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw error(for: database) }
+        }
+
+        private func open() throws -> OpaquePointer {
+            var database: OpaquePointer?
+            let result = sqlite3_open_v2(
+                url.path,
+                &database,
+                SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+                nil
+            )
+            guard result == SQLITE_OK, let database else {
+                let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
+                if let database { sqlite3_close(database) }
+                throw LedgerError.open(message)
+            }
+            return database
+        }
+
+        private func configure(_ database: OpaquePointer) throws {
+            try execute("PRAGMA journal_mode=WAL", in: database)
+            try execute("PRAGMA synchronous=NORMAL", in: database)
+            try execute("PRAGMA foreign_keys=ON", in: database)
+            try execute(
+                "CREATE TABLE IF NOT EXISTS snapshots (sequence INTEGER PRIMARY KEY, identifier TEXT NOT NULL UNIQUE, record BLOB NOT NULL)",
+                in: database
+            )
+            try execute(
+                "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL)",
+                in: database
+            )
+        }
+
+        private func snapshotIdentifiers(in database: OpaquePointer) throws -> [String] {
+            let statement = try prepare("SELECT identifier FROM snapshots ORDER BY sequence ASC", in: database)
+            defer { sqlite3_finalize(statement) }
+            var identifiers: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let text = sqlite3_column_text(statement, 0) else {
+                    throw LedgerError.corrupt("Snapshot identifier is missing")
+                }
+                identifiers.append(String(cString: text))
+            }
+            return identifiers
+        }
+
+        private func metadataInteger(_ key: String, in database: OpaquePointer) throws -> Int? {
+            guard let data = try metadataData(key, in: database),
+                  let string = String(data: data, encoding: .utf8) else { return nil }
+            return Int(string)
+        }
+
+        private func metadataCodable<Value: Decodable>(
+            _ key: String,
+            in database: OpaquePointer
+        ) throws -> Value? {
+            guard let data = try metadataData(key, in: database) else { return nil }
+            return try JSONDecoder.playCount.decode(Value.self, from: data)
+        }
+
+        private func metadataData(_ key: String, in database: OpaquePointer) throws -> Data? {
+            let statement = try prepare("SELECT value FROM metadata WHERE key = ?", in: database)
+            defer { sqlite3_finalize(statement) }
+            try bind(key, at: 1, to: statement)
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                return try data(at: 0, from: statement)
+            case SQLITE_DONE:
+                return nil
+            default:
+                throw error(for: database)
+            }
+        }
+
+        private func setMetadataInteger(_ value: Int, for key: String, in database: OpaquePointer) throws {
+            try setMetadataData(Data(String(value).utf8), for: key, in: database)
+        }
+
+        private func setMetadataCodable<Value: Encodable>(
+            _ value: Value,
+            for key: String,
+            in database: OpaquePointer
+        ) throws {
+            try setMetadataData(try JSONEncoder.playCount.encode(value), for: key, in: database)
+        }
+
+        private func setMetadataData(_ value: Data, for key: String, in database: OpaquePointer) throws {
+            let statement = try prepare(
+                "INSERT INTO metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                in: database
+            )
+            defer { sqlite3_finalize(statement) }
+            try bind(key, at: 1, to: statement)
+            try bind(value, at: 2, to: statement)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw error(for: database) }
+        }
+
+        private func execute(_ sql: String, in database: OpaquePointer) throws {
+            guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+                throw error(for: database)
+            }
+        }
+
+        private func prepare(_ sql: String, in database: OpaquePointer) throws -> OpaquePointer {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                throw error(for: database)
+            }
+            return statement
+        }
+
+        private func bind(_ value: String, at index: Int32, to statement: OpaquePointer) throws {
+            guard sqlite3_bind_text(statement, index, value, -1, Self.transient) == SQLITE_OK else {
+                throw LedgerError.sqlite("Could not bind text")
+            }
+        }
+
+        private func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {
+            let result = value.withUnsafeBytes { bytes in
+                sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), Self.transient)
+            }
+            guard result == SQLITE_OK else { throw LedgerError.sqlite("Could not bind data") }
+        }
+
+        private func data(at index: Int32, from statement: OpaquePointer) throws -> Data {
+            let count = Int(sqlite3_column_bytes(statement, index))
+            guard count > 0 else { return Data() }
+            guard let bytes = sqlite3_column_blob(statement, index) else {
+                throw LedgerError.corrupt("Stored recap data is missing")
+            }
+            return Data(bytes: bytes, count: count)
+        }
+
+        private func error(for database: OpaquePointer) -> LedgerError {
+            LedgerError.sqlite(String(cString: sqlite3_errmsg(database)))
         }
     }
 
@@ -1072,6 +1404,7 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private let fileURL: URL
+    private let ledgerURL: URL
     private let summaryFileURL: URL
     private let calendar: Calendar
     private let deviceIdentifier: String
@@ -1112,6 +1445,7 @@ final class MonthlyRecapSnapshotStore {
         }
         try? fileManager.createDirectory(at: resolvedDirectoryURL, withIntermediateDirectories: true)
         fileURL = resolvedDirectoryURL.appendingPathComponent("monthly-recap-snapshots.json")
+        ledgerURL = resolvedDirectoryURL.appendingPathComponent("recap-ledger.sqlite")
         summaryFileURL = resolvedDirectoryURL.appendingPathComponent("recap-summaries.json")
     }
 
@@ -1177,6 +1511,18 @@ final class MonthlyRecapSnapshotStore {
     #if DEBUG
     var debugHasLoadedFullSnapshotStore: Bool {
         accessQueue.sync { loadedSnapshots != nil }
+    }
+
+    func debugCreateLegacyArchiveForMigration() throws {
+        try accessQueue.sync {
+            let stored = loadLocked()
+            let data = try JSONEncoder.playCount.encode(stored)
+            try data.write(to: fileURL, options: [.atomic])
+            for url in [ledgerURL, URL(fileURLWithPath: ledgerURL.path + "-wal"), URL(fileURLWithPath: ledgerURL.path + "-shm")] {
+                try? FileManager.default.removeItem(at: url)
+            }
+            loadedSnapshots = nil
+        }
     }
     #endif
 
@@ -1310,14 +1656,16 @@ final class MonthlyRecapSnapshotStore {
 
     func availableMonthStarts(through date: Date = Date()) -> [Date] {
         accessQueue.sync {
-            let ordered = loadLocked().snapshots.sorted { $0.capturedAt < $1.capturedAt }
+            let stored = loadLocked()
+            let ordered = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let currentMonth = calendar.startOfMonth(containing: date)
 
-            guard let firstSnapshot = ordered.first else {
+            let firstTrackedMonth = stored.syncedRecaps.map(\.monthStart).min()
+                ?? ordered.first.map { calendar.startOfMonth(containing: $0.capturedAt) }
+            guard let firstMonth = firstTrackedMonth else {
                 return [currentMonth]
             }
 
-            let firstMonth = calendar.startOfMonth(containing: firstSnapshot.capturedAt)
             let monthCount = max(0, calendar.dateComponents([.month], from: firstMonth, to: currentMonth).month ?? 0)
 
             return (0...monthCount).compactMap {
@@ -1335,7 +1683,7 @@ final class MonthlyRecapSnapshotStore {
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
                 didChange = true
             }
-            if updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
+            if didChange && updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
                 didChange = true
             }
             if didChange {
@@ -1372,7 +1720,7 @@ final class MonthlyRecapSnapshotStore {
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
                 didChange = true
             }
-            if updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
+            if didChange && updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
                 didChange = true
             }
             if didChange {
@@ -1435,6 +1783,11 @@ final class MonthlyRecapSnapshotStore {
                 stored.syncedRecaps = mergedSyncedRecaps
                 didChange = true
             }
+            let mergedMonthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers + incomingSyncedRecaps)
+            if mergedMonthlyLedgers != stored.monthlyLedgers {
+                stored.monthlyLedgers = mergedMonthlyLedgers
+                didChange = true
+            }
 
             let mergedSyncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + incomingSyncedYearlyRecaps)
             if mergedSyncedYearlyRecaps != stored.syncedYearlyRecaps {
@@ -1448,7 +1801,17 @@ final class MonthlyRecapSnapshotStore {
                 from: Array(snapshotsByID.values).sortedForSyncPayloads(),
                 now: now
             )
-            _ = updateSyncedRecaps(in: &stored, snapshots: stored.snapshots)
+            let affectedMonths = Set(payloads.flatMap { payload -> [Date] in
+                let month = calendar.startOfMonth(containing: payload.capturedAt)
+                let next = calendar.date(byAdding: .month, value: 1, to: month)
+                return [month] + (next.map { [$0] } ?? [])
+            })
+            _ = updateSyncedRecaps(
+                in: &stored,
+                snapshots: stored.snapshots,
+                affectedMonthStarts: affectedMonths
+            )
+            stored.snapshots = compactSnapshotsForLocalStorage(from: stored.snapshots)
             guard shouldCommit() else { return false }
             saveLocked(stored)
             return true
@@ -1475,7 +1838,7 @@ final class MonthlyRecapSnapshotStore {
             }
 
             return """
-            Snapshot file: \(fileURL.path)
+            Snapshot ledger: \(ledgerURL.path)
             Snapshots stored: \(ordered.count)
             Month snapshots: \(inMonth.count)
             Baseline snapshot: \(baseline?.capturedAt.formatted(date: .numeric, time: .standard) ?? "none")
@@ -1513,9 +1876,13 @@ final class MonthlyRecapSnapshotStore {
 
         if shouldAppend(snapshot, after: stored.snapshots.last) {
             var updated = stored
+            let previous = updated.snapshots.last(where: {
+                $0.capturedAt < snapshot.capturedAt && $0.isSameDevice(as: snapshot)
+            })
             updated.snapshots.append(snapshot)
             updated.snapshots = retainedCanonicalSnapshots(from: updated.snapshots, now: capturedAt)
-            _ = updateSyncedRecaps(in: &updated, snapshots: updated.snapshots)
+            updateIncrementalRecap(in: &updated, previous: previous, current: snapshot)
+            updated.snapshots = compactSnapshotsForLocalStorage(from: updated.snapshots)
             if shouldCommit() {
                 saveLocked(updated)
                 stored = updated
@@ -1551,6 +1918,35 @@ final class MonthlyRecapSnapshotStore {
 
     private func retainedCanonicalSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
         canonicalSnapshots(retainedSnapshots(from: snapshots, now: now))
+    }
+
+    private func compactSnapshotsForLocalStorage(from snapshots: [LibrarySnapshot]) -> [LibrarySnapshot] {
+        let canonical = canonicalSnapshots(snapshots)
+        let streams = Dictionary(grouping: canonical) {
+            $0.logicalDeviceKey(fallbackDeviceIdentifier: deviceIdentifier)
+        }
+        var compacted: [LibrarySnapshot] = []
+
+        for stream in streams.values {
+            let ordered = canonicalSnapshots(stream)
+            guard let latest = ordered.last else { continue }
+            let activeMonth = calendar.startOfMonth(containing: latest.capturedAt)
+            if let baseline = ordered.last(where: { $0.capturedAt < activeMonth }) {
+                compacted.append(baseline)
+            }
+            let activeSnapshots = ordered.filter {
+                calendar.startOfMonth(containing: $0.capturedAt) == activeMonth
+            }
+            if let first = activeSnapshots.first {
+                compacted.append(first)
+            }
+            if let latest = activeSnapshots.last,
+               latest.syncIdentifier != activeSnapshots.first?.syncIdentifier {
+                compacted.append(latest)
+            }
+        }
+
+        return canonicalSnapshots(compacted)
     }
 
     private func compactRetainedCanonicalSnapshots(in stored: inout StoredSnapshots, now: Date) -> Bool {
@@ -1627,13 +2023,42 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    private func updateSyncedRecaps(in stored: inout StoredSnapshots, snapshots: [LibrarySnapshot]) -> Bool {
-        let generatedRecaps = syncedRecaps(from: snapshots)
-        let generatedYearlyRecaps = syncedYearlyRecaps(from: snapshots)
+    private func updateSyncedRecaps(
+        in stored: inout StoredSnapshots,
+        snapshots: [LibrarySnapshot],
+        affectedMonthStarts: Set<Date>? = nil
+    ) -> Bool {
+        let generatedLedgers: [SyncedMonthlyRecap]
+        if let affectedMonthStarts {
+            generatedLedgers = affectedMonthStarts.compactMap { monthStart in
+                let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+                guard snapshots.contains(where: {
+                    $0.capturedAt >= monthStart && $0.capturedAt < monthEnd
+                }) else { return nil }
+                return SyncedMonthlyRecap(
+                    recap: snapshotRecap(for: monthStart, snapshots: snapshots),
+                    preservingAllRankings: true
+                )
+            }
+        } else {
+            generatedLedgers = fullMonthlyRecaps(from: snapshots).map {
+                SyncedMonthlyRecap(recap: $0, preservingAllRankings: true)
+            }
+        }
+        let startingLedgers = stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers
+        let mergedLedgers = Self.mergedSyncedRecaps(startingLedgers + generatedLedgers)
+        let generatedRecaps = generatedLedgers.map { $0.compacted() }
         let mergedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + generatedRecaps)
-        let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + generatedYearlyRecaps)
+        let generatedYearlyRecaps = yearlyRecaps(from: mergedLedgers)
+        let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+            stored.syncedYearlyRecaps + generatedYearlyRecaps
+        )
 
         var didChange = false
+        if mergedLedgers != stored.monthlyLedgers {
+            stored.monthlyLedgers = mergedLedgers
+            didChange = true
+        }
         if mergedRecaps != stored.syncedRecaps {
             stored.syncedRecaps = mergedRecaps
             didChange = true
@@ -1645,8 +2070,266 @@ final class MonthlyRecapSnapshotStore {
         return didChange
     }
 
+    /// Advances the active month's recap from one observation to the next. The
+    /// full monthly ranking ledger is the durable accumulator, so a refresh is
+    /// O(library size) and never replays the month's historical observations.
+    private func updateIncrementalRecap(
+        in stored: inout StoredSnapshots,
+        previous: LibrarySnapshot?,
+        current: LibrarySnapshot
+    ) {
+        let monthStart = calendar.startOfMonth(containing: current.capturedAt)
+        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? current.capturedAt
+        let existing = stored.monthlyLedgers
+            .filter { $0.monthStart == monthStart }
+            .sorted(by: Self.isHigherPrioritySyncedRecap)
+            .first
+
+        guard let existing,
+              let previous,
+              previous.isSameDevice(as: current),
+              abs(existing.generatedAt.timeIntervalSince(previous.capturedAt)) < 0.001,
+              hasComparableCoverage(previous, latest: current) else {
+            _ = updateSyncedRecaps(
+                in: &stored,
+                snapshots: stored.snapshots,
+                affectedMonthStarts: Set([monthStart])
+            )
+            return
+        }
+
+        let priorRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+        let resolver = RecordingIdentityResolver(snapshots: [previous, current])
+        let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+
+        var existingSongsByIdentity: [String: MonthlyRecap.RankedSong] = [:]
+        var legacyIdentities: [String: Set<String>] = [:]
+        for song in priorRecap.topSongs {
+            let identity = song.recordingIdentity ?? legacyRecapRecordingIdentity(
+                title: song.title,
+                artist: song.artist,
+                albumTitle: song.albumTitle
+            )
+            existingSongsByIdentity[identity] = song
+            legacyIdentities[legacyRecapRecordingIdentity(
+                title: song.title,
+                artist: song.artist,
+                albumTitle: song.albumTitle
+            ), default: []].insert(identity)
+        }
+
+        func accumulatedIdentity(for song: SongSnapshot) -> String {
+            let resolved = resolver.identity(for: song)
+            if existingSongsByIdentity[resolved] != nil { return resolved }
+            if let storeID = song.playbackStoreID {
+                let storeIdentity = "store:\(storeID)"
+                if existingSongsByIdentity[storeIdentity] != nil { return storeIdentity }
+            }
+            let legacy = legacyRecapRecordingIdentity(
+                title: song.title,
+                artist: song.artist,
+                albumTitle: song.albumTitle
+            )
+            if let identities = legacyIdentities[legacy], identities.count == 1,
+               let identity = identities.first {
+                return identity
+            }
+            return resolved
+        }
+
+        var intervalDeltas: [SongDelta] = []
+        var hasCounterDiscontinuity = false
+        for song in current.songs {
+            let identity = accumulatedIdentity(for: song)
+            let wasAddedThisMonth = song.dateAdded.map { $0 >= monthStart && $0 < monthEnd } ?? false
+            let playDelta: Int
+            let skipDelta: Int
+
+            if let prior = previousByID[song.id] {
+                let dateAddedAdvanced = song.dateAdded.map { currentDate in
+                    guard currentDate >= monthStart && currentDate < monthEnd else { return false }
+                    guard let priorDate = prior.dateAdded else { return true }
+                    return currentDate.timeIntervalSince(priorDate) > 60
+                } ?? false
+                if song.playCount >= prior.playCount {
+                    playDelta = song.playCount - prior.playCount
+                    skipDelta = max(0, song.skipCount - prior.skipCount)
+                } else if dateAddedAdvanced {
+                    playDelta = song.playCount
+                    skipDelta = song.skipCount
+                    hasCounterDiscontinuity = true
+                } else {
+                    // Apple can temporarily report a lower counter. Do not erase
+                    // or double-count until a reset is supported by dateAdded.
+                    playDelta = 0
+                    skipDelta = 0
+                }
+            } else if existingSongsByIdentity[identity] != nil || wasAddedThisMonth {
+                // A different persistent ID for a known recording is the normal
+                // delete/re-add shape. Its new counter is a fresh epoch.
+                playDelta = song.playCount
+                skipDelta = song.skipCount
+                hasCounterDiscontinuity = existingSongsByIdentity[identity] != nil
+            } else {
+                playDelta = 0
+                skipDelta = 0
+            }
+
+            guard playDelta > 0 || skipDelta > 0 else { continue }
+            intervalDeltas.append(
+                SongDelta(
+                    latest: song,
+                    playDelta: playDelta,
+                    skipDelta: skipDelta,
+                    recordingIdentity: identity,
+                    playbackStoreID: song.playbackStoreID,
+                    isNewSong: wasAddedThisMonth && existingSongsByIdentity[identity] == nil
+                )
+            )
+        }
+
+        let aggregatePlayDelta = current.aggregateCounters.flatMap { currentCounters in
+            previous.aggregateCounters.map { previousCounters in
+                max(0, currentCounters.playCount - previousCounters.playCount)
+            }
+        }
+        let aggregateSkipDelta = current.aggregateCounters.flatMap { currentCounters in
+            previous.aggregateCounters.map { previousCounters in
+                max(0, currentCounters.skipCount - previousCounters.skipCount)
+            }
+        }
+        let aggregateListeningDelta = current.aggregateCounters.flatMap { currentCounters in
+            previous.aggregateCounters.map { previousCounters in
+                max(0, currentCounters.listeningDuration - previousCounters.listeningDuration)
+            }
+        }
+        let rawIntervalDeltas = intervalDeltas
+        if !hasCounterDiscontinuity {
+            intervalDeltas = rankingDeltas(
+                from: intervalDeltas,
+                monthStart: monthStart,
+                monthEnd: monthEnd,
+                aggregatePlayDelta: aggregatePlayDelta
+            )
+        }
+
+        var songsByIdentity = existingSongsByIdentity
+        for delta in intervalDeltas {
+            let old = songsByIdentity[delta.recordingIdentity]
+            songsByIdentity[delta.recordingIdentity] = MonthlyRecap.RankedSong(
+                id: delta.latest.id,
+                title: delta.latest.title,
+                artist: delta.latest.artist,
+                albumTitle: delta.latest.albumTitle,
+                playDelta: (old?.playDelta ?? 0) + delta.playDelta,
+                skipDelta: (old?.skipDelta ?? 0) + delta.skipDelta,
+                listeningDuration: (old?.listeningDuration ?? 0) + delta.listeningDuration,
+                artwork: nil,
+                recordingIdentity: delta.recordingIdentity,
+                playbackStoreID: delta.playbackStoreID ?? old?.playbackStoreID
+            )
+        }
+        let rankedSongs = songsByIdentity.values.sorted {
+            if $0.playDelta != $1.playDelta { return $0.playDelta > $1.playDelta }
+            if $0.listeningDuration != $1.listeningDuration { return $0.listeningDuration > $1.listeningDuration }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+
+        var artists = Dictionary(uniqueKeysWithValues: priorRecap.topArtists.map { ($0.id, $0) })
+        var albums = Dictionary(uniqueKeysWithValues: priorRecap.topAlbums.map { ($0.id, $0) })
+        for delta in intervalDeltas where delta.playDelta > 0 {
+            let artistID = artistGroupID(for: delta)
+            let oldArtist = artists[artistID]
+            artists[artistID] = MonthlyRecap.RankedGroup(
+                id: artistID,
+                title: delta.latest.artist,
+                subtitle: "Artist",
+                playDelta: (oldArtist?.playDelta ?? 0) + delta.playDelta,
+                listeningDuration: (oldArtist?.listeningDuration ?? 0) + delta.listeningDuration,
+                artwork: nil
+            )
+            let albumID = albumGroupID(for: delta)
+            let oldAlbum = albums[albumID]
+            albums[albumID] = MonthlyRecap.RankedGroup(
+                id: albumID,
+                title: delta.latest.albumTitle,
+                subtitle: delta.latest.albumArtist,
+                playDelta: (oldAlbum?.playDelta ?? 0) + delta.playDelta,
+                listeningDuration: (oldAlbum?.listeningDuration ?? 0) + delta.listeningDuration,
+                artwork: nil
+            )
+        }
+
+        var newSongIdentities = Set(priorRecap.topNewSongs.map {
+            $0.recordingIdentity ?? legacyRecapRecordingIdentity(
+                title: $0.title,
+                artist: $0.artist,
+                albumTitle: $0.albumTitle
+            )
+        })
+        newSongIdentities.formUnion(intervalDeltas.filter(\.isNewSong).map(\.recordingIdentity))
+        let topNewSongs = rankedSongs.filter { song in
+            let identity = song.recordingIdentity ?? legacyRecapRecordingIdentity(
+                title: song.title,
+                artist: song.artist,
+                albumTitle: song.albumTitle
+            )
+            return newSongIdentities.contains(identity)
+        }
+
+        let songPlayDelta = rawIntervalDeltas.reduce(0) { $0 + $1.playDelta }
+        let songSkipDelta = rawIntervalDeltas.reduce(0) { $0 + $1.skipDelta }
+        let songListeningDuration = rawIntervalDeltas.reduce(0) { $0 + $1.listeningDuration }
+        let intervalPlayDelta = hasCounterDiscontinuity ? songPlayDelta : aggregatePlayDelta ?? songPlayDelta
+        let intervalSkipDelta = hasCounterDiscontinuity ? songSkipDelta : aggregateSkipDelta ?? songSkipDelta
+        let intervalListeningDuration = hasCounterDiscontinuity
+            ? songListeningDuration
+            : aggregateListeningDelta ?? songListeningDuration
+        let recap = MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: current.capturedAt,
+            lastCaptureReason: current.reason,
+            trackingStart: priorRecap.trackingStart ?? previous.capturedAt,
+            snapshotCount: priorRecap.snapshotCount + 1,
+            totalPlayDelta: priorRecap.totalPlayDelta + intervalPlayDelta,
+            totalSkipDelta: priorRecap.totalSkipDelta + intervalSkipDelta,
+            totalListeningDuration: priorRecap.totalListeningDuration + intervalListeningDuration,
+            playedSongCount: rankedSongs.filter { $0.playDelta > 0 }.count,
+            newSongCount: max(
+                priorRecap.newSongCount,
+                current.aggregateCounters?.monthNewSongCount ?? topNewSongs.count
+            ),
+            topSongs: rankedSongs,
+            topArtists: artists.values.sorted { $0.playDelta > $1.playDelta },
+            topAlbums: albums.values.sorted { $0.playDelta > $1.playDelta },
+            biggestGainers: priorRecap.biggestGainers,
+            topNewSongs: topNewSongs
+        )
+        guard isPlausibleListeningDuration(
+            recap.totalListeningDuration,
+            monthStart: monthStart,
+            baseline: previous,
+            latest: current
+        ) else {
+            _ = updateSyncedRecaps(
+                in: &stored,
+                snapshots: stored.snapshots,
+                affectedMonthStarts: Set([monthStart])
+            )
+            return
+        }
+        let ledger = SyncedMonthlyRecap(recap: recap, preservingAllRankings: true)
+        stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+        stored.monthlyLedgers.append(ledger)
+        stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
+        stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+        stored.syncedRecaps.append(ledger.compacted())
+        stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
+        stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
+    }
+
     private func syncedRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedMonthlyRecap] {
-        fullMonthlyRecaps(from: snapshots).map(SyncedMonthlyRecap.init(recap:))
+        fullMonthlyRecaps(from: snapshots).map { SyncedMonthlyRecap(recap: $0) }
     }
 
     private func fullMonthlyRecaps(from snapshots: [LibrarySnapshot]) -> [MonthlyRecap] {
@@ -1656,8 +2339,10 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    private func syncedYearlyRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedYearlyRecap] {
-        let monthlyRecapsByYear = Dictionary(grouping: fullMonthlyRecaps(from: snapshots)) {
+    private func yearlyRecaps(from syncedRecaps: [SyncedMonthlyRecap]) -> [SyncedYearlyRecap] {
+        let artworkLookup = ArtworkLookup(sourceSongs: [])
+        let monthlyRecaps = syncedRecaps.map { $0.monthlyRecap(artworkLookup: artworkLookup) }
+        let monthlyRecapsByYear = Dictionary(grouping: monthlyRecaps) {
             calendar.component(.year, from: $0.monthStart)
         }
 
@@ -1765,6 +2450,10 @@ final class MonthlyRecapSnapshotStore {
 
         if lhs.totalListeningDuration != rhs.totalListeningDuration {
             return lhs.totalListeningDuration > rhs.totalListeningDuration
+        }
+
+        if lhs.playedSongCount != rhs.playedSongCount {
+            return lhs.playedSongCount > rhs.playedSongCount
         }
 
         if lhs.newSongCount != rhs.newSongCount {
@@ -2723,18 +3412,47 @@ final class MonthlyRecapSnapshotStore {
             return loadedSnapshots
         }
 
+        let ledger = LedgerDatabase(url: ledgerURL)
+        if let stored = try? ledger.load() {
+            loadedSnapshots = stored
+            return stored
+        }
+
         guard let data = try? Data(contentsOf: fileURL) else {
-            let empty = StoredSnapshots(schemaVersion: 1, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 2, snapshots: [])
             loadedSnapshots = empty
             return empty
         }
 
         do {
-            let stored = try JSONDecoder.playCount.decode(StoredSnapshots.self, from: data)
-            loadedSnapshots = stored
-            return stored
+            var legacy = try JSONDecoder.playCount.decode(StoredSnapshots.self, from: data)
+            _ = backfillAggregateCounters(in: &legacy)
+            _ = updateSyncedRecaps(in: &legacy, snapshots: legacy.snapshots)
+            legacy.snapshots = compactSnapshotsForLocalStorage(from: legacy.snapshots)
+            legacy.schemaVersion = 2
+
+            do {
+                try ledger.save(legacy)
+                guard let verified = try ledger.load(),
+                      verified.snapshots.map(\.syncIdentifier) == legacy.snapshots.map(\.syncIdentifier),
+                      verified.monthlyLedgers == legacy.monthlyLedgers,
+                      verified.syncedRecaps == legacy.syncedRecaps,
+                      verified.syncedYearlyRecaps == legacy.syncedYearlyRecaps else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+
+                writeSummaryCache(for: verified)
+                try? FileManager.default.removeItem(at: fileURL)
+                loadedSnapshots = verified
+                return verified
+            } catch {
+                // Migration is intentionally fail-open: the verified legacy
+                // archive remains authoritative until a later attempt succeeds.
+                loadedSnapshots = legacy
+                return legacy
+            }
         } catch {
-            let empty = StoredSnapshots(schemaVersion: 1, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 2, snapshots: [])
             loadedSnapshots = empty
             return empty
         }
@@ -2742,18 +3460,35 @@ final class MonthlyRecapSnapshotStore {
 
     private func saveLocked(_ stored: StoredSnapshots) {
         do {
-            let data = try JSONEncoder.playCount.encode(stored)
-            try data.write(to: fileURL, options: [.atomic])
-            let summaries = SyncedRecapSummaries(
-                monthlyRecaps: stored.syncedRecaps,
-                yearlyRecaps: stored.syncedYearlyRecaps
-            )
-            if let summaryData = try? JSONEncoder.playCount.encode(summaries) {
-                try? summaryData.write(to: summaryFileURL, options: [.atomic])
+            var ledgerStored = stored
+            ledgerStored.schemaVersion = 2
+            let ledger = LedgerDatabase(url: ledgerURL)
+            try ledger.save(ledgerStored)
+            writeSummaryCache(for: ledgerStored)
+            if FileManager.default.fileExists(atPath: fileURL.path),
+               let verified = try ledger.load(),
+               verified.snapshots.map(\.syncIdentifier) == ledgerStored.snapshots.map(\.syncIdentifier),
+               verified.monthlyLedgers == ledgerStored.monthlyLedgers,
+               verified.syncedRecaps == ledgerStored.syncedRecaps,
+               verified.syncedYearlyRecaps == ledgerStored.syncedYearlyRecaps {
+                try? FileManager.default.removeItem(at: fileURL)
             }
-            loadedSnapshots = stored
+            loadedSnapshots = ledgerStored
         } catch {
-            assertionFailure("Failed to save monthly recap snapshots: \(error)")
+            #if DEBUG
+            print("Failed to save monthly recap ledger: \(error)")
+            #endif
+            assertionFailure("Failed to save monthly recap ledger: \(error)")
+        }
+    }
+
+    private func writeSummaryCache(for stored: StoredSnapshots) {
+        let summaries = SyncedRecapSummaries(
+            monthlyRecaps: stored.syncedRecaps,
+            yearlyRecaps: stored.syncedYearlyRecaps
+        )
+        if let summaryData = try? JSONEncoder.playCount.encode(summaries) {
+            try? summaryData.write(to: summaryFileURL, options: [.atomic])
         }
     }
 
