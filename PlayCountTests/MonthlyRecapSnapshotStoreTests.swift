@@ -1352,6 +1352,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             calendar: calendar,
             deviceIdentifier: "migration-device"
         )
+        migrated.prepareStorage()
         XCTAssertEqual(migrated.recap(forMonthContaining: mayLatest).totalPlayDelta, expectedMay.totalPlayDelta)
         XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).totalPlayDelta, expectedJuly.totalPlayDelta)
         XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.totalPlayDelta, expectedYear.totalPlayDelta)

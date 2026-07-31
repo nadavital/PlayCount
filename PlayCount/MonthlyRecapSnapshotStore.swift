@@ -1461,6 +1461,14 @@ final class MonthlyRecapSnapshotStore {
         ).monthlyRecaps
     }
 
+    /// Starts any one-time legacy conversion independently of the media-library
+    /// query. Call from a utility queue so cached UI remains immediately usable.
+    func prepareStorage() {
+        accessQueue.sync {
+            _ = loadLocked()
+        }
+    }
+
     func cachedRecapPresentation(
         sourceSongs: [TopSong] = [],
         sourceAlbums: [TopAlbum] = [],

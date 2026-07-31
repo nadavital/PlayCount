@@ -325,6 +325,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         configureObservers()
         updateNowPlayingState()
 
+        // Legacy recap conversion must not wait for the first Music-library
+        // query to finish. It runs behind the store's serial queue, so the
+        // eventual snapshot record observes the fully migrated ledger.
+        DispatchQueue.global(qos: .utility).async { [snapshotStore] in
+            snapshotStore.prepareStorage()
+        }
+
         // The root view starts the first refresh after it appears. Avoiding recap
         // disk decoding, media queries, and CloudKit work here keeps construction
         // cheap enough for SwiftUI to present the tab interface immediately.
