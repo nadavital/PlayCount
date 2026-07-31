@@ -865,6 +865,247 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertTrue(recap.biggestGainers.isEmpty)
     }
 
+    func testDeletedAndReaddedSongCombinesCounterEpochsWithoutFreezingSyncedRecap() {
+        let store = makeStore(named: "readded-new-id")
+        let baselineDate = date(year: 2026, month: 6, day: 29)
+        let beforeDeletion = date(year: 2026, month: 7, day: 22, hour: 10)
+        let deleted = date(year: 2026, month: 7, day: 22, hour: 11)
+        let readded = date(year: 2026, month: 7, day: 22, hour: 13)
+        let latest = date(year: 2026, month: 7, day: 30)
+        let originalDateAdded = date(year: 2026, month: 5, day: 29)
+
+        _ = store.record(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Counter Epoch Song",
+                    albumTitle: "Original Album",
+                    playCount: 269,
+                    dateAdded: originalDateAdded,
+                    playbackStoreID: "catalog-song"
+                ),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Counter Epoch Song",
+                    albumTitle: "Original Album",
+                    playCount: 313,
+                    dateAdded: originalDateAdded,
+                    playbackStoreID: "catalog-song"
+                ),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: beforeDeletion,
+            reason: .appLaunch
+        )
+        _ = store.record(
+            songs: [song(id: 99, title: "Stable Filler", playCount: 100)],
+            at: deleted,
+            reason: .libraryChanged
+        )
+        _ = store.record(
+            songs: [
+                song(
+                    id: 2,
+                    title: "Counter Epoch Song",
+                    albumTitle: "Deluxe Album",
+                    playCount: 10,
+                    dateAdded: deleted,
+                    playbackStoreID: "catalog-song"
+                ),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: readded,
+            reason: .appLaunch
+        )
+        let recap = store.record(
+            songs: [
+                song(
+                    id: 2,
+                    title: "Counter Epoch Song",
+                    albumTitle: "Deluxe Album",
+                    playCount: 71,
+                    dateAdded: deleted,
+                    playbackStoreID: "catalog-song"
+                ),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: latest,
+            reason: .appLaunch
+        )
+
+        XCTAssertEqual(recap.totalPlayDelta, 115)
+        XCTAssertEqual(recap.topSongs.count, 1)
+        XCTAssertEqual(recap.topSongs.first?.id, 2)
+        XCTAssertEqual(recap.topSongs.first?.albumTitle, "Deluxe Album")
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 115)
+        XCTAssertTrue(recap.topNewSongs.isEmpty)
+        XCTAssertEqual(recap.generatedAt, latest)
+    }
+
+    func testSamePersistentIDCounterResetStartsANewEpochWhenDateAddedAdvances() {
+        let store = makeStore(named: "readded-same-id")
+        let baselineDate = date(year: 2026, month: 6, day: 29)
+        let beforeReset = date(year: 2026, month: 7, day: 22, hour: 10)
+        let resetDate = date(year: 2026, month: 7, day: 22, hour: 13)
+        let latest = date(year: 2026, month: 7, day: 30)
+        let originalDateAdded = date(year: 2026, month: 5, day: 29)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Same ID Reset", playCount: 269, dateAdded: originalDateAdded)],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Same ID Reset", playCount: 313, dateAdded: originalDateAdded)],
+            at: beforeReset,
+            reason: .appLaunch
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Same ID Reset", playCount: 10, dateAdded: resetDate)],
+            at: resetDate,
+            reason: .libraryChanged
+        )
+        let recap = store.record(
+            songs: [song(id: 1, title: "Same ID Reset", playCount: 71, dateAdded: resetDate)],
+            at: latest,
+            reason: .appLaunch
+        )
+
+        XCTAssertEqual(recap.totalPlayDelta, 115)
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 115)
+        XCTAssertTrue(recap.topNewSongs.isEmpty)
+    }
+
+    func testDeletingSongPreservesPlaysAlreadyObservedThisMonth() {
+        let store = makeStore(named: "deleted-preserves-month")
+        let baselineDate = date(year: 2026, month: 6, day: 29)
+        let beforeDeletion = date(year: 2026, month: 7, day: 22)
+        let afterDeletion = date(year: 2026, month: 7, day: 23)
+
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "Deleted Song", playCount: 269),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [
+                song(id: 1, title: "Deleted Song", playCount: 313),
+                song(id: 99, title: "Stable Filler", playCount: 100)
+            ],
+            at: beforeDeletion,
+            reason: .appLaunch
+        )
+        let recap = store.record(
+            songs: [song(id: 99, title: "Stable Filler", playCount: 100)],
+            at: afterDeletion,
+            reason: .libraryChanged
+        )
+
+        XCTAssertEqual(recap.totalPlayDelta, 44)
+        XCTAssertEqual(recap.topSongs.first?.title, "Deleted Song")
+        XCTAssertEqual(recap.topSongs.first?.playDelta, 44)
+    }
+
+    func testYearlyRecapCombinesRecordingAcrossPersistentIDReplacement() {
+        let store = makeStore(named: "yearly-readded")
+        let mayBaseline = date(year: 2026, month: 5, day: 31)
+        let juneLatest = date(year: 2026, month: 6, day: 30)
+        let julyBaseline = date(year: 2026, month: 7, day: 1)
+        let julyDeletion = date(year: 2026, month: 7, day: 10)
+        let julyLatest = date(year: 2026, month: 7, day: 30)
+        let originalDateAdded = date(year: 2026, month: 5, day: 29)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Yearly Epoch Song", playCount: 269, dateAdded: originalDateAdded)],
+            at: mayBaseline,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Yearly Epoch Song", playCount: 313, dateAdded: originalDateAdded)],
+            at: juneLatest,
+            reason: .appLaunch
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Yearly Epoch Song", playCount: 313, dateAdded: originalDateAdded)],
+            at: julyBaseline,
+            reason: .appLaunch
+        )
+        _ = store.record(songs: [], at: julyDeletion, reason: .libraryChanged)
+        _ = store.record(
+            songs: [
+                song(
+                    id: 2,
+                    title: "Yearly Epoch Song",
+                    playCount: 71,
+                    dateAdded: julyDeletion,
+                    albumPersistentID: 100,
+                    artistPersistentID: 200
+                )
+            ],
+            at: julyLatest,
+            reason: .appLaunch
+        )
+
+        let yearly = store.syncedYearlyRecap(for: 2026)
+        XCTAssertEqual(yearly?.totalPlayDelta, 115)
+        XCTAssertEqual(yearly?.playedSongCount, 1)
+        XCTAssertEqual(yearly?.topSongs.count, 1)
+        XCTAssertEqual(yearly?.topSongs.first?.id, 2)
+        XCTAssertEqual(yearly?.topSongs.first?.playDelta, 115)
+        XCTAssertEqual(yearly?.topArtists.count, 1)
+        XCTAssertEqual(yearly?.topArtists.first?.id, "200")
+        XCTAssertEqual(yearly?.topArtists.first?.playDelta, 115)
+        XCTAssertEqual(yearly?.topAlbums.count, 1)
+        XCTAssertEqual(yearly?.topAlbums.first?.id, "100")
+        XCTAssertEqual(yearly?.topAlbums.first?.playDelta, 115)
+    }
+
+    func testReaddAcrossMonthBoundaryKeepsYearlyIdentityWithoutBecomingTopNew() {
+        let store = makeStore(named: "yearly-readded-across-month")
+        let mayBaseline = date(year: 2026, month: 5, day: 31)
+        let juneHighWater = date(year: 2026, month: 6, day: 20)
+        let juneDeletion = date(year: 2026, month: 6, day: 30)
+        let julyReadd = date(year: 2026, month: 7, day: 2)
+        let originalDateAdded = date(year: 2026, month: 5, day: 29)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Boundary Epoch Song", playCount: 269, dateAdded: originalDateAdded)],
+            at: mayBaseline,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Boundary Epoch Song", playCount: 313, dateAdded: originalDateAdded)],
+            at: juneHighWater,
+            reason: .appLaunch
+        )
+        _ = store.record(songs: [], at: juneDeletion, reason: .libraryChanged)
+        let july = store.record(
+            songs: [song(id: 2, title: "Boundary Epoch Song", playCount: 71, dateAdded: julyReadd)],
+            at: julyReadd,
+            reason: .appLaunch
+        )
+
+        XCTAssertEqual(july.totalPlayDelta, 71)
+        XCTAssertEqual(july.topSongs.first?.id, 2)
+        XCTAssertTrue(july.topNewSongs.isEmpty)
+
+        let yearly = store.syncedYearlyRecap(for: 2026)
+        XCTAssertEqual(yearly?.totalPlayDelta, 115)
+        XCTAssertEqual(yearly?.topSongs.count, 1)
+        XCTAssertEqual(yearly?.topSongs.first?.id, 2)
+        XCTAssertEqual(yearly?.topSongs.first?.playDelta, 115)
+    }
+
     func testBatchRecapsReuseOneSnapshotLoadPath() {
         let store = makeStore(named: "batch")
         let aprilBaseline = date(year: 2026, month: 4, day: 1)
@@ -1046,7 +1287,8 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         playCount: Int,
         dateAdded: Date? = nil,
         albumPersistentID: UInt64 = 10,
-        artistPersistentID: UInt64 = 20
+        artistPersistentID: UInt64 = 20,
+        playbackStoreID: String = ""
     ) -> TopSong {
         TopSong(
             id: id,
@@ -1063,7 +1305,8 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             artwork: nil,
             albumPersistentID: albumPersistentID,
             artistPersistentID: artistPersistentID,
-            trackNumber: 1
+            trackNumber: 1,
+            playbackStoreID: playbackStoreID
         )
     }
 

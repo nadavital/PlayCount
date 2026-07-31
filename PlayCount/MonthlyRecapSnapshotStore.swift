@@ -43,6 +43,32 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         let skipDelta: Int
         let listeningDuration: TimeInterval
         let artwork: MPMediaItemArtwork?
+        let recordingIdentity: String?
+        let playbackStoreID: String?
+
+        init(
+            id: UInt64,
+            title: String,
+            artist: String,
+            albumTitle: String,
+            playDelta: Int,
+            skipDelta: Int,
+            listeningDuration: TimeInterval,
+            artwork: MPMediaItemArtwork?,
+            recordingIdentity: String? = nil,
+            playbackStoreID: String? = nil
+        ) {
+            self.id = id
+            self.title = title
+            self.artist = artist
+            self.albumTitle = albumTitle
+            self.playDelta = playDelta
+            self.skipDelta = skipDelta
+            self.listeningDuration = listeningDuration
+            self.artwork = artwork
+            self.recordingIdentity = recordingIdentity
+            self.playbackStoreID = playbackStoreID
+        }
 
         static func == (lhs: RankedSong, rhs: RankedSong) -> Bool {
             lhs.id == rhs.id &&
@@ -51,7 +77,9 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
                 lhs.albumTitle == rhs.albumTitle &&
                 lhs.playDelta == rhs.playDelta &&
                 lhs.skipDelta == rhs.skipDelta &&
-                lhs.listeningDuration == rhs.listeningDuration
+                lhs.listeningDuration == rhs.listeningDuration &&
+                lhs.recordingIdentity == rhs.recordingIdentity &&
+                lhs.playbackStoreID == rhs.playbackStoreID
         }
     }
 
@@ -182,6 +210,26 @@ struct YearlyRecapMonthlyHighlight: Identifiable, Equatable {
     var id: Date { month }
 }
 
+private func normalizedRecapIdentityComponent(_ value: String) -> String {
+    value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .lowercased()
+}
+
+private func legacyRecapRecordingIdentity(
+    title: String,
+    artist: String,
+    albumTitle: String
+) -> String {
+    [
+        "recording",
+        normalizedRecapIdentityComponent(title),
+        normalizedRecapIdentityComponent(artist),
+        normalizedRecapIdentityComponent(albumTitle)
+    ].joined(separator: ":")
+}
+
 extension MonthlyRecap {
     static func yearly(
         for year: Int,
@@ -196,36 +244,89 @@ extension MonthlyRecap {
         }
 
         let monthStart = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? fallbackMonth
+        let orderedMonthlyRecaps = monthlyRecaps.sorted {
+            if $0.monthStart == $1.monthStart {
+                return $0.generatedAt < $1.generatedAt
+            }
+            return $0.monthStart < $1.monthStart
+        }
 
-        var songs: [UInt64: RankedSongAggregate] = [:]
+        let allSongs = orderedMonthlyRecaps.flatMap { $0.topSongs + $0.topNewSongs }
+        let identitiesByLegacyKey = Dictionary(grouping: allSongs.compactMap { song -> (String, String)? in
+            guard let identity = song.recordingIdentity else { return nil }
+            return (
+                legacyRecapRecordingIdentity(
+                    title: song.title,
+                    artist: song.artist,
+                    albumTitle: song.albumTitle
+                ),
+                identity
+            )
+        }, by: { $0.0 }).mapValues { Set($0.map { $0.1 }) }
+
+        func yearlySongKey(_ song: RankedSong) -> String {
+            if let identity = song.recordingIdentity {
+                return identity
+            }
+
+            let legacyKey = legacyRecapRecordingIdentity(
+                title: song.title,
+                artist: song.artist,
+                albumTitle: song.albumTitle
+            )
+            if let identities = identitiesByLegacyKey[legacyKey], identities.count == 1,
+               let identity = identities.first {
+                return identity
+            }
+            return legacyKey
+        }
+
+        func yearlyArtistKey(_ group: RankedGroup) -> String {
+            "artist:\(normalizedRecapIdentityComponent(group.title))"
+        }
+
+        func yearlyAlbumKey(_ group: RankedGroup) -> String {
+            [
+                "album",
+                normalizedRecapIdentityComponent(group.title),
+                normalizedRecapIdentityComponent(group.subtitle)
+            ].joined(separator: ":")
+        }
+
+        var songs: [String: RankedSongAggregate] = [:]
         var albums: [String: RankedGroupAggregate] = [:]
         var artists: [String: RankedGroupAggregate] = [:]
         var movement: [UInt64: MovementSongAggregate] = [:]
-        var newSongIDs: [UInt64] = []
+        var newSongIDs: [String] = []
+        var newSongIDSet: Set<String> = []
 
-        for recap in monthlyRecaps {
-            var mergedSongIDsForMonth: Set<UInt64> = []
+        for recap in orderedMonthlyRecaps {
+            var mergedSongIDsForMonth: Set<String> = []
 
             for song in recap.topSongs {
-                songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                mergedSongIDsForMonth.insert(song.id)
+                let key = yearlySongKey(song)
+                songs[key, default: RankedSongAggregate(song: song)].merge(song)
+                mergedSongIDsForMonth.insert(key)
             }
 
             for song in recap.topNewSongs {
-                if !mergedSongIDsForMonth.contains(song.id) {
-                    songs[song.id, default: RankedSongAggregate(song: song)].merge(song)
-                    mergedSongIDsForMonth.insert(song.id)
+                let key = yearlySongKey(song)
+                if !mergedSongIDsForMonth.contains(key) {
+                    songs[key, default: RankedSongAggregate(song: song)].merge(song)
+                    mergedSongIDsForMonth.insert(key)
                 }
-                if !newSongIDs.contains(song.id) {
-                    newSongIDs.append(song.id)
+                if newSongIDSet.insert(key).inserted {
+                    newSongIDs.append(key)
                 }
             }
 
             for group in recap.topAlbums {
-                albums[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+                let key = yearlyAlbumKey(group)
+                albums[key, default: RankedGroupAggregate(group: group)].merge(group)
             }
             for group in recap.topArtists {
-                artists[group.id, default: RankedGroupAggregate(group: group)].merge(group)
+                let key = yearlyArtistKey(group)
+                artists[key, default: RankedGroupAggregate(group: group)].merge(group)
             }
             for song in recap.biggestGainers {
                 movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
@@ -248,22 +349,22 @@ extension MonthlyRecap {
             .map(\.movementSong)
             .sorted { $0.rankChange > $1.rankChange }
 
-        let newSongs = newSongIDs.compactMap { id in
-            songs[id]?.rankedSong
+        let newSongs = newSongIDs.compactMap { key in
+            songs[key]?.rankedSong
         }
         .sorted { $0.playDelta > $1.playDelta }
 
         return MonthlyRecap(
             monthStart: monthStart,
-            generatedAt: monthlyRecaps.map(\.generatedAt).max() ?? Date(),
-            lastCaptureReason: monthlyRecaps.last?.lastCaptureReason,
-            trackingStart: monthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
-            snapshotCount: monthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
-            totalPlayDelta: monthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
-            totalSkipDelta: monthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
-            totalListeningDuration: monthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
+            generatedAt: orderedMonthlyRecaps.map(\.generatedAt).max() ?? Date(),
+            lastCaptureReason: orderedMonthlyRecaps.last?.lastCaptureReason,
+            trackingStart: orderedMonthlyRecaps.compactMap(\.trackingStart).min() ?? firstMonth,
+            snapshotCount: orderedMonthlyRecaps.reduce(0) { $0 + $1.snapshotCount },
+            totalPlayDelta: orderedMonthlyRecaps.reduce(0) { $0 + $1.totalPlayDelta },
+            totalSkipDelta: orderedMonthlyRecaps.reduce(0) { $0 + $1.totalSkipDelta },
+            totalListeningDuration: orderedMonthlyRecaps.reduce(0) { $0 + $1.totalListeningDuration },
             playedSongCount: songs.count,
-            newSongCount: monthlyRecaps.reduce(0) { $0 + $1.newSongCount },
+            newSongCount: orderedMonthlyRecaps.reduce(0) { $0 + $1.newSongCount },
             topSongs: rankedSongs,
             topArtists: rankedArtists,
             topAlbums: rankedAlbums,
@@ -273,11 +374,13 @@ extension MonthlyRecap {
     }
 
     private struct RankedSongAggregate {
-        let id: UInt64
-        let title: String
-        let artist: String
-        let albumTitle: String
-        let artwork: MPMediaItemArtwork?
+        var id: UInt64
+        var title: String
+        var artist: String
+        var albumTitle: String
+        var artwork: MPMediaItemArtwork?
+        var recordingIdentity: String?
+        var playbackStoreID: String?
         var playDelta: Int
         var skipDelta: Int
         var listeningDuration: TimeInterval
@@ -288,6 +391,8 @@ extension MonthlyRecap {
             artist = song.artist
             albumTitle = song.albumTitle
             artwork = song.artwork
+            recordingIdentity = song.recordingIdentity
+            playbackStoreID = song.playbackStoreID
             playDelta = 0
             skipDelta = 0
             listeningDuration = 0
@@ -297,6 +402,13 @@ extension MonthlyRecap {
             playDelta += song.playDelta
             skipDelta += song.skipDelta
             listeningDuration += song.listeningDuration
+            id = song.id
+            title = song.title
+            artist = song.artist
+            albumTitle = song.albumTitle
+            artwork = song.artwork ?? artwork
+            recordingIdentity = song.recordingIdentity ?? recordingIdentity
+            playbackStoreID = song.playbackStoreID ?? playbackStoreID
         }
 
         var rankedSong: MonthlyRecap.RankedSong {
@@ -308,16 +420,18 @@ extension MonthlyRecap {
                 playDelta: playDelta,
                 skipDelta: skipDelta,
                 listeningDuration: listeningDuration,
-                artwork: artwork
+                artwork: artwork,
+                recordingIdentity: recordingIdentity,
+                playbackStoreID: playbackStoreID
             )
         }
     }
 
     private struct RankedGroupAggregate {
-        let id: String
-        let title: String
-        let subtitle: String
-        let artwork: MPMediaItemArtwork?
+        var id: String
+        var title: String
+        var subtitle: String
+        var artwork: MPMediaItemArtwork?
         var playDelta: Int
         var listeningDuration: TimeInterval
 
@@ -333,6 +447,10 @@ extension MonthlyRecap {
         mutating func merge(_ group: MonthlyRecap.RankedGroup) {
             playDelta += group.playDelta
             listeningDuration += group.listeningDuration
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            artwork = group.artwork ?? artwork
         }
 
         var rankedGroup: MonthlyRecap.RankedGroup {
@@ -437,6 +555,7 @@ final class MonthlyRecapSnapshotStore {
         let dateAdded: Date?
         let albumPersistentID: UInt64
         let artistPersistentID: UInt64
+        let playbackStoreID: String?
 
         init(
             id: UInt64,
@@ -450,7 +569,8 @@ final class MonthlyRecapSnapshotStore {
             lastPlayedDate: Date?,
             dateAdded: Date?,
             albumPersistentID: UInt64,
-            artistPersistentID: UInt64
+            artistPersistentID: UInt64,
+            playbackStoreID: String? = nil
         ) {
             self.id = id
             self.title = title
@@ -464,6 +584,11 @@ final class MonthlyRecapSnapshotStore {
             self.dateAdded = dateAdded
             self.albumPersistentID = albumPersistentID
             self.artistPersistentID = artistPersistentID
+            let normalizedPlaybackStoreID = playbackStoreID?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self.playbackStoreID = normalizedPlaybackStoreID?.isEmpty == false
+                ? normalizedPlaybackStoreID
+                : nil
         }
 
         init(from decoder: Decoder) throws {
@@ -481,7 +606,8 @@ final class MonthlyRecapSnapshotStore {
                 lastPlayedDate: try container.decodeIfPresent(Date.self, forKey: .lastPlayedDate),
                 dateAdded: try container.decodeIfPresent(Date.self, forKey: .dateAdded),
                 albumPersistentID: try container.decode(UInt64.self, forKey: .albumPersistentID),
-                artistPersistentID: try container.decode(UInt64.self, forKey: .artistPersistentID)
+                artistPersistentID: try container.decode(UInt64.self, forKey: .artistPersistentID),
+                playbackStoreID: try container.decodeIfPresent(String.self, forKey: .playbackStoreID)
             )
         }
     }
@@ -515,6 +641,8 @@ final class MonthlyRecapSnapshotStore {
             let playDelta: Int
             let skipDelta: Int
             let listeningDuration: TimeInterval
+            let recordingIdentity: String?
+            let playbackStoreID: String?
         }
 
         struct RankedGroup: Codable, Equatable {
@@ -593,7 +721,9 @@ final class MonthlyRecapSnapshotStore {
                     albumTitle: $0.albumTitle,
                     playDelta: $0.playDelta,
                     skipDelta: $0.skipDelta,
-                    listeningDuration: $0.listeningDuration
+                    listeningDuration: $0.listeningDuration,
+                    recordingIdentity: $0.recordingIdentity,
+                    playbackStoreID: $0.playbackStoreID
                 )
             }
             topArtists = recap.topArtists.prefix(MonthlyRecapSnapshotStore.maxSyncedRecapRankedGroupCount).map {
@@ -633,7 +763,9 @@ final class MonthlyRecapSnapshotStore {
                     albumTitle: $0.albumTitle,
                     playDelta: $0.playDelta,
                     skipDelta: $0.skipDelta,
-                    listeningDuration: $0.listeningDuration
+                    listeningDuration: $0.listeningDuration,
+                    recordingIdentity: $0.recordingIdentity,
+                    playbackStoreID: $0.playbackStoreID
                 )
             }
         }
@@ -659,7 +791,9 @@ final class MonthlyRecapSnapshotStore {
                         playDelta: $0.playDelta,
                         skipDelta: $0.skipDelta,
                         listeningDuration: $0.listeningDuration,
-                        artwork: artworkLookup.songs[$0.id]
+                        artwork: artworkLookup.songs[$0.id],
+                        recordingIdentity: $0.recordingIdentity,
+                        playbackStoreID: $0.playbackStoreID
                     )
                 },
                 topArtists: topArtists.map {
@@ -769,9 +903,69 @@ final class MonthlyRecapSnapshotStore {
         let latest: SongSnapshot
         let playDelta: Int
         let skipDelta: Int
+        let recordingIdentity: String
+        let playbackStoreID: String?
+        let isNewSong: Bool
 
         var listeningDuration: TimeInterval {
             TimeInterval(playDelta) * latest.playbackDuration
+        }
+    }
+
+    private struct CounterEpochAnalysis {
+        let deltas: [SongDelta]
+        let removedPlayCount: Int
+        let removedSkipCount: Int
+        let removedListeningDuration: TimeInterval
+    }
+
+    private struct CounterEpoch {
+        let recordingIdentity: String
+        let playbackStoreID: String?
+        let baselinePlayCount: Int
+        let baselineSkipCount: Int
+        var maximumPlayCount: Int
+        var maximumSkipCount: Int
+        var latest: SongSnapshot
+    }
+
+    private struct RecordingIdentityResolver {
+        private let uniqueStoreIDByFingerprint: [String: String]
+        private let ambiguousFingerprints: Set<String>
+
+        init(snapshots: [LibrarySnapshot]) {
+            var storeIDsByFingerprint: [String: Set<String>] = [:]
+            var ambiguousFingerprints: Set<String> = []
+
+            for snapshot in snapshots {
+                let IDsByFingerprint = Dictionary(grouping: snapshot.songs, by: \.recordingFingerprint)
+                for (fingerprint, songs) in IDsByFingerprint {
+                    if Set(songs.map(\.id)).count > 1 {
+                        ambiguousFingerprints.insert(fingerprint)
+                    }
+                    for song in songs {
+                        guard let playbackStoreID = song.playbackStoreID else { continue }
+                        storeIDsByFingerprint[fingerprint, default: []].insert(playbackStoreID)
+                    }
+                }
+            }
+
+            uniqueStoreIDByFingerprint = storeIDsByFingerprint.compactMapValues { storeIDs in
+                storeIDs.count == 1 ? storeIDs.first : nil
+            }
+            self.ambiguousFingerprints = ambiguousFingerprints
+        }
+
+        func identity(for song: SongSnapshot) -> String {
+            let fingerprint = song.recordingFingerprint
+            if ambiguousFingerprints.contains(fingerprint) {
+                return "duplicate:\(fingerprint):\(song.id)"
+            }
+            if let playbackStoreID = song.playbackStoreID
+                ?? uniqueStoreIDByFingerprint[fingerprint] {
+                return "store:\(playbackStoreID)"
+            }
+            return "metadata:\(fingerprint)"
         }
     }
 
@@ -1847,22 +2041,24 @@ final class MonthlyRecapSnapshotStore {
 
         let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
         let baseline = baselineSnapshot(for: latest, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
-        let baselineByID = Dictionary(uniqueKeysWithValues: baseline.songs.map { ($0.id, $0) })
         let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs, sourceAlbums: sourceAlbums, sourceArtists: sourceArtists)
-        let aggregateDeltas = aggregateDeltas(latest: latest, baseline: baseline)
-
-        let deltas = latest.songs.compactMap { song -> SongDelta? in
-            let baselineSong = baselineByID[song.id]
-            let playDelta = playDelta(for: song, baseline: baselineSong, baselineDate: baseline.capturedAt)
-            let skipDelta = max(0, song.skipCount - (baselineSong?.skipCount ?? song.skipCount))
-
-            guard playDelta > 0 || skipDelta > 0 else { return nil }
-            return SongDelta(latest: song, playDelta: playDelta, skipDelta: skipDelta)
-        }
+        let epochAnalysis = counterEpochAnalysis(
+            baseline: baseline,
+            inMonth: inMonth,
+            latest: latest,
+            history: ordered,
+            monthStart: monthStart,
+            monthEnd: monthEnd
+        )
+        let aggregateDeltas = aggregateDeltas(
+            latest: latest,
+            baseline: baseline,
+            counterEpochAnalysis: epochAnalysis
+        )
+        let deltas = epochAnalysis.deltas
 
         let playDeltas = rankingDeltas(
             from: deltas.filter { $0.playDelta > 0 },
-            baselineByID: baselineByID,
             monthStart: monthStart,
             monthEnd: monthEnd,
             aggregatePlayDelta: aggregateDeltas?.playDelta
@@ -1896,7 +2092,7 @@ final class MonthlyRecapSnapshotStore {
         )
 
         let topNewSongs = playDeltas
-            .filter { baselineByID[$0.latest.id] == nil }
+            .filter(\.isNewSong)
             .sorted(by: compareDeltas)
             .map { rankedSong(from: $0, artworkLookup: artworkLookup) }
 
@@ -1942,7 +2138,214 @@ final class MonthlyRecapSnapshotStore {
         )
     }
 
-    private func aggregateDeltas(latest: LibrarySnapshot, baseline: LibrarySnapshot) -> (playDelta: Int, skipDelta: Int, listeningDuration: TimeInterval)? {
+    private func counterEpochAnalysis(
+        baseline: LibrarySnapshot,
+        inMonth: [LibrarySnapshot],
+        latest: LibrarySnapshot,
+        history: [LibrarySnapshot],
+        monthStart: Date,
+        monthEnd: Date
+    ) -> CounterEpochAnalysis {
+        let eligibleInMonth = inMonth
+            .filter {
+                $0.isSameDevice(as: latest)
+                    && hasComparableCoverage($0, latest: latest)
+            }
+            .sorted { $0.capturedAt < $1.capturedAt }
+        let relevantHistory = history.filter {
+            $0.capturedAt < monthEnd && $0.isSameDevice(as: latest)
+        }
+        let identityResolver = RecordingIdentityResolver(snapshots: relevantHistory)
+
+        var epochs: [CounterEpoch] = []
+        var activeEpochByPersistentID: [UInt64: Int] = [:]
+        var recordingsKnownBeforeMonth = Set(
+            relevantHistory
+                .filter { $0.capturedAt < monthStart }
+                .flatMap(\.songs)
+                .map(identityResolver.identity(for:))
+        )
+        for song in baseline.songs
+        where song.dateAdded.map({ $0 < monthStart }) ?? true {
+            recordingsKnownBeforeMonth.insert(identityResolver.identity(for: song))
+        }
+        var knownRecordingIdentities = recordingsKnownBeforeMonth
+        var previousSongsByID: [UInt64: SongSnapshot] = [:]
+        var removedPlayCount = 0
+        var removedSkipCount = 0
+        var removedListeningDuration: TimeInterval = 0
+        var confirmedDiscontinuityCount = 0
+
+        for song in baseline.songs {
+            let identity = identityResolver.identity(for: song)
+            knownRecordingIdentities.insert(identity)
+            activeEpochByPersistentID[song.id] = epochs.count
+            epochs.append(
+                CounterEpoch(
+                    recordingIdentity: identity,
+                    playbackStoreID: song.playbackStoreID,
+                    baselinePlayCount: song.playCount,
+                    baselineSkipCount: song.skipCount,
+                    maximumPlayCount: song.playCount,
+                    maximumSkipCount: song.skipCount,
+                    latest: song
+                )
+            )
+            previousSongsByID[song.id] = song
+        }
+
+        for snapshot in eligibleInMonth where snapshot.capturedAt > baseline.capturedAt {
+            let currentSongsByID = Dictionary(uniqueKeysWithValues: snapshot.songs.map { ($0.id, $0) })
+            var currentIdentityCounts: [String: Int] = [:]
+            for song in snapshot.songs {
+                currentIdentityCounts[identityResolver.identity(for: song), default: 0] += 1
+            }
+
+            for song in snapshot.songs {
+                let identity = identityResolver.identity(for: song)
+
+                if let activeIndex = activeEpochByPersistentID[song.id],
+                   epochs[activeIndex].recordingIdentity == identity {
+                    let epoch = epochs[activeIndex]
+                    let dateAddedAdvanced = song.dateAdded.map { currentDateAdded in
+                        guard currentDateAdded >= monthStart && currentDateAdded < monthEnd else {
+                            return false
+                        }
+                        guard let priorDateAdded = epoch.latest.dateAdded else {
+                            return true
+                        }
+                        return currentDateAdded.timeIntervalSince(priorDateAdded) > 60
+                    } ?? false
+                    let returnedAfterMissing = previousSongsByID[song.id] == nil
+                    let substantialDrop = song.playCount <= max(10, epoch.maximumPlayCount / 4)
+                    let isConfirmedReset = song.playCount < epoch.maximumPlayCount
+                        && (dateAddedAdvanced || (returnedAfterMissing && substantialDrop))
+
+                    if isConfirmedReset {
+                        removedPlayCount += epoch.maximumPlayCount
+                        removedSkipCount += epoch.maximumSkipCount
+                        removedListeningDuration += TimeInterval(epoch.maximumPlayCount)
+                            * epoch.latest.playbackDuration
+                        confirmedDiscontinuityCount += 1
+
+                        let shouldCountFromZero = song.dateAdded.map {
+                            $0 >= monthStart && $0 < monthEnd
+                        } ?? true
+                        activeEpochByPersistentID[song.id] = epochs.count
+                        epochs.append(
+                            CounterEpoch(
+                                recordingIdentity: identity,
+                                playbackStoreID: song.playbackStoreID,
+                                baselinePlayCount: shouldCountFromZero ? 0 : song.playCount,
+                                baselineSkipCount: shouldCountFromZero ? 0 : song.skipCount,
+                                maximumPlayCount: song.playCount,
+                                maximumSkipCount: song.skipCount,
+                                latest: song
+                            )
+                        )
+                    } else {
+                        epochs[activeIndex].maximumPlayCount = max(
+                            epochs[activeIndex].maximumPlayCount,
+                            song.playCount
+                        )
+                        epochs[activeIndex].maximumSkipCount = max(
+                            epochs[activeIndex].maximumSkipCount,
+                            song.skipCount
+                        )
+                        epochs[activeIndex].latest = song
+                    }
+                    continue
+                }
+
+                let isKnownRecording = knownRecordingIdentities.contains(identity)
+                let wasAddedThisMonth = song.dateAdded.map {
+                    $0 >= monthStart && $0 < monthEnd
+                } ?? false
+                let replacedMissingIdentity = isKnownRecording
+                    && currentIdentityCounts[identity] == 1
+                let shouldCountFromZero = wasAddedThisMonth || replacedMissingIdentity
+
+                knownRecordingIdentities.insert(identity)
+                activeEpochByPersistentID[song.id] = epochs.count
+                epochs.append(
+                    CounterEpoch(
+                        recordingIdentity: identity,
+                        playbackStoreID: song.playbackStoreID,
+                        baselinePlayCount: shouldCountFromZero ? 0 : song.playCount,
+                        baselineSkipCount: shouldCountFromZero ? 0 : song.skipCount,
+                        maximumPlayCount: song.playCount,
+                        maximumSkipCount: song.skipCount,
+                        latest: song
+                    )
+                )
+            }
+
+            previousSongsByID = currentSongsByID
+        }
+
+        let latestSongIDs = Set(latest.songs.map(\.id))
+        let removedActiveEpochs = activeEpochByPersistentID.compactMap { persistentID, epochIndex in
+            latestSongIDs.contains(persistentID) ? nil : epochs[epochIndex]
+        }
+        confirmedDiscontinuityCount += removedActiveEpochs.count
+        for epoch in removedActiveEpochs {
+            removedPlayCount += epoch.maximumPlayCount
+            removedSkipCount += epoch.maximumSkipCount
+            removedListeningDuration += TimeInterval(epoch.maximumPlayCount)
+                * epoch.latest.playbackDuration
+        }
+
+        let maximumReliableDiscontinuityCount = max(
+            25,
+            (latest.scannedSongCount ?? latest.songs.count) / 50
+        )
+        if confirmedDiscontinuityCount > maximumReliableDiscontinuityCount {
+            removedPlayCount = 0
+            removedSkipCount = 0
+            removedListeningDuration = 0
+        }
+
+        var deltasByRecordingIdentity: [String: SongDelta] = [:]
+        for epoch in epochs {
+            let playDelta = max(0, epoch.maximumPlayCount - epoch.baselinePlayCount)
+            let skipDelta = max(0, epoch.maximumSkipCount - epoch.baselineSkipCount)
+            guard playDelta > 0 || skipDelta > 0 else { continue }
+
+            let isNewSong = !recordingsKnownBeforeMonth.contains(epoch.recordingIdentity)
+            if let existing = deltasByRecordingIdentity[epoch.recordingIdentity] {
+                deltasByRecordingIdentity[epoch.recordingIdentity] = SongDelta(
+                    latest: epoch.latest,
+                    playDelta: existing.playDelta + playDelta,
+                    skipDelta: existing.skipDelta + skipDelta,
+                    recordingIdentity: epoch.recordingIdentity,
+                    playbackStoreID: epoch.playbackStoreID ?? existing.playbackStoreID,
+                    isNewSong: existing.isNewSong && isNewSong
+                )
+            } else {
+                deltasByRecordingIdentity[epoch.recordingIdentity] = SongDelta(
+                    latest: epoch.latest,
+                    playDelta: playDelta,
+                    skipDelta: skipDelta,
+                    recordingIdentity: epoch.recordingIdentity,
+                    playbackStoreID: epoch.playbackStoreID,
+                    isNewSong: isNewSong
+                )
+            }
+        }
+
+        return CounterEpochAnalysis(
+            deltas: Array(deltasByRecordingIdentity.values),
+            removedPlayCount: removedPlayCount,
+            removedSkipCount: removedSkipCount,
+            removedListeningDuration: removedListeningDuration
+        )
+    }
+
+    private func aggregateDeltas(
+        latest: LibrarySnapshot,
+        baseline: LibrarySnapshot,
+        counterEpochAnalysis: CounterEpochAnalysis
+    ) -> (playDelta: Int, skipDelta: Int, listeningDuration: TimeInterval)? {
         guard latest.isSameDevice(as: baseline),
               hasComparableCoverage(baseline, latest: latest),
               let latestCounters = latest.aggregateCounters,
@@ -1951,15 +2354,26 @@ final class MonthlyRecapSnapshotStore {
         }
 
         return (
-            playDelta: max(0, latestCounters.playCount - baselineCounters.playCount),
-            skipDelta: max(0, latestCounters.skipCount - baselineCounters.skipCount),
-            listeningDuration: max(0, latestCounters.listeningDuration - baselineCounters.listeningDuration)
+            playDelta: max(
+                0,
+                latestCounters.playCount - baselineCounters.playCount
+                    + counterEpochAnalysis.removedPlayCount
+            ),
+            skipDelta: max(
+                0,
+                latestCounters.skipCount - baselineCounters.skipCount
+                    + counterEpochAnalysis.removedSkipCount
+            ),
+            listeningDuration: max(
+                0,
+                latestCounters.listeningDuration - baselineCounters.listeningDuration
+                    + counterEpochAnalysis.removedListeningDuration
+            )
         )
     }
 
     private func rankingDeltas(
         from deltas: [SongDelta],
-        baselineByID: [UInt64: SongSnapshot],
         monthStart: Date,
         monthEnd: Date,
         aggregatePlayDelta: Int?
@@ -1969,14 +2383,14 @@ final class MonthlyRecapSnapshotStore {
         }
 
         let existingSongPlayDelta = deltas.reduce(0) { total, delta in
-            baselineByID[delta.latest.id] == nil ? total : total + delta.playDelta
+            delta.isNewSong ? total : total + delta.playDelta
         }
         guard existingSongPlayDelta > aggregatePlayDelta * 2 else {
             return deltas
         }
 
         return deltas.filter { delta in
-            guard baselineByID[delta.latest.id] == nil,
+            guard delta.isNewSong,
                   let dateAdded = delta.latest.dateAdded else {
                 return false
             }
@@ -2098,7 +2512,9 @@ final class MonthlyRecapSnapshotStore {
             playDelta: delta.playDelta,
             skipDelta: delta.skipDelta,
             listeningDuration: delta.listeningDuration,
-            artwork: artworkLookup.artwork(for: delta.latest)
+            artwork: artworkLookup.artwork(for: delta.latest),
+            recordingIdentity: delta.recordingIdentity,
+            playbackStoreID: delta.playbackStoreID
         )
     }
 
@@ -2151,18 +2567,6 @@ final class MonthlyRecapSnapshotStore {
         let elapsed = max(baselineElapsed, monthElapsed)
         guard elapsed > 0 else { return false }
         return listeningDuration <= elapsed * maximumListeningElapsedRatio
-    }
-
-    private func playDelta(for song: SongSnapshot, baseline: SongSnapshot?, baselineDate: Date) -> Int {
-        if let baseline {
-            return max(0, song.playCount - baseline.playCount)
-        }
-
-        guard let dateAdded = song.dateAdded, dateAdded >= baselineDate else {
-            return 0
-        }
-
-        return max(0, song.playCount)
     }
 
     private func artistGroupID(for delta: SongDelta) -> String {
@@ -2468,8 +2872,18 @@ private extension MonthlyRecapSnapshotStore.SongSnapshot {
             lastPlayedDate: song.lastPlayedDate,
             dateAdded: song.dateAdded,
             albumPersistentID: song.albumPersistentID,
-            artistPersistentID: song.artistPersistentID
+            artistPersistentID: song.artistPersistentID,
+            playbackStoreID: song.playbackStoreID
         )
+    }
+
+    var recordingFingerprint: String {
+        [
+            normalizedRecapIdentityComponent(title),
+            normalizedRecapIdentityComponent(artist),
+            normalizedRecapIdentityComponent(albumTitle),
+            String(Int(playbackDuration.rounded()))
+        ].joined(separator: "|")
     }
 }
 

@@ -20,6 +20,43 @@ struct TopSong: Identifiable {
     let albumPersistentID: UInt64
     let artistPersistentID: UInt64
     let trackNumber: Int
+    let playbackStoreID: String
+
+    init(
+        id: UInt64,
+        title: String,
+        artist: String,
+        albumTitle: String,
+        albumArtist: String,
+        playCount: Int,
+        skipCount: Int,
+        totalPlayDuration: TimeInterval,
+        playbackDuration: TimeInterval,
+        lastPlayedDate: Date?,
+        dateAdded: Date?,
+        artwork: MPMediaItemArtwork?,
+        albumPersistentID: UInt64,
+        artistPersistentID: UInt64,
+        trackNumber: Int,
+        playbackStoreID: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.artist = artist
+        self.albumTitle = albumTitle
+        self.albumArtist = albumArtist
+        self.playCount = playCount
+        self.skipCount = skipCount
+        self.totalPlayDuration = totalPlayDuration
+        self.playbackDuration = playbackDuration
+        self.lastPlayedDate = lastPlayedDate
+        self.dateAdded = dateAdded
+        self.artwork = artwork
+        self.albumPersistentID = albumPersistentID
+        self.artistPersistentID = artistPersistentID
+        self.trackNumber = trackNumber
+        self.playbackStoreID = playbackStoreID
+    }
 }
 
 private struct MediaLibrarySnapshot {
@@ -1923,7 +1960,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     artwork: item.artwork,
                     albumPersistentID: item.albumPersistentID,
                     artistPersistentID: item.artistPersistentID,
-                    trackNumber: item.albumTrackNumber
+                    trackNumber: item.albumTrackNumber,
+                    playbackStoreID: item.playbackStoreID
                 )
             }
     }
