@@ -921,7 +921,7 @@ final class MonthlyRecapSnapshotStore {
     /// changed since the preceding observation for that device, while finalized recap
     /// summaries remain independently readable from the small summary cache.
     private final class LedgerDatabase {
-        private static let schemaVersion = 2
+        private static let schemaVersion = 3
         private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
         private struct SnapshotHeader: Codable {
@@ -931,6 +931,7 @@ final class MonthlyRecapSnapshotStore {
             let scannedSongCount: Int?
             let deviceIdentifier: String?
             let aggregateCounters: AggregateCounters?
+            let songOrder: [UInt64]?
             let changes: [SongChange]
         }
 
@@ -987,6 +988,15 @@ final class MonthlyRecapSnapshotStore {
                     }
                 }
                 statesByDevice[deviceKey] = state
+                let orderedSongs: [SongSnapshot]
+                if let songOrder = header.songOrder {
+                    let orderedIDs = Set(songOrder)
+                    orderedSongs = songOrder.compactMap { state[$0] } + state.values
+                        .filter { !orderedIDs.contains($0.id) }
+                        .sorted { $0.id < $1.id }
+                } else {
+                    orderedSongs = state.values.sorted { $0.id < $1.id }
+                }
                 snapshots.append(
                     LibrarySnapshot(
                         capturedAt: header.capturedAt,
@@ -995,7 +1005,7 @@ final class MonthlyRecapSnapshotStore {
                         scannedSongCount: header.scannedSongCount,
                         deviceIdentifier: header.deviceIdentifier,
                         aggregateCounters: header.aggregateCounters,
-                        songs: state.values.sorted { $0.id < $1.id }
+                        songs: orderedSongs
                     )
                 )
             }
@@ -1081,6 +1091,7 @@ final class MonthlyRecapSnapshotStore {
                 scannedSongCount: snapshot.scannedSongCount,
                 deviceIdentifier: snapshot.deviceIdentifier,
                 aggregateCounters: snapshot.aggregateCounters,
+                songOrder: snapshot.songs.map(\.id),
                 changes: changes
             )
             let encoded = try JSONEncoder.playCount.encode(header)
@@ -3433,7 +3444,7 @@ final class MonthlyRecapSnapshotStore {
         }
 
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            let empty = StoredSnapshots(schemaVersion: 2, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 3, snapshots: [])
             loadedSnapshots = empty
             return empty
         }
@@ -3462,7 +3473,7 @@ final class MonthlyRecapSnapshotStore {
                 return legacy
             }
         } catch {
-            let empty = StoredSnapshots(schemaVersion: 2, snapshots: [])
+            let empty = StoredSnapshots(schemaVersion: 3, snapshots: [])
             loadedSnapshots = empty
             return empty
         }
@@ -3472,7 +3483,7 @@ final class MonthlyRecapSnapshotStore {
     /// hundreds of megabytes; decoding the top-level object would temporarily
     /// retain every library scan and exceed iOS's foreground memory budget.
     private func streamedLegacyArchive() throws -> StoredSnapshots {
-        var stored = StoredSnapshots(schemaVersion: 2, snapshots: [])
+        var stored = StoredSnapshots(schemaVersion: 3, snapshots: [])
 
         try forEachLegacySnapshot { decodedSnapshot in
             let snapshot: LibrarySnapshot
@@ -3612,7 +3623,7 @@ final class MonthlyRecapSnapshotStore {
     private func saveLocked(_ stored: StoredSnapshots) {
         do {
             var ledgerStored = stored
-            ledgerStored.schemaVersion = 2
+            ledgerStored.schemaVersion = 3
             let ledger = LedgerDatabase(url: ledgerURL)
             try ledger.save(ledgerStored)
             writeSummaryCache(for: ledgerStored)

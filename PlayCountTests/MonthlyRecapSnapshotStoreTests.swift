@@ -1301,6 +1301,36 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.topSongs.first?.playDelta, 40)
     }
 
+    func testDeltaLedgerPreservesSnapshotIdentityAcrossColdReload() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLedgerOrder-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "ordered-ledger"
+        )
+        let capturedAt = date(year: 2026, month: 7, day: 15)
+        _ = source.record(
+            songs: [
+                song(id: 90, title: "First Query Result", playCount: 40),
+                song(id: 2, title: "Second Query Result", playCount: 10),
+                song(id: 41, title: "Third Query Result", playCount: 20)
+            ],
+            at: capturedAt,
+            reason: .manualRefresh
+        )
+        let expectedIDs = source.localSyncPayloads().map(\.id)
+
+        let coldStore = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "ordered-ledger"
+        )
+        XCTAssertEqual(coldStore.localSyncPayloads().map(\.id), expectedIDs)
+    }
+
     func testLegacyArchiveMigratesOnlyAfterMonthlyAndYearlyParity() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlayCountLegacyMigration-\(UUID().uuidString)", isDirectory: true)
