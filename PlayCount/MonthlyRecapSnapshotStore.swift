@@ -122,6 +122,27 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         }
     }
 
+    struct MovementGroup: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let playDelta: Int
+        let rankChange: Int
+        let currentRank: Int
+        let previousRank: Int?
+        let artwork: MPMediaItemArtwork?
+
+        static func == (lhs: MovementGroup, rhs: MovementGroup) -> Bool {
+            lhs.id == rhs.id &&
+                lhs.title == rhs.title &&
+                lhs.subtitle == rhs.subtitle &&
+                lhs.playDelta == rhs.playDelta &&
+                lhs.rankChange == rhs.rankChange &&
+                lhs.currentRank == rhs.currentRank &&
+                lhs.previousRank == rhs.previousRank
+        }
+    }
+
     let monthStart: Date
     let generatedAt: Date
     let lastCaptureReason: RecapSnapshotReason?
@@ -136,7 +157,47 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
     let topArtists: [RankedGroup]
     let topAlbums: [RankedGroup]
     let biggestGainers: [MovementSong]
+    let biggestAlbumGainers: [MovementGroup]
+    let biggestArtistGainers: [MovementGroup]
     let topNewSongs: [RankedSong]
+
+    init(
+        monthStart: Date,
+        generatedAt: Date,
+        lastCaptureReason: RecapSnapshotReason?,
+        trackingStart: Date?,
+        snapshotCount: Int,
+        totalPlayDelta: Int,
+        totalSkipDelta: Int,
+        totalListeningDuration: TimeInterval,
+        playedSongCount: Int,
+        newSongCount: Int,
+        topSongs: [RankedSong],
+        topArtists: [RankedGroup],
+        topAlbums: [RankedGroup],
+        biggestGainers: [MovementSong],
+        biggestAlbumGainers: [MovementGroup] = [],
+        biggestArtistGainers: [MovementGroup] = [],
+        topNewSongs: [RankedSong]
+    ) {
+        self.monthStart = monthStart
+        self.generatedAt = generatedAt
+        self.lastCaptureReason = lastCaptureReason
+        self.trackingStart = trackingStart
+        self.snapshotCount = snapshotCount
+        self.totalPlayDelta = totalPlayDelta
+        self.totalSkipDelta = totalSkipDelta
+        self.totalListeningDuration = totalListeningDuration
+        self.playedSongCount = playedSongCount
+        self.newSongCount = newSongCount
+        self.topSongs = topSongs
+        self.topArtists = topArtists
+        self.topAlbums = topAlbums
+        self.biggestGainers = biggestGainers
+        self.biggestAlbumGainers = biggestAlbumGainers
+        self.biggestArtistGainers = biggestArtistGainers
+        self.topNewSongs = topNewSongs
+    }
 
     var hasActivity: Bool {
         totalPlayDelta > 0 || newSongCount > 0
@@ -162,6 +223,8 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
             topArtists: [],
             topAlbums: [],
             biggestGainers: [],
+            biggestAlbumGainers: [],
+            biggestArtistGainers: [],
             topNewSongs: []
         )
     }
@@ -370,6 +433,8 @@ extension MonthlyRecap {
             topArtists: rankedArtists,
             topAlbums: rankedAlbums,
             biggestGainers: biggestGainers,
+            biggestAlbumGainers: [],
+            biggestArtistGainers: [],
             topNewSongs: newSongs
         )
     }
@@ -664,6 +729,16 @@ final class MonthlyRecapSnapshotStore {
             let previousRank: Int?
         }
 
+        struct MovementGroup: Codable, Equatable {
+            let id: String
+            let title: String
+            let subtitle: String
+            let playDelta: Int
+            let rankChange: Int
+            let currentRank: Int
+            let previousRank: Int?
+        }
+
         let monthStart: Date
         let generatedAt: Date
         let lastCaptureReason: RecapSnapshotReason?
@@ -678,12 +753,15 @@ final class MonthlyRecapSnapshotStore {
         let topArtists: [RankedGroup]
         let topAlbums: [RankedGroup]
         let biggestGainers: [MovementSong]
+        let biggestAlbumGainers: [MovementGroup]?
+        let biggestArtistGainers: [MovementGroup]?
         let topNewSongs: [RankedSong]
 
         var id: Date { monthStart }
 
         var rankedEvidenceCount: Int {
-            topSongs.count + topArtists.count + topAlbums.count + biggestGainers.count + topNewSongs.count
+            topSongs.count + topArtists.count + topAlbums.count + biggestGainers.count +
+                (biggestAlbumGainers?.count ?? 0) + (biggestArtistGainers?.count ?? 0) + topNewSongs.count
         }
 
         var rankingFingerprint: String {
@@ -691,8 +769,10 @@ final class MonthlyRecapSnapshotStore {
             let artists = topArtists.map { "\($0.id):\($0.playDelta)" }.joined(separator: ",")
             let albums = topAlbums.map { "\($0.id):\($0.playDelta)" }.joined(separator: ",")
             let gainers = biggestGainers.map { "\($0.id):\($0.playDelta):\($0.rankChange)" }.joined(separator: ",")
+            let albumGainers = (biggestAlbumGainers ?? []).map { "\($0.id):\($0.playDelta):\($0.rankChange)" }.joined(separator: ",")
+            let artistGainers = (biggestArtistGainers ?? []).map { "\($0.id):\($0.playDelta):\($0.rankChange)" }.joined(separator: ",")
             let newSongs = topNewSongs.map { "\($0.id):\($0.playDelta)" }.joined(separator: ",")
-            return [songs, artists, albums, gainers, newSongs].joined(separator: "|")
+            return [songs, artists, albums, gainers, albumGainers, artistGainers, newSongs].joined(separator: "|")
         }
 
         var hasActivity: Bool {
@@ -761,6 +841,14 @@ final class MonthlyRecapSnapshotStore {
                     currentRank: $0.currentRank,
                     previousRank: $0.previousRank
                 )
+            }
+            biggestAlbumGainers = recap.biggestAlbumGainers.prefix(movementLimit).map {
+                MovementGroup(id: $0.id, title: $0.title, subtitle: $0.subtitle, playDelta: $0.playDelta,
+                              rankChange: $0.rankChange, currentRank: $0.currentRank, previousRank: $0.previousRank)
+            }
+            biggestArtistGainers = recap.biggestArtistGainers.prefix(movementLimit).map {
+                MovementGroup(id: $0.id, title: $0.title, subtitle: $0.subtitle, playDelta: $0.playDelta,
+                              rankChange: $0.rankChange, currentRank: $0.currentRank, previousRank: $0.previousRank)
             }
             topNewSongs = recap.topNewSongs.prefix(newSongsLimit).map {
                 RankedSong(
@@ -833,6 +921,20 @@ final class MonthlyRecapSnapshotStore {
                         currentRank: $0.currentRank,
                         previousRank: $0.previousRank,
                         artwork: artworkLookup.songs[$0.id]
+                    )
+                },
+                biggestAlbumGainers: (biggestAlbumGainers ?? []).map {
+                    MonthlyRecap.MovementGroup(
+                        id: $0.id, title: $0.title, subtitle: $0.subtitle, playDelta: $0.playDelta,
+                        rankChange: $0.rankChange, currentRank: $0.currentRank, previousRank: $0.previousRank,
+                        artwork: artworkLookup.albums[UInt64($0.id) ?? 0] ?? artworkLookup.albumsByName[ArtworkLookup.albumKey(title: $0.title, artist: $0.subtitle)]
+                    )
+                },
+                biggestArtistGainers: (biggestArtistGainers ?? []).map {
+                    MonthlyRecap.MovementGroup(
+                        id: $0.id, title: $0.title, subtitle: $0.subtitle, playDelta: $0.playDelta,
+                        rankChange: $0.rankChange, currentRank: $0.currentRank, previousRank: $0.previousRank,
+                        artwork: artworkLookup.artists[UInt64($0.id) ?? 0] ?? artworkLookup.artistsByName[$0.title.normalizedArtworkKey]
                     )
                 },
                 topNewSongs: topNewSongs.map {
@@ -2101,7 +2203,8 @@ final class MonthlyRecapSnapshotStore {
     private func updateIncrementalRecap(
         in stored: inout StoredSnapshots,
         previous: LibrarySnapshot?,
-        current: LibrarySnapshot
+        current: LibrarySnapshot,
+        rebuildYearly: Bool = true
     ) {
         let monthStart = calendar.startOfMonth(containing: current.capturedAt)
         let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? current.capturedAt
@@ -2310,6 +2413,38 @@ final class MonthlyRecapSnapshotStore {
         let intervalListeningDuration = hasCounterDiscontinuity
             ? songListeningDuration
             : aggregateListeningDelta ?? songListeningDuration
+        let orderedSnapshots = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
+        let inMonthSnapshots = orderedSnapshots.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
+        let movementBaseline = baselineSnapshot(
+            for: current,
+            inMonth: inMonthSnapshots,
+            ordered: orderedSnapshots,
+            monthStart: monthStart
+        )
+        let currentByIdentity = Dictionary(
+            current.songs.map { (accumulatedIdentity(for: $0), $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let monthToDateDeltas = rankedSongs.compactMap { ranked -> SongDelta? in
+            let identity = ranked.recordingIdentity ?? legacyRecapRecordingIdentity(
+                title: ranked.title, artist: ranked.artist, albumTitle: ranked.albumTitle
+            )
+            guard ranked.playDelta > 0, let song = currentByIdentity[identity] else { return nil }
+            return SongDelta(latest: song, playDelta: ranked.playDelta, skipDelta: ranked.skipDelta,
+                             recordingIdentity: identity, playbackStoreID: ranked.playbackStoreID, isNewSong: false)
+        }
+        let artworkLookup = ArtworkLookup(sourceSongs: [])
+        let biggestGainers = movementSongs(from: monthToDateDeltas, baseline: movementBaseline, latest: current, artworkLookup: artworkLookup)
+        let biggestAlbumGainers = movementGroups(
+            from: monthToDateDeltas, baseline: movementBaseline, latest: current, id: albumGroupID,
+            snapshotID: albumGroupID,
+            title: { $0.latest.albumTitle }, subtitle: { $0.latest.albumArtist }, artwork: { _ in nil }
+        )
+        let biggestArtistGainers = movementGroups(
+            from: monthToDateDeltas, baseline: movementBaseline, latest: current, id: artistGroupID,
+            snapshotID: artistGroupID,
+            title: { $0.latest.artist }, subtitle: { _ in "Artist" }, artwork: { _ in nil }
+        )
         let recap = MonthlyRecap(
             monthStart: monthStart,
             generatedAt: current.capturedAt,
@@ -2327,7 +2462,9 @@ final class MonthlyRecapSnapshotStore {
             topSongs: rankedSongs,
             topArtists: artists.values.sorted { $0.playDelta > $1.playDelta },
             topAlbums: albums.values.sorted { $0.playDelta > $1.playDelta },
-            biggestGainers: priorRecap.biggestGainers,
+            biggestGainers: biggestGainers,
+            biggestAlbumGainers: biggestAlbumGainers,
+            biggestArtistGainers: biggestArtistGainers,
             topNewSongs: topNewSongs
         )
         guard isPlausibleListeningDuration(
@@ -2350,7 +2487,9 @@ final class MonthlyRecapSnapshotStore {
         stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
         stored.syncedRecaps.append(ledger.compacted())
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
-        stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
+        if rebuildYearly {
+            stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
+        }
     }
 
     private func syncedRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedMonthlyRecap] {
@@ -2804,6 +2943,26 @@ final class MonthlyRecapSnapshotStore {
             latest: latest,
             artworkLookup: artworkLookup
         )
+        let biggestAlbumGainers = movementGroups(
+            from: playDeltas,
+            baseline: baseline,
+            latest: latest,
+            id: albumGroupID,
+            snapshotID: albumGroupID,
+            title: { $0.latest.albumTitle },
+            subtitle: { $0.latest.albumArtist },
+            artwork: { artworkLookup.albumArtwork(for: $0.latest) }
+        )
+        let biggestArtistGainers = movementGroups(
+            from: playDeltas,
+            baseline: baseline,
+            latest: latest,
+            id: artistGroupID,
+            snapshotID: artistGroupID,
+            title: { $0.latest.artist },
+            subtitle: { _ in "Artist" },
+            artwork: { artworkLookup.artistArtwork(for: $0.latest) }
+        )
 
         let topNewSongs = playDeltas
             .filter(\.isNewSong)
@@ -2845,6 +3004,8 @@ final class MonthlyRecapSnapshotStore {
                 topArtists: topArtists,
                 topAlbums: topAlbums,
                 biggestGainers: biggestGainers,
+                biggestAlbumGainers: biggestAlbumGainers,
+                biggestArtistGainers: biggestArtistGainers,
                 topNewSongs: topNewSongs
             ),
             rankingCoverage: rankingCoverage,
@@ -3284,22 +3445,30 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private func artistGroupID(for delta: SongDelta) -> String {
-        if delta.latest.artistPersistentID != 0 {
-            return String(delta.latest.artistPersistentID)
+        artistGroupID(for: delta.latest)
+    }
+
+    private func artistGroupID(for song: SongSnapshot) -> String {
+        if song.artistPersistentID != 0 {
+            return String(song.artistPersistentID)
         }
 
-        return "artist:\(normalizedGroupKey(delta.latest.artist))"
+        return "artist:\(normalizedGroupKey(song.artist))"
     }
 
     private func albumGroupID(for delta: SongDelta) -> String {
-        if delta.latest.albumPersistentID != 0 {
-            return String(delta.latest.albumPersistentID)
+        albumGroupID(for: delta.latest)
+    }
+
+    private func albumGroupID(for song: SongSnapshot) -> String {
+        if song.albumPersistentID != 0 {
+            return String(song.albumPersistentID)
         }
 
         return [
             "album",
-            normalizedGroupKey(delta.latest.albumTitle),
-            normalizedGroupKey(delta.latest.albumArtist)
+            normalizedGroupKey(song.albumTitle),
+            normalizedGroupKey(song.albumArtist)
         ].joined(separator: ":")
     }
 
@@ -3422,6 +3591,42 @@ final class MonthlyRecapSnapshotStore {
         })
     }
 
+    private func movementGroups(
+        from deltas: [SongDelta],
+        baseline: LibrarySnapshot,
+        latest: LibrarySnapshot,
+        id: (SongDelta) -> String,
+        snapshotID: (SongSnapshot) -> String,
+        title: (SongDelta) -> String,
+        subtitle: (SongDelta) -> String,
+        artwork: (SongDelta) -> MPMediaItemArtwork?
+    ) -> [MonthlyRecap.MovementGroup] {
+        let baselineRanks = groupRanksByPlayCount(for: baseline.songs, id: snapshotID)
+        let latestRanks = groupRanksByPlayCount(for: latest.songs, id: snapshotID)
+        var aggregates: [String: (title: String, subtitle: String, playDelta: Int, artwork: MPMediaItemArtwork?)] = [:]
+        for delta in deltas {
+            let groupID = id(delta)
+            let existing = aggregates[groupID]
+            aggregates[groupID] = (existing?.title ?? title(delta), existing?.subtitle ?? subtitle(delta),
+                                   (existing?.playDelta ?? 0) + delta.playDelta, existing?.artwork ?? artwork(delta))
+        }
+        return aggregates.compactMap { groupID, value in
+            guard let previousRank = baselineRanks[groupID], let currentRank = latestRanks[groupID], previousRank > currentRank else { return nil }
+            return MonthlyRecap.MovementGroup(id: groupID, title: value.title, subtitle: value.subtitle,
+                                              playDelta: value.playDelta, rankChange: previousRank - currentRank,
+                                              currentRank: currentRank, previousRank: previousRank, artwork: value.artwork)
+        }.sorted {
+            $0.rankChange == $1.rankChange ? ($0.playDelta == $1.playDelta ? $0.title < $1.title : $0.playDelta > $1.playDelta) : $0.rankChange > $1.rankChange
+        }
+    }
+
+    private func groupRanksByPlayCount(for songs: [SongSnapshot], id: (SongSnapshot) -> String) -> [String: Int] {
+        var totals: [String: Int] = [:]
+        for song in songs { totals[id(song), default: 0] += song.playCount }
+        let ranked = totals.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+        return Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($0.element.key, $0.offset + 1) })
+    }
+
     private func compareDeltas(_ lhs: SongDelta, _ rhs: SongDelta) -> Bool {
         if lhs.playDelta == rhs.playDelta {
             if lhs.listeningDuration == rhs.listeningDuration {
@@ -3514,9 +3719,11 @@ final class MonthlyRecapSnapshotStore {
                 from: stored.snapshots,
                 now: snapshot.capturedAt
             )
-            updateIncrementalRecap(in: &stored, previous: previous, current: snapshot)
+            updateIncrementalRecap(in: &stored, previous: previous, current: snapshot, rebuildYearly: false)
             stored.snapshots = compactSnapshotsForLocalStorage(from: stored.snapshots)
         }
+
+        stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
 
         // Preserve any higher-quality Cloud summary that was already cached.
         if let data = try? Data(contentsOf: summaryFileURL),
@@ -3537,6 +3744,10 @@ final class MonthlyRecapSnapshotStore {
     private func forEachLegacySnapshot(
         _ body: (LibrarySnapshot) throws -> Void
     ) throws {
+        if try forEachPrettyPrintedLegacySnapshot(body) {
+            return
+        }
+
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
 
@@ -3618,6 +3829,48 @@ final class MonthlyRecapSnapshotStore {
             throw LegacyStreamError.snapshotsArrayMissing
         }
         throw LegacyStreamError.truncatedSnapshot
+    }
+
+    /// Legacy archives were written with `.prettyPrinted`. Memory-mapping that
+    /// stable format lets Foundation find top-level snapshot separators in
+    /// native code instead of asking Swift to inspect every byte of a 500 MB
+    /// file. The structural streaming parser below remains the fallback for
+    /// compact or externally modified archives.
+    private func forEachPrettyPrintedLegacySnapshot(
+        _ body: (LibrarySnapshot) throws -> Void
+    ) throws -> Bool {
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        let arrayMarker = Data("\"snapshots\" : [\n    {".utf8)
+        guard let markerRange = data.range(of: arrayMarker) else { return false }
+
+        let objectSeparator = Data(",\n    {".utf8)
+        let arrayTerminator = Data("\n    }\n  ]".utf8)
+        var objectStart = markerRange.upperBound - 1
+
+        while objectStart < data.endIndex {
+            let searchRange = objectStart..<data.endIndex
+            let separatorRange = data.range(of: objectSeparator, options: [], in: searchRange)
+            let terminatorRange = data.range(of: arrayTerminator, options: [], in: searchRange)
+
+            let objectEnd: Data.Index
+            let nextStart: Data.Index?
+            if let separatorRange,
+               terminatorRange.map({ separatorRange.lowerBound < $0.lowerBound }) ?? true {
+                objectEnd = separatorRange.lowerBound
+                nextStart = separatorRange.upperBound - 1
+            } else if let terminatorRange {
+                objectEnd = terminatorRange.lowerBound + Data("\n    }".utf8).count
+                nextStart = nil
+            } else {
+                throw LegacyStreamError.truncatedSnapshot
+            }
+
+            let snapshotData = data.subdata(in: objectStart..<objectEnd)
+            try body(JSONDecoder.playCount.decode(LibrarySnapshot.self, from: snapshotData))
+            guard let nextStart else { break }
+            objectStart = nextStart
+        }
+        return true
     }
 
     private func saveLocked(_ stored: StoredSnapshots) {

@@ -2593,6 +2593,22 @@ extension MediaLibraryManager {
                 MonthlyRecap.MovementSong(id: monthlySongs[6].id, title: monthlySongs[6].title, artist: monthlySongs[6].artist, playDelta: monthlyDeltas[6], rankChange: 24, currentRank: 21, previousRank: 45, artwork: monthlySongs[6].artwork),
                 MonthlyRecap.MovementSong(id: monthlySongs[8].id, title: monthlySongs[8].title, artist: monthlySongs[8].artist, playDelta: monthlyDeltas[8], rankChange: 18, currentRank: 29, previousRank: 47, artwork: monthlySongs[8].artwork)
             ],
+            biggestAlbumGainers: albums.prefix(4).enumerated().map { index, album in
+                MonthlyRecap.MovementGroup(
+                    id: album.id, title: album.title, subtitle: album.subtitle,
+                    playDelta: max(8, album.playDelta), rankChange: 18 - index * 3,
+                    currentRank: 8 + index * 4, previousRank: 26 + index,
+                    artwork: album.artwork
+                )
+            },
+            biggestArtistGainers: artists.prefix(4).enumerated().map { index, artist in
+                MonthlyRecap.MovementGroup(
+                    id: artist.id, title: artist.title, subtitle: "Artist",
+                    playDelta: max(8, artist.playDelta), rankChange: 16 - index * 3,
+                    currentRank: 6 + index * 4, previousRank: 22 + index,
+                    artwork: artist.artwork
+                )
+            },
             topNewSongs: Array(rankedSongs.suffix(7))
         )
     }

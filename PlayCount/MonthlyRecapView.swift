@@ -44,6 +44,88 @@ struct MonthlyRecapView: View {
         case artist(id: UInt64, name: String)
     }
 
+    private struct RecapGainersSection: View {
+        enum Kind: String, CaseIterable, Identifiable {
+            case songs = "Songs"
+            case albums = "Albums"
+            case artists = "Artists"
+            var id: Self { self }
+        }
+
+        let songs: [MonthlyRecap.MovementSong]
+        let albums: [MonthlyRecap.MovementGroup]
+        let artists: [MonthlyRecap.MovementGroup]
+        @ObservedObject var manager: MediaLibraryManager
+        let openDestination: (RecapNavigationDestination) -> Void
+        @State private var selection: Kind = .songs
+
+        private var availableKinds: [Kind] {
+            Kind.allCases.filter {
+                switch $0 { case .songs: !songs.isEmpty; case .albums: !albums.isEmpty; case .artists: !artists.isEmpty }
+            }
+        }
+
+        var body: some View {
+            RecapRankingSection(title: "Biggest Gainers") {
+                VStack(spacing: 8) {
+                    if availableKinds.count > 1 {
+                        Picker("Gainer category", selection: $selection) {
+                            ForEach(availableKinds) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 8)
+                    }
+                    rows
+                }
+                .onAppear { normalizeSelection() }
+                .onChange(of: availableKinds) { _, _ in normalizeSelection() }
+            }
+        }
+
+        @ViewBuilder private var rows: some View {
+            switch selection {
+            case .songs:
+                ForEach(songs.prefix(5)) { song in
+                    Button {
+                        if let item = manager.song(withPersistentID: song.id) ?? manager.song(matchingTitle: song.title, artist: song.artist) {
+                            openDestination(.song(id: item.id, title: item.title, artist: item.artist))
+                        }
+                    } label: { RecapMovementRow(song: song).contentShape(.rect) }
+                    .buttonStyle(.plain)
+                }
+            case .albums:
+                ForEach(albums.prefix(5)) { group in
+                    Button {
+                        if let item = resolveAlbum(group) { openDestination(.album(id: item.id, title: item.title, artist: item.artist)) }
+                    } label: { RecapGroupMovementRow(group: group, systemImage: "rectangle.stack.fill").contentShape(.rect) }
+                    .buttonStyle(.plain)
+                }
+            case .artists:
+                ForEach(artists.prefix(5)) { group in
+                    Button {
+                        if let item = resolveArtist(group) { openDestination(.artist(id: item.id, name: item.name)) }
+                    } label: { RecapGroupMovementRow(group: group, systemImage: "person.fill").contentShape(.rect) }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        private func normalizeSelection() {
+            if !availableKinds.contains(selection), let first = availableKinds.first { selection = first }
+        }
+
+        private func resolveAlbum(_ group: MonthlyRecap.MovementGroup) -> TopAlbum? {
+            if let id = UInt64(group.id), let item = manager.album(withPersistentID: id) { return item }
+            return manager.album(matchingTitle: group.title, artist: group.subtitle)
+        }
+
+        private func resolveArtist(_ group: MonthlyRecap.MovementGroup) -> TopArtist? {
+            if let id = UInt64(group.id), let item = manager.artist(withPersistentID: id) { return item }
+            return manager.artist(matchingName: group.title)
+        }
+    }
+
     private enum ScrollAnchor {
         static let recapTop = "recap-top"
     }
@@ -528,7 +610,7 @@ struct MonthlyRecapView: View {
                 topArtistsSection
             }
         } else {
-            if !recap.biggestGainers.isEmpty {
+            if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
                 biggestGainersSection
             }
             if !recap.topNewSongs.isEmpty {
@@ -610,7 +692,7 @@ struct MonthlyRecapView: View {
         ) {
             RecapFullSongsView(title: "Top Songs", songs: recap.topSongs, manager: manager, recapContext: recapDrilldownContext)
         } content: {
-            ForEach(Array(recap.topSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
+            ForEach(recap.topSongs.prefix(5).enumerated(), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
                     Button {
                         openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
@@ -627,26 +709,18 @@ struct MonthlyRecapView: View {
     }
 
     private var biggestGainersSection: some View {
-        RecapRankingSection(title: "Biggest Gainers") {
-            ForEach(recap.biggestGainers.prefix(5)) { song in
-                if let topSong = resolvedTopSong(for: song) {
-                    Button {
-                        openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
-                    } label: {
-                        RecapMovementRow(song: song, artwork: resolvedArtwork(for: song))
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    RecapMovementRow(song: song, artwork: resolvedArtwork(for: song))
-                }
-            }
-        }
+        RecapGainersSection(
+            songs: recap.biggestGainers,
+            albums: recap.biggestAlbumGainers,
+            artists: recap.biggestArtistGainers,
+            manager: manager,
+            openDestination: openRecapDestination
+        )
     }
 
     private var topNewSongsSection: some View {
         RecapRankingSection(title: "Top New Songs") {
-            ForEach(Array(recap.topNewSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
+            ForEach(recap.topNewSongs.prefix(5).enumerated(), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
                     Button {
                         openRecapDestination(.song(id: topSong.id, title: topSong.title, artist: topSong.artist))
@@ -670,7 +744,7 @@ struct MonthlyRecapView: View {
         ) {
             RecapFullGroupsView(title: "Top Albums", groups: recap.topAlbums, systemImage: "rectangle.stack.fill", manager: manager, recapContext: recapDrilldownContext)
         } content: {
-            ForEach(Array(recap.topAlbums.prefix(5).enumerated()), id: \.element.id) { index, album in
+            ForEach(recap.topAlbums.prefix(5).enumerated(), id: \.element.id) { index, album in
                 if let topAlbum = resolvedTopAlbum(for: album) {
                     Button {
                         openRecapDestination(.album(id: topAlbum.id, title: topAlbum.title, artist: topAlbum.artist))
@@ -694,7 +768,7 @@ struct MonthlyRecapView: View {
         ) {
             RecapFullGroupsView(title: "Top Artists", groups: recap.topArtists, systemImage: "person.fill", manager: manager, recapContext: recapDrilldownContext)
         } content: {
-            ForEach(Array(recap.topArtists.prefix(5).enumerated()), id: \.element.id) { index, artist in
+            ForEach(recap.topArtists.prefix(5).enumerated(), id: \.element.id) { index, artist in
                 if let topArtist = resolvedTopArtist(for: artist) {
                     Button {
                         openRecapDestination(.artist(id: topArtist.id, name: topArtist.name))
@@ -868,7 +942,7 @@ struct MonthlyRecapView: View {
     }
 
     private var monthSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 5)
+        DragGesture(minimumDistance: 10)
             .onChanged { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
@@ -881,10 +955,7 @@ struct MonthlyRecapView: View {
                     monthDragAxis = resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical)
                 }
 
-                guard monthDragAxis == .horizontal else {
-                    monthDragOffset = 0
-                    return
-                }
+                guard monthDragAxis == .horizontal else { return }
 
                 suppressRecapNavigationDuringSwipe()
                 monthDragOffset = clampedMonthDragOffset(horizontal)
@@ -898,15 +969,14 @@ struct MonthlyRecapView: View {
                 } else {
                     dragAxis = monthDragAxis
                 }
+                guard !isUsingYearlyBreakdownStrip, dragAxis == .horizontal else {
+                    resetMonthDragState()
+                    return
+                }
                 defer {
-                    withAnimation(.smooth(duration: 0.22)) {
-                        resetMonthDragState()
-                    }
+                    withAnimation(.smooth(duration: 0.22)) { resetMonthDragState() }
                     releaseRecapNavigationAfterSwipe()
                 }
-
-                guard !isUsingYearlyBreakdownStrip else { return }
-                guard dragAxis == .horizontal else { return }
 
                 guard abs(horizontal) > 48,
                       abs(horizontal) > abs(vertical) * 1.25 else {
@@ -1171,7 +1241,7 @@ private struct RecapArtworkCollage: View {
             emptyArtwork
         } else {
             ZStack {
-                ForEach(Array(sideArtworks.enumerated()), id: \.offset) { index, artwork in
+                ForEach(sideArtworks.enumerated(), id: \.offset) { index, artwork in
                     ArtworkView(
                         artwork: artwork,
                         size: sideArtworkSize(for: index),
@@ -1545,7 +1615,7 @@ private struct RecapFullSongsView: View {
 
     var body: some View {
         List {
-            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+            ForEach(songs.enumerated(), id: \.element.id) { index, song in
                 if let topSong = resolvedTopSong(for: song) {
                     NavigationLink {
                         SongInfoView(song: topSong, manager: manager, recapContext: recapContext)
@@ -1579,7 +1649,7 @@ private struct RecapFullGroupsView: View {
 
     var body: some View {
         List {
-            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+            ForEach(groups.enumerated(), id: \.element.id) { index, group in
                 if systemImage == "person.fill",
                    let artist = resolvedTopArtist(for: group) {
                     NavigationLink {
@@ -1709,6 +1779,31 @@ private struct RecapMovementRow: View {
             return "#\(previousRank) to #\(song.currentRank)"
         }
         return "New at #\(song.currentRank)"
+    }
+}
+
+private struct RecapGroupMovementRow: View {
+    let group: MonthlyRecap.MovementGroup
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ArtworkView(artwork: group.artwork, size: CGSize(width: 58, height: 58), cornerRadius: systemImage == "person.fill" ? 29 : 10)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(group.title).font(.headline).lineLimit(1)
+                Text(group.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Text("#\(group.previousRank ?? group.currentRank) to #\(group.currentRank)")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .trailing, spacing: 4) {
+                Label("\(group.rankChange)", systemImage: "arrow.up")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+                    .accessibilityLabel("Up \(group.rankChange) ranks")
+                Text("+\(group.playDelta) plays").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
+        .padding(.vertical, 9)
     }
 }
 

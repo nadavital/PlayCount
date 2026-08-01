@@ -1217,6 +1217,42 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.topAlbums.first?.playDelta, 8)
     }
 
+    func testBiggestGainersIncludesAlbumsAndArtistsUsingGroupRankMovement() {
+        let store = makeStore(named: "group-gainers")
+        let baselineDate = date(year: 2026, month: 5, day: 1)
+        let latestDate = date(year: 2026, month: 5, day: 8)
+        let incrementalDate = date(year: 2026, month: 5, day: 9)
+        let baseline = [
+            song(id: 1, title: "A", artist: "Artist A", albumTitle: "Album A", playCount: 100, albumPersistentID: 101, artistPersistentID: 201),
+            song(id: 2, title: "B", artist: "Artist B", albumTitle: "Album B", playCount: 80, albumPersistentID: 102, artistPersistentID: 202),
+            song(id: 3, title: "C", artist: "Artist C", albumTitle: "Album C", playCount: 60, albumPersistentID: 103, artistPersistentID: 203)
+        ]
+        let latest = [baseline[0], baseline[1],
+                      song(id: 3, title: "C", artist: "Artist C", albumTitle: "Album C", playCount: 110, albumPersistentID: 103, artistPersistentID: 203)]
+
+        _ = store.record(songs: baseline, at: baselineDate, reason: .manualRefresh)
+        _ = store.record(songs: latest, at: latestDate, reason: .foreground)
+        let recap = store.record(
+            songs: [baseline[0], baseline[1],
+                    song(id: 3, title: "C", artist: "Artist C", albumTitle: "Album C", playCount: 120, albumPersistentID: 103, artistPersistentID: 203)],
+            at: incrementalDate,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(recap.biggestAlbumGainers.first?.title, "Album C")
+        XCTAssertEqual(recap.biggestAlbumGainers.first?.rankChange, 2)
+        XCTAssertEqual(recap.biggestAlbumGainers.first?.playDelta, 60)
+        XCTAssertEqual(recap.biggestArtistGainers.first?.title, "Artist C")
+        XCTAssertEqual(recap.biggestArtistGainers.first?.rankChange, 2)
+        XCTAssertEqual(recap.biggestArtistGainers.first?.playDelta, 60)
+
+        let syncedStore = makeStore(named: "group-gainers-synced")
+        XCTAssertTrue(syncedStore.mergeSyncPayloads(store.localSyncPayloads(), now: incrementalDate))
+        let syncedRecap = syncedStore.recap(forMonthContaining: incrementalDate)
+        XCTAssertEqual(syncedRecap.biggestAlbumGainers, recap.biggestAlbumGainers)
+        XCTAssertEqual(syncedRecap.biggestArtistGainers, recap.biggestArtistGainers)
+    }
+
     func testCompactRecapSummarySurvivesAColdStoreInstance() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlayCountRecapSummary-\(UUID().uuidString)", isDirectory: true)
