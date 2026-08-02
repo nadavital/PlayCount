@@ -575,6 +575,7 @@ struct LibraryStatusOverlayModifier: ViewModifier {
 
 struct LibraryMetricPicker: View {
     @Binding var selection: MediaLibraryManager.SortMetric
+    var displaysIcon = true
 
     var body: some View {
         Menu {
@@ -587,8 +588,10 @@ struct LibraryMetricPicker: View {
             }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: selection.systemImageName)
-                    .imageScale(.medium)
+                if displaysIcon {
+                    Image(systemName: selection.systemImageName)
+                        .imageScale(.medium)
+                }
                 Text(selection.toolbarLabel)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)

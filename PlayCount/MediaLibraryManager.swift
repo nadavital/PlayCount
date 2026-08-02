@@ -1446,47 +1446,65 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func songsForAlbum(_ album: TopAlbum) -> [TopSong] {
-        var candidates: [TopSong] = []
-
-        if album.id != 0, let songs = songsByAlbumID[album.id] {
-            candidates.append(contentsOf: songs)
-        }
+        let idMatches = album.id == 0 ? [] : (songsByAlbumID[album.id] ?? [])
 
         let albumKeyMatches = songsByAlbumKey[Self.titleArtistKey(title: album.title, artist: album.artist)] ?? []
-        candidates.append(contentsOf: albumKeyMatches.filter { song in
+        let legacyMatches = albumKeyMatches.filter { song in
             song.albumPersistentID == 0 && (
                 (album.artistPersistentID != 0 && song.artistPersistentID == album.artistPersistentID) ||
                 song.albumArtist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame ||
                 song.artist.localizedCaseInsensitiveCompare(album.artist) == .orderedSame
             )
-        })
+        }
 
-        return sortSongs(Self.deduplicated(candidates))
+        if legacyMatches.isEmpty {
+            return idMatches
+        }
+        if idMatches.isEmpty {
+            return legacyMatches
+        }
+
+        return sortSongs(Self.deduplicated(idMatches + legacyMatches))
     }
 
     private func songsForArtist(_ artist: TopArtist) -> [TopSong] {
-        var candidates: [TopSong] = []
-
-        if artist.id != 0, let songs = songsByArtistID[artist.id] {
-            candidates.append(contentsOf: songs)
-        }
+        let idMatches = artist.id == 0 ? [] : (songsByArtistID[artist.id] ?? [])
 
         let artistNameMatches = songsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
-        candidates.append(contentsOf: artistNameMatches.filter { $0.artistPersistentID == 0 })
+        let legacyMatches = artistNameMatches.filter { $0.artistPersistentID == 0 }
 
-        return sortSongs(Self.deduplicated(candidates))
+        if legacyMatches.isEmpty {
+            return idMatches
+        }
+        if idMatches.isEmpty {
+            return legacyMatches
+        }
+
+        return sortSongs(Self.deduplicated(idMatches + legacyMatches))
     }
 
     private func albumsForArtist(_ artist: TopArtist) -> [TopAlbum] {
-        var candidates: [TopAlbum] = []
+        let idMatches = artist.id == 0 ? [] : (albumsByArtistID[artist.id] ?? [])
+        let nameMatches = albumsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
 
-        if artist.id != 0, let albums = albumsByArtistID[artist.id] {
-            candidates.append(contentsOf: albums)
+        if idMatches.isEmpty {
+            return nameMatches
         }
 
-        candidates.append(contentsOf: albumsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? [])
+        let additionalMatches = nameMatches.filter { candidate in
+            !idMatches.contains { existing in
+                if candidate.id != 0, existing.id != 0 {
+                    return candidate.id == existing.id
+                }
+                return candidate.title.localizedCaseInsensitiveCompare(existing.title) == .orderedSame &&
+                    candidate.artist.localizedCaseInsensitiveCompare(existing.artist) == .orderedSame
+            }
+        }
+        if additionalMatches.isEmpty {
+            return idMatches
+        }
 
-        return sortAlbums(Self.deduplicated(candidates))
+        return sortAlbums(idMatches + additionalMatches)
     }
 
     private static func titleArtistKey(title: String, artist: String) -> String {

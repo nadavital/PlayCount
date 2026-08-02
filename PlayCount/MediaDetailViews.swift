@@ -167,16 +167,6 @@ struct SongInfoView: View {
         manager.artist(withPersistentID: song.artistPersistentID)
     }
 
-    private var albumCompanionSongs: [TopSong] {
-        guard let album else { return [] }
-        return manager.songs(for: album)
-    }
-
-    private var artistCompanionSongs: [TopSong] {
-        guard let artist else { return [] }
-        return manager.songs(for: artist)
-    }
-
     private var relatedColumns: [GridItem] {
         let count = isRegularWidth ? 2 : 1
         return Array(repeating: GridItem(.flexible(minimum: 280), spacing: 16, alignment: .top), count: count)
@@ -196,24 +186,36 @@ struct SongInfoView: View {
     }
 
     var body: some View {
+        let resolvedRecapContext = detailRecapContext
+        let albumSongs = album.map { manager.songs(for: $0) } ?? []
+        let artistSongs = artist.map { manager.songs(for: $0) } ?? []
+
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: detailRecapContext)
+            LazyVStack(alignment: .leading, spacing: 32) {
+                SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
 
-                if let monthlySong = detailRecapContext?.rankedSong(for: song) {
+                if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
                     MonthlyDetailSongSection(
-                        title: detailRecapContext?.songSectionTitle ?? "This Month",
-                        periodTitle: detailRecapContext?.monthTitle ?? "This Month",
+                        title: resolvedRecapContext?.songSectionTitle ?? "This Month",
+                        periodTitle: resolvedRecapContext?.monthTitle ?? "This Month",
                         song: monthlySong
                     )
                 }
 
-                if let periodSummaries = detailRecapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
+                if let periodSummaries = resolvedRecapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
                     RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
 
-                relatedSongSections
+                SongRelatedSections(
+                    song: song,
+                    albumSongs: albumSongs,
+                    artistSongs: artistSongs,
+                    columns: relatedColumns,
+                    manager: manager,
+                    recapContext: resolvedRecapContext,
+                    displayLimit: Self.relatedSongLimit
+                )
             }
             .padding(.horizontal, isRegularWidth ? 36 : 24)
             .padding(.top, isRegularWidth ? 28 : 12)
@@ -242,20 +244,6 @@ struct SongInfoView: View {
         reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
     }
 
-    @ViewBuilder
-    private var relatedSongSections: some View {
-        if !albumCompanionSongs.isEmpty || !artistCompanionSongs.isEmpty {
-            LazyVGrid(columns: relatedColumns, alignment: .leading, spacing: 16) {
-                if !albumCompanionSongs.isEmpty {
-                    RelatedSongsSection(title: "On This Album", songs: albumCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: detailRecapContext)
-                }
-
-                if !artistCompanionSongs.isEmpty {
-                    RelatedSongsSection(title: "More by \(song.artist)", songs: artistCompanionSongs, manager: manager, currentSongID: song.id, displayLimit: Self.relatedSongLimit, recapContext: detailRecapContext)
-                }
-            }
-        }
-    }
 }
 
 struct AlbumInfoView: View {
@@ -282,10 +270,6 @@ struct AlbumInfoView: View {
         manager.artist(withPersistentID: album.artistPersistentID)
     }
 
-    private var albumSongs: [TopSong] {
-        sortedSongs(manager.songs(for: album), by: manager.sortMetric)
-    }
-
     private var detailRecapContext: RecapDrilldownContext? {
         if let recapContext {
             return recapContext
@@ -297,68 +281,40 @@ struct AlbumInfoView: View {
         )
     }
 
-    private var monthlySongs: [MonthlyRecap.RankedSong] {
-        detailRecapContext?.songs(for: album) ?? []
-    }
-
-    private var topAlbumSongs: [TopSong] {
-        albumSongs
-    }
-
     var body: some View {
+        let resolvedRecapContext = detailRecapContext
+        let albumSongs = manager.songs(for: album)
+        let monthlySongs = resolvedRecapContext?.songs(for: album) ?? []
+        let periodSummaries = resolvedRecapContext?.periodSummaries(for: album) ?? []
+
         ScrollView {
-            VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
-                AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: detailRecapContext)
+            LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
+                AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
 
-                if let detailRecapContext, !monthlySongs.isEmpty {
+                if let resolvedRecapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
-                        title: detailRecapContext.songsSectionTitle,
-                        subtitle: detailRecapContext.monthTitle,
+                        title: resolvedRecapContext.songsSectionTitle,
+                        subtitle: resolvedRecapContext.monthTitle,
                         songs: monthlySongs,
                         manager: manager,
-                        recapContext: detailRecapContext
+                        recapContext: resolvedRecapContext
                     )
                 }
 
-                if let periodSummaries = detailRecapContext?.periodSummaries(for: album), !periodSummaries.isEmpty {
+                if !periodSummaries.isEmpty {
                     RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                 }
 
-                if !topAlbumSongs.isEmpty {
-                    RelatedSongsSection(title: "Top Songs on This Album", songs: topAlbumSongs, manager: manager, sortMetric: manager.sortMetric, displayLimit: 6, recapContext: detailRecapContext)
-                }
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Songs")
-                        .font(.title3.weight(.semibold))
-
-                    if albumSongs.isEmpty {
-                        Text("We haven't tracked individual plays for this album yet.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        LazyVStack(spacing: 0) {
-                            ForEach(albumSongs) { song in
-                                NavigationLink {
-                                    SongInfoView(song: song, manager: manager, recapContext: detailRecapContext)
-                                } label: {
-                                    AlbumTrackRow(song: song, sortMetric: manager.sortMetric)
-                                }
-                                .buttonStyle(.plain)
-
-                                if song.id != albumSongs.last?.id {
-                                    Divider()
-                                        .overlay(Color.primary.opacity(0.1))
-                                }
-                            }
-                        }
-                        .playCountDetailCardSurface(cornerRadius: 20)
-                    }
-                }
+                AlbumSongsSection(
+                    songs: albumSongs,
+                    sortMetric: manager.sortMetric,
+                    manager: manager,
+                    recapContext: resolvedRecapContext
+                )
             }
             .padding(.horizontal, isRegularWidth ? 36 : 24)
-            .padding(.top, isRegularWidth ? 28 : 12)
+            .padding(.top, isRegularWidth ? 28 : 0)
             .padding(.bottom, bottomPadding)
             .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
@@ -382,7 +338,7 @@ struct AlbumInfoView: View {
     }
 
     private var detailMetricPicker: some View {
-        LibraryMetricPicker(selection: $manager.sortMetric)
+        LibraryMetricPicker(selection: $manager.sortMetric, displaysIcon: false)
     }
 
     private var isRegularWidth: Bool {
@@ -437,29 +393,31 @@ struct ArtistInfoView: View {
     }
 
     var body: some View {
-        let songs = sortedSongs(manager.songs(for: artist), by: manager.sortMetric)
-        let albums = sortedAlbums(manager.albums(for: artist), by: manager.sortMetric)
+        let resolvedRecapContext = detailRecapContext
+        let songs = manager.songs(for: artist)
+        let albums = manager.albums(for: artist)
         let topSongs = Array(songs.prefix(displayLimit))
         let topAlbums = Array(albums.prefix(displayLimit))
-        let monthlySongs = detailRecapContext?.songs(for: artist) ?? []
+        let monthlySongs = resolvedRecapContext?.songs(for: artist) ?? []
+        let periodSummaries = resolvedRecapContext?.periodSummaries(for: artist) ?? []
 
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
+                LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                     ArtistDetailHeader(artist: artist, manager: manager)
                         .frame(maxWidth: .infinity)
 
-                    if let detailRecapContext, !monthlySongs.isEmpty {
+                    if let resolvedRecapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
-                            title: detailRecapContext.songsSectionTitle,
-                            subtitle: detailRecapContext.monthTitle,
+                            title: resolvedRecapContext.songsSectionTitle,
+                            subtitle: resolvedRecapContext.monthTitle,
                             songs: monthlySongs,
                             manager: manager,
-                            recapContext: detailRecapContext
+                            recapContext: resolvedRecapContext
                         )
                     }
 
-                    if let periodSummaries = detailRecapContext?.periodSummaries(for: artist), !periodSummaries.isEmpty {
+                    if !periodSummaries.isEmpty {
                         RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
                     }
 
@@ -470,7 +428,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if songs.count > displayLimit {
                                 NavigationLink {
-                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: detailRecapContext)
+                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -487,9 +445,9 @@ struct ArtistInfoView: View {
                                 .padding(.vertical, 12)
                         } else {
                             LazyVStack(spacing: 12) {
-                                ForEach(Array(topSongs.enumerated()), id: \.element.id) { index, song in
+                                ForEach(topSongs.enumerated(), id: \.element.id) { index, song in
                                     NavigationLink {
-                                        SongInfoView(song: song, manager: manager, recapContext: detailRecapContext)
+                                        SongInfoView(song: song, manager: manager, recapContext: resolvedRecapContext)
                                     } label: {
                                         SongRow(song: song, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
@@ -510,7 +468,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if albums.count > displayLimit {
                                 NavigationLink {
-                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: detailRecapContext)
+                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -527,9 +485,9 @@ struct ArtistInfoView: View {
                                 .padding(.vertical, 12)
                         } else {
                             LazyVStack(spacing: 12) {
-                                ForEach(Array(topAlbums.enumerated()), id: \.element.id) { index, album in
+                                ForEach(topAlbums.enumerated(), id: \.element.id) { index, album in
                                     NavigationLink {
-                                        AlbumInfoView(album: album, manager: manager, recapContext: detailRecapContext)
+                                        AlbumInfoView(album: album, manager: manager, recapContext: resolvedRecapContext)
                                     } label: {
                                         AlbumRow(album: album, sortMetric: manager.sortMetric, rank: index + 1)
                                     }
@@ -543,7 +501,7 @@ struct ArtistInfoView: View {
                     }
                 }
                 .padding(.horizontal, isRegularWidth ? 36 : 24)
-                .padding(.top, isRegularWidth ? 28 : 12)
+                .padding(.top, isRegularWidth ? 28 : 0)
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .top)
@@ -573,7 +531,7 @@ struct ArtistInfoView: View {
     }
 
     private var detailMetricPicker: some View {
-        LibraryMetricPicker(selection: $manager.sortMetric)
+        LibraryMetricPicker(selection: $manager.sortMetric, displaysIcon: false)
     }
 
     private var isRegularWidth: Bool {
@@ -593,7 +551,6 @@ private struct SongDetailHeader: View {
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .title2) private var identityTitleSize: CGFloat = 24
 
     private var isCurrentSong: Bool {
         manager.nowPlayingState?.song?.id == song.id
@@ -627,137 +584,30 @@ private struct SongDetailHeader: View {
     }
 
     var body: some View {
-        MediaDetailHeaderGroup {
-            if isRegularWidth {
-                HStack(alignment: .center, spacing: 28) {
-                    heroArtwork
-                        .frame(width: artworkSize)
-
-                    VStack(spacing: 14) {
-                        identity
-                        playbackButton
-                        metrics
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            } else if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 14) {
-                    heroArtwork
-                    identity
-                    playbackButton
-                    metrics
-                }
-            } else {
-                VStack(spacing: 14) {
-                    heroArtwork
-                        .frame(width: artworkSize)
-                    identity
-                    playbackButton
-                    metrics
-                }
-            }
-        }
-    }
-
-    private var heroArtwork: some View {
-        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+        MediaDetailHero(
+            maximumArtworkSize: artworkSize,
+            playButtonTitle: playButtonTitle,
+            playButtonIcon: playButtonIcon,
+            playCount: song.playCount,
+            duration: song.totalPlayDuration,
+            playCountRank: manager.playCountRank(of: song),
+            listenTimeRank: manager.listenTimeRank(of: song),
+            onPlay: handlePlayTapped
+        ) { resolvedSize in
             ArtworkView(
                 artwork: song.artwork,
                 size: CGSize(width: resolvedSize, height: resolvedSize),
                 cornerRadius: isRegularWidth ? 22 : 24
             )
             .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
-        }
-    }
-
-    private var identity: some View {
-        VStack(spacing: 5) {
-            Text(song.title)
-                .font(.system(size: identityTitleSize, weight: .bold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
-
-            artistLink
-            albumLink
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 8)
-    }
-
-    private var playbackButton: some View {
-        MediaDetailPlaybackButton(
-            title: playButtonTitle,
-            systemImage: playButtonIcon,
-            action: handlePlayTapped
-        )
-    }
-
-    private var metrics: some View {
-        HStack(spacing: 0) {
-            MediaDetailMetric(
-                title: "Plays",
-                value: song.playCount.detailFormatted,
-                subtitle: manager.playCountRank(of: song).map { "Ranked #\($0)" }
+        } identity: {
+            SongDetailIdentity(
+                song: song,
+                album: album,
+                artist: artist,
+                manager: manager,
+                recapContext: recapContext
             )
-
-            Divider()
-                .frame(height: 34)
-
-            MediaDetailMetric(
-                title: "Time Listened",
-                value: song.totalPlayDuration.formattedListenTime,
-                subtitle: manager.listenTimeRank(of: song).map { "Ranked #\($0)" }
-            )
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .playCountDetailCardSurface(cornerRadius: 18)
-    }
-
-    @ViewBuilder
-    private var albumLink: some View {
-        if let album {
-            NavigationLink {
-                AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
-            } label: {
-                Text(album.title)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.vertical, 2)
-            }
-            .buttonStyle(.plain)
-        } else if !song.albumTitle.isEmpty {
-            Text(song.albumTitle)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
-        }
-    }
-
-    @ViewBuilder
-    private var artistLink: some View {
-        if let artist {
-            NavigationLink {
-                ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
-            } label: {
-                Text(artist.name)
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                    .padding(.vertical, 2)
-            }
-            .buttonStyle(.plain)
-        } else if !song.artist.isEmpty {
-            Text(song.artist)
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
         }
     }
 
@@ -777,7 +627,6 @@ private struct AlbumDetailHeader: View {
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .title2) private var identityTitleSize: CGFloat = 24
 
     private var isCurrentAlbum: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -815,100 +664,29 @@ private struct AlbumDetailHeader: View {
     }
 
     var body: some View {
-        MediaDetailHeaderGroup {
-            if !isRegularWidth {
-                VStack(spacing: 14) {
-                    heroArtwork
-                    identity
-                    playbackButton
-                    metricsStrip
-                }
-            } else {
-                HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
-                    heroArtwork
-                        .frame(width: artworkSize)
-
-                    VStack(spacing: 14) {
-                        identity
-                        playbackButton
-                        metricsStrip
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    private var heroArtwork: some View {
-        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+        MediaDetailHero(
+            maximumArtworkSize: artworkSize,
+            playButtonTitle: playButtonTitle,
+            playButtonIcon: playButtonIcon,
+            playCount: album.playCount,
+            duration: album.totalPlayDuration,
+            playCountRank: manager.playCountRank(of: album),
+            listenTimeRank: manager.listenTimeRank(of: album),
+            onPlay: handlePlayTapped
+        ) { resolvedSize in
             ArtworkView(
                 artwork: album.artwork,
                 size: CGSize(width: resolvedSize, height: resolvedSize),
                 cornerRadius: isRegularWidth ? 22 : 24
             )
             .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
-        }
-    }
-
-    private var identity: some View {
-        VStack(spacing: 5) {
-            Text(album.title)
-                .font(.system(size: identityTitleSize, weight: .bold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
-
-            artistLink
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 8)
-    }
-
-    private var playbackButton: some View {
-        MediaDetailPlaybackButton(
-            title: playButtonTitle,
-            systemImage: playButtonIcon,
-            action: handlePlayTapped
-        )
-    }
-
-    private var metricsStrip: some View {
-        metrics
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .playCountDetailCardSurface(cornerRadius: 18)
-    }
-
-    private var metrics: some View {
-        MediaDetailPrimaryMetric(
-            sortMetric: manager.sortMetric,
-            playCount: album.playCount,
-            duration: album.totalPlayDuration,
-            playCountRank: manager.playCountRank(of: album),
-            listenTimeRank: manager.listenTimeRank(of: album)
-        )
-    }
-
-    @ViewBuilder
-    private var artistLink: some View {
-        if let artist {
-            NavigationLink {
-                ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
-            } label: {
-                Text(artist.name)
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                    .padding(.vertical, 2)
-            }
-            .buttonStyle(.plain)
-        } else if !album.artist.isEmpty {
-            Text(album.artist)
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+        } identity: {
+            AlbumDetailIdentity(
+                album: album,
+                artist: artist,
+                manager: manager,
+                recapContext: recapContext
+            )
         }
     }
 
@@ -926,7 +704,6 @@ private struct ArtistDetailHeader: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .title) private var identityTitleSize: CGFloat = 26
 
     private var isCurrentArtist: Bool {
         guard let nowPlaying = manager.nowPlayingState?.song else { return false }
@@ -964,76 +741,25 @@ private struct ArtistDetailHeader: View {
     }
 
     var body: some View {
-        MediaDetailHeaderGroup {
-            if !isRegularWidth {
-                VStack(spacing: 14) {
-                    heroArtwork
-                    identity
-                    playbackButton
-                    metricsStrip
-                }
-            } else {
-                HStack(alignment: .center, spacing: isRegularWidth ? 28 : 16) {
-                    heroArtwork
-                        .frame(width: artworkSize)
-
-                    VStack(spacing: 14) {
-                        identity
-                        playbackButton
-                        metricsStrip
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    private var heroArtwork: some View {
-        MediaDetailResponsiveHero(maximumSize: artworkSize) { resolvedSize in
+        MediaDetailHero(
+            maximumArtworkSize: artworkSize,
+            playButtonTitle: playButtonTitle,
+            playButtonIcon: playButtonIcon,
+            playCount: artist.playCount,
+            duration: artist.totalPlayDuration,
+            playCountRank: manager.playCountRank(of: artist),
+            listenTimeRank: manager.listenTimeRank(of: artist),
+            onPlay: handlePlayTapped
+        ) { resolvedSize in
             ArtistArtworkView(
                 artwork: artist.artwork,
                 name: artist.name,
                 diameter: resolvedSize
             )
             .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        } identity: {
+            ArtistDetailIdentity(name: artist.name)
         }
-    }
-
-    private var identity: some View {
-        VStack(spacing: 5) {
-            Text(artist.name)
-                .font(.system(size: identityTitleSize, weight: .bold))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 8)
-    }
-
-    private var playbackButton: some View {
-        MediaDetailPlaybackButton(
-            title: playButtonTitle,
-            systemImage: playButtonIcon,
-            action: handlePlayTapped
-        )
-    }
-
-    private var metricsStrip: some View {
-        metrics
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .playCountDetailCardSurface(cornerRadius: 18)
-    }
-
-    private var metrics: some View {
-        MediaDetailPrimaryMetric(
-            sortMetric: manager.sortMetric,
-            playCount: artist.playCount,
-            duration: artist.totalPlayDuration,
-            playCountRank: manager.playCountRank(of: artist),
-            listenTimeRank: manager.listenTimeRank(of: artist)
-        )
     }
 
     private func handlePlayTapped() {
@@ -1045,13 +771,200 @@ private struct ArtistDetailHeader: View {
     }
 }
 
+private struct SongDetailIdentity: View {
+    let song: TopSong
+    let album: TopAlbum?
+    let artist: TopArtist?
+    let manager: MediaLibraryManager
+    let recapContext: RecapDrilldownContext?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text(song.title)
+                .font(.system(size: titleSize, weight: .bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+
+            if let artist {
+                NavigationLink {
+                    ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
+                } label: {
+                    Text(artist.name)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+            } else if !song.artist.isEmpty {
+                Text(song.artist)
+                    .font(.title3.weight(.medium))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+            }
+
+            if let album {
+                NavigationLink {
+                    AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
+                } label: {
+                    Text(album.title)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+            } else if !song.albumTitle.isEmpty {
+                Text(song.albumTitle)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 8)
+    }
+}
+
+private struct AlbumDetailIdentity: View {
+    let album: TopAlbum
+    let artist: TopArtist?
+    let manager: MediaLibraryManager
+    let recapContext: RecapDrilldownContext?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var titleSize: CGFloat = 24
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text(album.title)
+                .font(.system(size: titleSize, weight: .bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+
+            if let artist {
+                NavigationLink {
+                    ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
+                } label: {
+                    Text(artist.name)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+            } else if !album.artist.isEmpty {
+                Text(album.artist)
+                    .font(.title3.weight(.medium))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 8)
+    }
+}
+
+private struct ArtistDetailIdentity: View {
+    let name: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title) private var titleSize: CGFloat = 26
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: titleSize, weight: .bold))
+            .multilineTextAlignment(.center)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
+    }
+}
+
+private struct MediaDetailHero<Artwork: View, Identity: View>: View {
+    let maximumArtworkSize: CGFloat
+    let playButtonTitle: String
+    let playButtonIcon: String
+    let playCount: Int
+    let duration: TimeInterval
+    let playCountRank: Int?
+    let listenTimeRank: Int?
+    let onPlay: () -> Void
+    private let artwork: (CGFloat) -> Artwork
+    private let identity: Identity
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    init(
+        maximumArtworkSize: CGFloat,
+        playButtonTitle: String,
+        playButtonIcon: String,
+        playCount: Int,
+        duration: TimeInterval,
+        playCountRank: Int?,
+        listenTimeRank: Int?,
+        onPlay: @escaping () -> Void,
+        @ViewBuilder artwork: @escaping (CGFloat) -> Artwork,
+        @ViewBuilder identity: () -> Identity
+    ) {
+        self.maximumArtworkSize = maximumArtworkSize
+        self.playButtonTitle = playButtonTitle
+        self.playButtonIcon = playButtonIcon
+        self.playCount = playCount
+        self.duration = duration
+        self.playCountRank = playCountRank
+        self.listenTimeRank = listenTimeRank
+        self.onPlay = onPlay
+        self.artwork = artwork
+        self.identity = identity()
+    }
+
+    var body: some View {
+        MediaDetailHeaderGroup {
+            if horizontalSizeClass == .regular {
+                HStack(alignment: .center, spacing: 28) {
+                    heroArtwork
+                        .frame(width: maximumArtworkSize)
+                    details
+                }
+            } else {
+                VStack(spacing: 14) {
+                    heroArtwork
+                    details
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private var heroArtwork: some View {
+        MediaDetailResponsiveHero(maximumSize: maximumArtworkSize, content: artwork)
+    }
+
+    private var details: some View {
+        VStack(spacing: 14) {
+            identity
+            MediaDetailPlaybackButton(title: playButtonTitle, systemImage: playButtonIcon, action: onPlay)
+            MediaDetailListeningMetrics(
+                playCount: playCount,
+                duration: duration,
+                playCountRank: playCountRank,
+                listenTimeRank: listenTimeRank
+            )
+        }
+    }
+}
+
 private struct MediaDetailMetric: View {
-    let title: String
+    let title: LocalizedStringResource
     let value: String
     let subtitle: String?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    init(title: String, value: String, subtitle: String? = nil) {
+    init(title: LocalizedStringResource, value: String, subtitle: String? = nil) {
         self.title = title
         self.value = value
         self.subtitle = subtitle
@@ -1066,10 +979,9 @@ private struct MediaDetailMetric: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             VStack(spacing: 2) {
-                Text(title.uppercased())
+                Text(title)
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
-                    .tracking(0.5)
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 if let subtitle {
                     Text(subtitle)
@@ -1122,76 +1034,48 @@ private struct MediaDetailPlaybackSurfaceModifier: ViewModifier {
     }
 }
 
-private struct MediaDetailPrimaryMetric: View {
-    let sortMetric: MediaLibraryManager.SortMetric
+private struct MediaDetailListeningMetrics: View {
     let playCount: Int
     let duration: TimeInterval
     let playCountRank: Int?
     let listenTimeRank: Int?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private var value: String {
-        sortMetric.badgeText(playCount: playCount, duration: duration)
-    }
-
-    private var title: String {
-        sortMetric.toolbarLabel
-    }
-
-    private var supportingText: String {
-        sortMetric.supplementaryDescription(playCount: playCount, duration: duration)
-    }
-
-    private var rank: Int? {
-        switch sortMetric {
-        case .playCount:
-            return playCountRank
-        case .listenTime:
-            return listenTimeRank
-        }
-    }
-
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 6) {
-                    metricValue
-                    metricDescription
-                }
+                playsMetric
+                Divider()
+                listeningTimeMetric
             } else {
-                HStack(alignment: .center, spacing: 10) {
-                    metricValue
-                    metricDescription
+                HStack(spacing: 0) {
+                    playsMetric
+                    Divider()
+                        .frame(height: 34)
+                    listeningTimeMetric
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .playCountDetailCardSurface(cornerRadius: 18)
+        .accessibilityElement(children: .contain)
     }
 
-    private var metricValue: some View {
-        Text(value)
-            .font(.system(size: 25, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.68)
+    private var playsMetric: some View {
+        MediaDetailMetric(
+            title: "Plays",
+            value: playCount.detailFormatted,
+            subtitle: playCountRank.map { "Ranked #\($0)" }
+        )
     }
 
-    private var metricDescription: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
-                .tracking(0.5)
-                .lineLimit(1)
-
-            Text(rank.map { "\(supportingText) • Ranked #\($0)" } ?? supportingText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                .minimumScaleFactor(0.72)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var listeningTimeMetric: some View {
+        MediaDetailMetric(
+            title: "Time Listened",
+            value: duration.formattedListenTime,
+            subtitle: listenTimeRank.map { "Ranked #\($0)" }
+        )
     }
 }
 
@@ -1257,6 +1141,83 @@ private struct MediaDetailCardSurfaceModifier: ViewModifier {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.08))
                 }
+        }
+    }
+}
+
+private struct SongRelatedSections: View {
+    let song: TopSong
+    let albumSongs: [TopSong]
+    let artistSongs: [TopSong]
+    let columns: [GridItem]
+    let manager: MediaLibraryManager
+    let recapContext: RecapDrilldownContext?
+    let displayLimit: Int
+
+    var body: some View {
+        if !albumSongs.isEmpty || !artistSongs.isEmpty {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                if !albumSongs.isEmpty {
+                    RelatedSongsSection(
+                        title: "On This Album",
+                        songs: albumSongs,
+                        manager: manager,
+                        currentSongID: song.id,
+                        displayLimit: displayLimit,
+                        recapContext: recapContext
+                    )
+                }
+
+                if !artistSongs.isEmpty {
+                    RelatedSongsSection(
+                        title: "More by \(song.artist)",
+                        songs: artistSongs,
+                        manager: manager,
+                        currentSongID: song.id,
+                        displayLimit: displayLimit,
+                        recapContext: recapContext
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct AlbumSongsSection: View {
+    let songs: [TopSong]
+    let sortMetric: MediaLibraryManager.SortMetric
+    let manager: MediaLibraryManager
+    let recapContext: RecapDrilldownContext?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Songs")
+                .font(.title3.weight(.semibold))
+
+            if songs.isEmpty {
+                Text("We haven't tracked individual plays for this album yet.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(songs.enumerated(), id: \.element.id) { index, song in
+                        VStack(spacing: 0) {
+                            NavigationLink {
+                                SongInfoView(song: song, manager: manager, recapContext: recapContext)
+                            } label: {
+                                AlbumTrackRow(song: song, sortMetric: sortMetric)
+                            }
+                            .buttonStyle(.plain)
+
+                            if index < songs.count - 1 {
+                                Divider()
+                                    .overlay(Color.primary.opacity(0.1))
+                            }
+                        }
+                    }
+                }
+                .playCountDetailCardSurface(cornerRadius: 20)
+            }
         }
     }
 }
@@ -1629,7 +1590,7 @@ private struct ArtistSongsListView: View {
     let recapContext: RecapDrilldownContext?
 
     private var songs: [TopSong] {
-        sortedSongs(manager.songs(for: artist), by: sortMetric)
+        manager.songs(for: artist)
     }
 
     var body: some View {
@@ -1641,7 +1602,7 @@ private struct ArtistSongsListView: View {
                     message: "Play songs by \(artist.name) to see them here."
                 )
             } else {
-                ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                ForEach(songs.enumerated(), id: \.element.id) { index, song in
                     NavigationLink {
                         SongInfoView(song: song, manager: manager, recapContext: recapContext)
                     } label: {
@@ -1654,50 +1615,6 @@ private struct ArtistSongsListView: View {
         .scrollIndicators(.hidden)
         .navigationTitle("\(artist.name) Songs")
         .playCountPushedTitleDisplayMode()
-    }
-}
-
-private func sortedSongs(_ songs: [TopSong], by metric: MediaLibraryManager.SortMetric) -> [TopSong] {
-    songs.sorted { lhs, rhs in
-        switch metric {
-        case .playCount:
-            if lhs.playCount != rhs.playCount {
-                return lhs.playCount > rhs.playCount
-            }
-            if lhs.totalPlayDuration != rhs.totalPlayDuration {
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
-            }
-        case .listenTime:
-            if lhs.totalPlayDuration != rhs.totalPlayDuration {
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
-            }
-            if lhs.playCount != rhs.playCount {
-                return lhs.playCount > rhs.playCount
-            }
-        }
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-    }
-}
-
-private func sortedAlbums(_ albums: [TopAlbum], by metric: MediaLibraryManager.SortMetric) -> [TopAlbum] {
-    albums.sorted { lhs, rhs in
-        switch metric {
-        case .playCount:
-            if lhs.playCount != rhs.playCount {
-                return lhs.playCount > rhs.playCount
-            }
-            if lhs.totalPlayDuration != rhs.totalPlayDuration {
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
-            }
-        case .listenTime:
-            if lhs.totalPlayDuration != rhs.totalPlayDuration {
-                return lhs.totalPlayDuration > rhs.totalPlayDuration
-            }
-            if lhs.playCount != rhs.playCount {
-                return lhs.playCount > rhs.playCount
-            }
-        }
-        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 }
 
@@ -1715,7 +1632,7 @@ private struct ArtistAlbumsListView: View {
     let recapContext: RecapDrilldownContext?
 
     private var albums: [TopAlbum] {
-        sortedAlbums(manager.albums(for: artist), by: sortMetric)
+        manager.albums(for: artist)
     }
 
     var body: some View {
@@ -1727,7 +1644,7 @@ private struct ArtistAlbumsListView: View {
                     message: "Listen to \(artist.name) to see their albums here."
                 )
             } else {
-                ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
+                ForEach(albums.enumerated(), id: \.element.id) { index, album in
                     NavigationLink {
                         AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
                     } label: {
