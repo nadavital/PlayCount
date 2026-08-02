@@ -10,6 +10,25 @@ private extension View {
             background(.ultraThinMaterial, in: Circle())
         }
     }
+
+    @ViewBuilder
+    func recapMonthDragOffset(_ offset: CGFloat?) -> some View {
+        if let offset {
+            self.offset(x: offset)
+        } else {
+            self
+        }
+    }
+
+    func recapCollageFrame(height: CGFloat, label: String) -> some View {
+        self
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+    }
+
 }
 
 struct MonthlyRecapView: View {
@@ -295,14 +314,25 @@ struct MonthlyRecapView: View {
             )
         }
 
-        for song in manager.topSongs {
-            let key = song.albumPersistentID == 0 ? song.albumTitle.recapAlbumArtworkKey : "album-id-\(song.albumPersistentID)"
-            appendUniqueArtwork(key: key, artwork: song.artwork, seen: &seen, result: &result)
+        for album in recap.topAlbums {
+            appendUniqueArtwork(
+                key: album.title.recapAlbumArtworkKey,
+                artwork: resolvedArtwork(for: album, systemImage: "rectangle.stack.fill"),
+                seen: &seen,
+                result: &result
+            )
         }
 
-        for album in manager.topAlbums {
-            let key = album.id == 0 ? album.title.recapAlbumArtworkKey : "album-id-\(album.id)"
-            appendUniqueArtwork(key: key, artwork: album.artwork, seen: &seen, result: &result)
+        // Artist artwork is usually borrowed from one of the artist's albums.
+        // Only use it when the month has no song or album artwork so a sparse
+        // recap stays sparse instead of repeating the same release as filler.
+        if result.isEmpty, let artist = recap.topArtists.first {
+            appendUniqueArtwork(
+                key: artist.title.normalizedRecapArtworkKey,
+                artwork: resolvedArtwork(for: artist, systemImage: "person.fill"),
+                seen: &seen,
+                result: &result
+            )
         }
 
         return result
@@ -312,14 +342,14 @@ struct MonthlyRecapView: View {
         let recapSongIDs = (recap.topSongs.prefix(6).map(\.id) + recap.topNewSongs.prefix(6).map(\.id))
             .map { String($0) }
             .joined(separator: ",")
-        let libraryAlbumIDs = manager.topAlbums.prefix(6).map { String($0.id) }.joined(separator: ",")
-        let librarySongIDs = manager.topSongs.prefix(6).map { String($0.id) }.joined(separator: ",")
+        let recapAlbumIDs = recap.topAlbums.prefix(6).map(\.id).joined(separator: ",")
+        let recapArtistIDs = recap.topArtists.prefix(6).map(\.id).joined(separator: ",")
         return [
             String(recap.monthStart.timeIntervalSinceReferenceDate),
             String(recap.generatedAt.timeIntervalSinceReferenceDate),
             recapSongIDs,
-            librarySongIDs,
-            libraryAlbumIDs
+            recapAlbumIDs,
+            recapArtistIDs
         ].joined(separator: "|")
     }
 
@@ -463,7 +493,7 @@ struct MonthlyRecapView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 280)
                 } else {
-                    VStack(alignment: .leading, spacing: 22) {
+                    LazyVStack(alignment: .leading, spacing: 22) {
                         RecapHeroPoster(
                             recap: recap,
                             artworks: cachedArtworkHighlights,
@@ -496,7 +526,7 @@ struct MonthlyRecapView: View {
                     .padding(.bottom, isRegularWidth ? 132 : 154)
                     .frame(maxWidth: 1120, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .offset(x: monthDragDisplayOffset)
+                    .recapMonthDragOffset(monthDragAxis == .horizontal ? monthDragDisplayOffset : nil)
                     .disabled(isSuppressingRecapNavigation)
                 }
             }
@@ -952,7 +982,10 @@ struct MonthlyRecapView: View {
                 }
 
                 if monthDragAxis == .undecided {
-                    monthDragAxis = resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical)
+                    guard resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical) == .horizontal else {
+                        return
+                    }
+                    monthDragAxis = .horizontal
                 }
 
                 guard monthDragAxis == .horizontal else { return }
@@ -963,16 +996,7 @@ struct MonthlyRecapView: View {
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                let dragAxis: MonthDragAxis
-                if monthDragAxis == .undecided {
-                    dragAxis = resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical)
-                } else {
-                    dragAxis = monthDragAxis
-                }
-                guard !isUsingYearlyBreakdownStrip, dragAxis == .horizontal else {
-                    resetMonthDragState()
-                    return
-                }
+                guard !isUsingYearlyBreakdownStrip, monthDragAxis == .horizontal else { return }
                 defer {
                     withAnimation(.smooth(duration: 0.22)) { resetMonthDragState() }
                     releaseRecapNavigationAfterSwipe()
@@ -1236,41 +1260,90 @@ private struct RecapArtworkCollage: View {
     let artworks: [MPMediaItemArtwork]
     let layout: Layout
 
+    @ViewBuilder
     var body: some View {
-        if artworks.isEmpty {
+        switch artworks.count {
+        case 0:
             emptyArtwork
-        } else {
-            ZStack {
-                ForEach(sideArtworks.enumerated(), id: \.offset) { index, artwork in
-                    ArtworkView(
-                        artwork: artwork,
-                        size: sideArtworkSize(for: index),
-                        cornerRadius: sideArtworkCornerRadius(for: index)
-                    )
+        case 1:
+            singleArtwork
+        case 2:
+            pairedArtwork
+        case 3:
+            threeArtwork
+        default:
+            fullCollage
+        }
+    }
+
+    private var singleArtwork: some View {
+        ArtworkView(
+            artwork: artworks.first,
+            size: layout == .regular ? CGSize(width: 224, height: 224) : CGSize(width: 190, height: 190),
+            cornerRadius: layout == .regular ? 30 : 26
+        )
+        .shadow(color: .black.opacity(0.20), radius: 22, x: 0, y: 14)
+        .recapCollageFrame(height: collageHeight, label: "Recap album artwork")
+    }
+
+    private var pairedArtwork: some View {
+        ZStack {
+            ForEach(artworks.prefix(2).enumerated(), id: \.offset) { index, artwork in
+                ArtworkView(
+                    artwork: artwork,
+                    size: layout == .regular ? CGSize(width: 184, height: 184) : CGSize(width: 150, height: 150),
+                    cornerRadius: layout == .regular ? 26 : 22
+                )
+                .rotationEffect(.degrees(index == 0 ? -5 : 5))
+                .offset(x: index == 0 ? pairedOffset : -pairedOffset)
+                .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 12)
+            }
+        }
+        .recapCollageFrame(height: collageHeight, label: "Two recap album artworks")
+    }
+
+    private var threeArtwork: some View {
+        ZStack {
+            ForEach(artworks.dropFirst().prefix(2).enumerated(), id: \.offset) { index, artwork in
+                ArtworkView(
+                    artwork: artwork,
+                    size: layout == .regular ? CGSize(width: 146, height: 146) : CGSize(width: 116, height: 116),
+                    cornerRadius: layout == .regular ? 22 : 18
+                )
+                .rotationEffect(.degrees(index == 0 ? -8 : 8))
+                .offset(x: index == 0 ? threeArtworkOffset : -threeArtworkOffset, y: 22)
+                .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 8)
+            }
+            ArtworkView(
+                artwork: artworks.first,
+                size: mainArtworkSize,
+                cornerRadius: layout == .regular ? 28 : 24
+            )
+            .shadow(color: .black.opacity(0.22), radius: 22, x: 0, y: 14)
+        }
+        .recapCollageFrame(height: collageHeight, label: "Three recap album artworks")
+    }
+
+    private var fullCollage: some View {
+        ZStack {
+            ForEach(sideArtworks.enumerated(), id: \.offset) { index, artwork in
+                ArtworkView(artwork: artwork, size: sideArtworkSize(for: index), cornerRadius: sideArtworkCornerRadius(for: index))
                     .rotationEffect(.degrees(sideArtworkRotation(for: index)))
                     .offset(sideArtworkOffset(for: index))
                     .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 8)
                     .zIndex(Double(index))
-                }
-
-                if let mainArtwork = artworks.first {
-                    ArtworkView(
-                        artwork: mainArtwork,
-                        size: mainArtworkSize,
-                        cornerRadius: layout == .regular ? 28 : 24
-                    )
-                    .rotationEffect(.degrees(-1.5))
-                    .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 16)
-                    .zIndex(20)
-                }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: layout == .regular ? 282 : 228)
-            .contentShape(Rectangle())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Recap album artwork collage")
+            ArtworkView(artwork: artworks.first, size: mainArtworkSize, cornerRadius: layout == .regular ? 28 : 24)
+                .rotationEffect(.degrees(-1.5))
+                .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 16)
+                .zIndex(20)
         }
+        .recapCollageFrame(height: collageHeight, label: "Recap album artwork collage")
     }
+
+    private var collageHeight: CGFloat { layout == .regular ? 282 : 228 }
+    private var pairedOffset: CGFloat { layout == .regular ? -66 : -52 }
+    private var threeArtworkOffset: CGFloat { layout == .regular ? -142 : -104 }
 
     private var sideArtworks: [MPMediaItemArtwork] {
         Array(artworks.dropFirst().prefix(sideArtworkLimit))
@@ -1373,8 +1446,7 @@ private struct RecapArtworkCollage: View {
                         .foregroundStyle(.secondary)
                 }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 242)
+        .recapCollageFrame(height: collageHeight, label: "No recap artwork yet")
     }
 }
 
