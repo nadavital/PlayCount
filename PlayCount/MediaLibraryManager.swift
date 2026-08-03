@@ -298,6 +298,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             guard oldValue != sortMetric else { return }
             applySortAndLimit()
             resortGroupedIndexes()
+            resortDeferredGroupedIndexes()
+            detailPresentationUpdates.notify()
         }
     }
     @Published private(set) var hasLoadedInitialSnapshot = false
@@ -428,8 +430,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func debugPublishRecapFixture(_ recap: MonthlyRecap) {
-        updateDeferredLibraryRecap(recap)
+        let updatedDeferredPresentation = updateDeferredLibraryRecap(recap)
         monthlyRecap = recap
+        if !updatedDeferredPresentation {
+            detailPresentationUpdates.notify()
+        }
     }
 
     var debugRecapHydrationSongIDs: [UInt64] {
@@ -952,8 +957,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
                 } ?? self.monthlyRecap
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: currentRecap)
-                self.updateDeferredLibraryRecap(currentRecap)
+                let updatedDeferredPresentation = self.updateDeferredLibraryRecap(currentRecap)
                 self.monthlyRecap = currentRecap
+                if !updatedDeferredPresentation {
+                    self.detailPresentationUpdates.notify()
+                }
                 if !cachedPresentation.availableMonthStarts.isEmpty {
                     self.availableRecapMonths = cachedPresentation.availableMonthStarts
                 }
@@ -1314,8 +1322,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     return
                 }
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: recap)
-                self.updateDeferredLibraryRecap(recap)
+                let updatedDeferredPresentation = self.updateDeferredLibraryRecap(recap)
                 self.monthlyRecap = recap
+                if !updatedDeferredPresentation {
+                    self.detailPresentationUpdates.notify()
+                }
                 self.availableRecapMonths = availableMonths
                 self.isLoading = false
                 self.isPreparingInsights = false
@@ -1456,6 +1467,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             resortGroupedIndexes()
         }
 
+        detailPresentationUpdates.notify()
+
         if updatesSearchIndex {
             let indexedSongs = prepared.sortedSongs
             let indexedAlbums = prepared.sortedAlbums
@@ -1493,14 +1506,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         )
     }
 
-    private func updateDeferredLibraryRecap(_ recap: MonthlyRecap) {
-        guard let deferredLibraryPresentation else { return }
+    @discardableResult
+    private func updateDeferredLibraryRecap(_ recap: MonthlyRecap) -> Bool {
+        guard let deferredLibraryPresentation else { return false }
         self.deferredLibraryPresentation = DeferredLibraryPresentation(
             preparedSnapshot: deferredLibraryPresentation.preparedSnapshot,
             recap: recap,
             updatesSearchIndex: deferredLibraryPresentation.updatesSearchIndex
         )
         detailPresentationUpdates.notify()
+        return true
     }
 
     var detailMonthlyRecap: MonthlyRecap {
@@ -1534,6 +1549,49 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         songsByArtistKey = songsByArtistKey.mapValues(sortSongs)
         albumsByArtistID = albumsByArtistID.mapValues(sortAlbums)
         albumsByArtistKey = albumsByArtistKey.mapValues(sortAlbums)
+    }
+
+    private func resortDeferredGroupedIndexes() {
+        guard let deferredLibraryPresentation else { return }
+        let prepared = deferredLibraryPresentation.preparedSnapshot
+        let indexes = prepared.indexes
+        let resortedIndexes = LibraryIndexes(
+            songsByPersistentID: indexes.songsByPersistentID,
+            albumsByPersistentID: indexes.albumsByPersistentID,
+            artistsByPersistentID: indexes.artistsByPersistentID,
+            songsByTitleArtistKey: indexes.songsByTitleArtistKey,
+            albumsByTitleArtistKey: indexes.albumsByTitleArtistKey,
+            artistsByNameKey: indexes.artistsByNameKey,
+            songsByAlbumID: indexes.songsByAlbumID.mapValues(sortSongs),
+            songsByAlbumKey: indexes.songsByAlbumKey.mapValues(sortSongs),
+            songsByArtistID: indexes.songsByArtistID.mapValues(sortSongs),
+            songsByArtistKey: indexes.songsByArtistKey.mapValues(sortSongs),
+            albumsByArtistID: indexes.albumsByArtistID.mapValues(sortAlbums),
+            albumsByArtistKey: indexes.albumsByArtistKey.mapValues(sortAlbums),
+            songPlayCountRanks: indexes.songPlayCountRanks,
+            songListenTimeRanks: indexes.songListenTimeRanks,
+            albumPlayCountRanks: indexes.albumPlayCountRanks,
+            albumListenTimeRanks: indexes.albumListenTimeRanks,
+            artistPlayCountRanks: indexes.artistPlayCountRanks,
+            artistListenTimeRanks: indexes.artistListenTimeRanks
+        )
+        let resortedPreparedSnapshot = PreparedLibrarySnapshot(
+            snapshot: prepared.snapshot,
+            summary: prepared.summary,
+            sortedSongs: prepared.sortedSongs,
+            sortedAlbums: prepared.sortedAlbums,
+            sortedArtists: prepared.sortedArtists,
+            topSongs: prepared.topSongs,
+            topAlbums: prepared.topAlbums,
+            topArtists: prepared.topArtists,
+            indexes: resortedIndexes,
+            sortMetric: prepared.sortMetric
+        )
+        self.deferredLibraryPresentation = DeferredLibraryPresentation(
+            preparedSnapshot: resortedPreparedSnapshot,
+            recap: deferredLibraryPresentation.recap,
+            updatesSearchIndex: deferredLibraryPresentation.updatesSearchIndex
+        )
     }
 
     private func updateLibraryIndexes(songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
@@ -1662,6 +1720,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func song(withPersistentID id: UInt64) -> TopSong? {
+        guard id != 0 else { return nil }
         if let match = detailLibraryIndexes?.songsByPersistentID[id] ?? songsByPersistentID[id] {
             return match
         }
@@ -1699,6 +1758,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func album(withPersistentID id: UInt64) -> TopAlbum? {
+        guard id != 0 else { return nil }
         if let match = detailLibraryIndexes?.albumsByPersistentID[id] ?? albumsByPersistentID[id] {
             return match
         }
@@ -1712,6 +1772,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func artist(withPersistentID id: UInt64) -> TopArtist? {
+        guard id != 0 else { return nil }
         if let match = detailLibraryIndexes?.artistsByPersistentID[id] ?? artistsByPersistentID[id] {
             return match
         }

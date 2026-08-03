@@ -5,6 +5,97 @@ import MediaPlayer
 
 final class MediaLibraryManagerIndexTests: XCTestCase {
     @MainActor
+    func testDetailUpdatesPublishForImmediateLibraryAndMetricChanges() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let initialRevision = manager.detailPresentationUpdates.revision
+
+        manager.debugLoadLibraryFixture(
+            songs: [song(id: 1, title: "Song", artist: "Artist", playCount: 1)],
+            albums: [],
+            artists: []
+        )
+        XCTAssertEqual(manager.detailPresentationUpdates.revision, initialRevision + 1)
+
+        manager.sortMetric = .listenTime
+        XCTAssertEqual(manager.detailPresentationUpdates.revision, initialRevision + 2)
+    }
+
+    @MainActor
+    func testDetailUpdatesPublishForRecapChanges() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let initialRevision = manager.detailPresentationUpdates.revision
+
+        manager.debugPublishRecapFixture(.empty(for: Date(timeIntervalSince1970: 1_896_134_400)))
+
+        XCTAssertEqual(manager.detailPresentationUpdates.revision, initialRevision + 1)
+    }
+
+    @MainActor
+    func testMetricChangeResortsDeferredDetailIndexes() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let album = album(
+            id: 100,
+            title: "Album",
+            artist: "Artist",
+            playCount: 15,
+            artistPersistentID: 10
+        )
+        let playLeader = song(
+            id: 1,
+            title: "Play Leader",
+            artist: "Artist",
+            playCount: 10,
+            totalPlayDuration: 600,
+            albumPersistentID: album.id,
+            artistPersistentID: 10
+        )
+        let timeLeader = song(
+            id: 2,
+            title: "Time Leader",
+            artist: "Artist",
+            playCount: 5,
+            totalPlayDuration: 1_800,
+            albumPersistentID: album.id,
+            artistPersistentID: 10
+        )
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(
+            songs: [playLeader, timeLeader],
+            albums: [album],
+            artists: [artist(id: 10, name: "Artist")]
+        )
+
+        XCTAssertEqual(manager.songs(for: album).map(\.id), [playLeader.id, timeLeader.id])
+
+        manager.sortMetric = .listenTime
+
+        XCTAssertEqual(manager.songs(for: album).map(\.id), [timeLeader.id, playLeader.id])
+    }
+
+    func testZeroPersistentIDsUseMetadataFallbackInsteadOfColliding() {
+        let firstSong = song(id: 0, title: "First Song", artist: "First Artist", playCount: 2)
+        let secondSong = song(id: 0, title: "Second Song", artist: "Second Artist", playCount: 3)
+        let firstAlbum = album(id: 0, title: "First Album", artist: "First Artist", playCount: 2, artistPersistentID: 0)
+        let secondAlbum = album(id: 0, title: "Second Album", artist: "Second Artist", playCount: 3, artistPersistentID: 0)
+        let firstArtist = artist(id: 0, name: "First Artist")
+        let secondArtist = artist(id: 0, name: "Second Artist")
+        let manager = manager(
+            songs: [firstSong, secondSong],
+            albums: [firstAlbum, secondAlbum],
+            artists: [firstArtist, secondArtist]
+        )
+
+        XCTAssertNil(manager.song(withPersistentID: 0))
+        XCTAssertEqual(manager.song(matchingTitle: secondSong.title, artist: secondSong.artist)?.title, secondSong.title)
+        XCTAssertNil(manager.album(withPersistentID: 0))
+        XCTAssertEqual(manager.album(matchingTitle: secondAlbum.title, artist: secondAlbum.artist)?.title, secondAlbum.title)
+        XCTAssertNil(manager.artist(withPersistentID: 0))
+        XCTAssertEqual(manager.artist(matchingName: secondArtist.name)?.name, secondArtist.name)
+    }
+
+    @MainActor
     func testDetailPresentationDefersBulkLibraryPublicationUntilDismissal() async {
         let manager = MediaLibraryManager(
             recapCloudSyncService: nil,
@@ -60,6 +151,9 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         manager.setDetailPresentationActive(true, owner: owner)
         manager.debugLoadLibraryFixture(songs: [refreshedSong], albums: [], artists: [])
         manager.debugPublishRecapFixture(preparedRecap)
+
+        XCTAssertEqual(manager.detailMonthlyRecap.monthStart, preparedRecap.monthStart)
+
         manager.setDetailPresentationActive(false, owner: owner)
         try? await Task.sleep(for: .milliseconds(500))
 

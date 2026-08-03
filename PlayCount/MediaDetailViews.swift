@@ -261,11 +261,12 @@ struct SongInfoView: View {
 
 struct AlbumInfoView: View {
     let album: TopAlbum
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsNavigationTitle = false
+    @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
 
     init(
         album: TopAlbum,
@@ -277,32 +278,43 @@ struct AlbumInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
+        _detailUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
     }
 
     private var artist: TopArtist? {
-        manager.artist(withPersistentID: album.artistPersistentID)
+        manager.artist(withPersistentID: currentAlbum.artistPersistentID)
+    }
+
+    private var currentAlbum: TopAlbum {
+        if album.id != 0, let resolved = manager.album(withPersistentID: album.id) {
+            return resolved
+        }
+        return manager.album(matchingTitle: album.title, artist: album.artist) ?? album
     }
 
     private var detailRecapContext: RecapDrilldownContext? {
         if let recapContext {
             return recapContext
         }
-        guard manager.monthlyRecap.hasActivity else { return nil }
+        let monthlyRecap = manager.detailMonthlyRecap
+        guard monthlyRecap.hasActivity else { return nil }
         return RecapDrilldownContext(
-            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
-            songs: manager.monthlyRecap.topSongs
+            monthTitle: monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: monthlyRecap.topSongs
         )
     }
 
     var body: some View {
+        let _ = detailUpdates.revision
+        let resolvedAlbum = currentAlbum
         let resolvedRecapContext = detailRecapContext
-        let albumSongs = manager.songs(for: album)
-        let monthlySongs = resolvedRecapContext?.songs(for: album) ?? []
-        let periodSummaries = resolvedRecapContext?.periodSummaries(for: album) ?? []
+        let albumSongs = manager.songs(for: resolvedAlbum)
+        let monthlySongs = resolvedRecapContext?.songs(for: resolvedAlbum) ?? []
+        let periodSummaries = resolvedRecapContext?.periodSummaries(for: resolvedAlbum) ?? []
 
         ScrollView {
             LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
-                AlbumDetailHeader(album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
+                AlbumDetailHeader(album: resolvedAlbum, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
 
                 if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -339,19 +351,32 @@ struct AlbumInfoView: View {
             guard showsNavigationTitle != shouldShowTitle else { return }
             showsNavigationTitle = shouldShowTitle
         }
-        .background(MediaDetailBackground(artwork: album.artwork))
+        .background(MediaDetailBackground(artwork: resolvedAlbum.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(showsNavigationTitle ? album.title : "")
+        .navigationTitle("")
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(resolvedAlbum.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .opacity(showsNavigationTitle ? 1 : 0)
+                    .accessibilityHidden(!showsNavigationTitle)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 detailMetricPicker
             }
         }
-        .playCountAlbumEntityIdentifier(album)
+        .playCountAlbumEntityIdentifier(resolvedAlbum)
     }
 
     private var detailMetricPicker: some View {
-        LibraryMetricPicker(selection: $manager.sortMetric, displaysIcon: false)
+        LibraryMetricPicker(
+            selection: Binding(
+                get: { manager.sortMetric },
+                set: { manager.sortMetric = $0 }
+            ),
+            displaysIcon: false
+        )
     }
 
     private var isRegularWidth: Bool {
@@ -365,11 +390,12 @@ struct AlbumInfoView: View {
 
 struct ArtistInfoView: View {
     let artist: TopArtist
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsNavigationTitle = false
+    @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
 
     private let displayLimit = 5
     private let topSongsSectionID = "artist-detail-top-songs"
@@ -392,23 +418,34 @@ struct ArtistInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
+        _detailUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
     }
 
     private var detailRecapContext: RecapDrilldownContext? {
         if let recapContext {
             return recapContext
         }
-        guard manager.monthlyRecap.hasActivity else { return nil }
+        let monthlyRecap = manager.detailMonthlyRecap
+        guard monthlyRecap.hasActivity else { return nil }
         return RecapDrilldownContext(
-            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
-            songs: manager.monthlyRecap.topSongs
+            monthTitle: monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: monthlyRecap.topSongs
         )
     }
 
+    private var currentArtist: TopArtist {
+        if artist.id != 0, let resolved = manager.artist(withPersistentID: artist.id) {
+            return resolved
+        }
+        return manager.artist(matchingName: artist.name) ?? artist
+    }
+
     var body: some View {
+        let _ = detailUpdates.revision
+        let resolvedArtist = currentArtist
         let resolvedRecapContext = detailRecapContext
-        let songs = manager.songs(for: artist)
-        let albums = manager.albums(for: artist)
+        let songs = manager.songs(for: resolvedArtist)
+        let albums = manager.albums(for: resolvedArtist)
         let topSongs = Array(songs.prefix(displayLimit))
         let topAlbums = Array(albums.prefix(displayLimit))
         let monthlySongs = resolvedRecapContext?.songs(for: artist) ?? []
@@ -417,7 +454,7 @@ struct ArtistInfoView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
-                    ArtistDetailHeader(artist: artist, manager: manager)
+                    ArtistDetailHeader(artist: resolvedArtist, manager: manager)
                         .frame(maxWidth: .infinity)
 
                     if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -441,7 +478,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if songs.count > displayLimit {
                                 NavigationLink {
-                                    ArtistSongsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
+                                    ArtistSongsListView(artist: resolvedArtist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -481,7 +518,7 @@ struct ArtistInfoView: View {
                             Spacer()
                             if albums.count > displayLimit {
                                 NavigationLink {
-                                    ArtistAlbumsListView(artist: artist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
+                                    ArtistAlbumsListView(artist: resolvedArtist, manager: manager, sortMetric: manager.sortMetric, recapContext: resolvedRecapContext)
                                 } label: {
                                     Text("See All")
                                         .font(.callout.weight(.semibold))
@@ -532,19 +569,32 @@ struct ArtistInfoView: View {
             guard showsNavigationTitle != shouldShowTitle else { return }
             showsNavigationTitle = shouldShowTitle
         }
-        .background(MediaDetailBackground(artwork: artist.artwork))
+        .background(MediaDetailBackground(artwork: resolvedArtist.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(showsNavigationTitle ? artist.name : "")
+        .navigationTitle("")
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(resolvedArtist.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .opacity(showsNavigationTitle ? 1 : 0)
+                    .accessibilityHidden(!showsNavigationTitle)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 detailMetricPicker
             }
         }
-        .playCountArtistEntityIdentifier(artist)
+        .playCountArtistEntityIdentifier(resolvedArtist)
     }
 
     private var detailMetricPicker: some View {
-        LibraryMetricPicker(selection: $manager.sortMetric, displaysIcon: false)
+        LibraryMetricPicker(
+            selection: Binding(
+                get: { manager.sortMetric },
+                set: { manager.sortMetric = $0 }
+            ),
+            displaysIcon: false
+        )
     }
 
     private var isRegularWidth: Bool {
@@ -663,13 +713,27 @@ private struct SongDetailHeader: View {
 private struct AlbumDetailHeader: View {
     let album: TopAlbum
     let artist: TopArtist?
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var playbackState: MediaLibraryManager.NowPlayingState?
+
+    init(
+        album: TopAlbum,
+        artist: TopArtist?,
+        manager: MediaLibraryManager,
+        recapContext: RecapDrilldownContext?
+    ) {
+        self.album = album
+        self.artist = artist
+        self.manager = manager
+        self.recapContext = recapContext
+        _playbackState = State(initialValue: manager.nowPlayingState)
+    }
 
     private var isCurrentAlbum: Bool {
-        guard let nowPlaying = manager.nowPlayingState?.song else { return false }
+        guard let nowPlaying = playbackState?.song else { return false }
         if album.id != 0 {
             return nowPlaying.albumPersistentID == album.id
         }
@@ -677,7 +741,7 @@ private struct AlbumDetailHeader: View {
     }
 
     private var isPlayingCurrentAlbum: Bool {
-        isCurrentAlbum && (manager.nowPlayingState?.isPlaying == true)
+        isCurrentAlbum && (playbackState?.isPlaying == true)
     }
 
     private var playButtonTitle: String {
@@ -728,6 +792,17 @@ private struct AlbumDetailHeader: View {
                 recapContext: recapContext
             )
         }
+        .onReceive(manager.$nowPlayingState) { state in
+            switch (playbackState, state) {
+            case (nil, nil):
+                return
+            case let (current?, updated?) where current.isDisplayEquivalent(to: updated):
+                return
+            default:
+                break
+            }
+            playbackState = state
+        }
     }
 
     private func handlePlayTapped() {
@@ -741,12 +816,19 @@ private struct AlbumDetailHeader: View {
 
 private struct ArtistDetailHeader: View {
     let artist: TopArtist
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var playbackState: MediaLibraryManager.NowPlayingState?
+
+    init(artist: TopArtist, manager: MediaLibraryManager) {
+        self.artist = artist
+        self.manager = manager
+        _playbackState = State(initialValue: manager.nowPlayingState)
+    }
 
     private var isCurrentArtist: Bool {
-        guard let nowPlaying = manager.nowPlayingState?.song else { return false }
+        guard let nowPlaying = playbackState?.song else { return false }
         if artist.id != 0 {
             return nowPlaying.artistPersistentID == artist.id
         }
@@ -754,7 +836,7 @@ private struct ArtistDetailHeader: View {
     }
 
     private var isPlayingCurrentArtist: Bool {
-        isCurrentArtist && (manager.nowPlayingState?.isPlaying == true)
+        isCurrentArtist && (playbackState?.isPlaying == true)
     }
 
     private var playButtonTitle: String {
@@ -799,6 +881,17 @@ private struct ArtistDetailHeader: View {
             .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
         } identity: {
             ArtistDetailIdentity(name: artist.name)
+        }
+        .onReceive(manager.$nowPlayingState) { state in
+            switch (playbackState, state) {
+            case (nil, nil):
+                return
+            case let (current?, updated?) where current.isDisplayEquivalent(to: updated):
+                return
+            default:
+                break
+            }
+            playbackState = state
         }
     }
 
@@ -1419,14 +1512,31 @@ private struct MonthlyDetailSongsSection: View {
     let title: String
     let subtitle: String
     let songs: [MonthlyRecap.RankedSong]
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext
+    @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
+
+    init(
+        title: String,
+        subtitle: String,
+        songs: [MonthlyRecap.RankedSong],
+        manager: MediaLibraryManager,
+        recapContext: RecapDrilldownContext
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.songs = songs
+        self.manager = manager
+        self.recapContext = recapContext
+        _detailUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
+    }
 
     private var visibleSongs: [MonthlyRecap.RankedSong] {
         Array(songs.prefix(5))
     }
 
     var body: some View {
+        let _ = detailUpdates.revision
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1477,22 +1587,33 @@ private struct MonthlyDetailSongsSection: View {
     }
 
     private func resolvedSong(for song: MonthlyRecap.RankedSong) -> TopSong? {
-        let allSongs = manager.librarySongs + manager.topSongs
-        return allSongs.first { $0.id == song.id }
-            ?? allSongs.first {
-                $0.title.recapDetailMatchKey == song.title.recapDetailMatchKey &&
-                    $0.artist.recapDetailMatchKey == song.artist.recapDetailMatchKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 }
 
 private struct MonthlyDetailSongsListView: View {
     let title: String
     let songs: [MonthlyRecap.RankedSong]
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext
+    @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
+
+    init(
+        title: String,
+        songs: [MonthlyRecap.RankedSong],
+        manager: MediaLibraryManager,
+        recapContext: RecapDrilldownContext
+    ) {
+        self.title = title
+        self.songs = songs
+        self.manager = manager
+        self.recapContext = recapContext
+        _detailUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
+    }
 
     var body: some View {
+        let _ = detailUpdates.revision
         List {
             ForEach(songs) { song in
                 if let topSong = resolvedSong(for: song) {
@@ -1513,12 +1634,8 @@ private struct MonthlyDetailSongsListView: View {
     }
 
     private func resolvedSong(for song: MonthlyRecap.RankedSong) -> TopSong? {
-        let allSongs = manager.librarySongs + manager.topSongs
-        return allSongs.first { $0.id == song.id }
-            ?? allSongs.first {
-                $0.title.recapDetailMatchKey == song.title.recapDetailMatchKey &&
-                    $0.artist.recapDetailMatchKey == song.artist.recapDetailMatchKey
-            }
+        manager.song(withPersistentID: song.id)
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)
     }
 }
 
