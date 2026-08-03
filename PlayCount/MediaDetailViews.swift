@@ -236,7 +236,16 @@ struct SongInfoView: View {
         }
         .background(MediaDetailBackground(artwork: song.artwork))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(showsNavigationTitle ? song.title : "")
+        .navigationTitle("")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(song.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .opacity(showsNavigationTitle ? 1 : 0)
+                    .accessibilityHidden(!showsNavigationTitle)
+            }
+        }
         .playCountSongEntityIdentifier(song)
     }
 

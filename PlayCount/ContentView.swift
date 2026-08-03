@@ -213,6 +213,7 @@ private struct AuthorizedLibraryView: View {
             NavigationStack {
                 SongInfoView(song: song, manager: manager)
             }
+            .presentationContentInteraction(.scrolls)
         }
         .onChange(of: presentedNowPlayingSong?.id, initial: true) { _, songID in
             manager.setDetailPresentationActive(songID != nil, owner: detailPresentationOwner)
