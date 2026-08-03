@@ -47,6 +47,7 @@ struct iPadLibraryView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
+    @State private var detailPresentationOwner = UUID()
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -106,6 +107,12 @@ struct iPadLibraryView: View {
                     }
                     .toolbar(LibraryTab.isScreenshotModeEnabled ? .hidden : .visible, for: .navigationBar)
             }
+        }
+        .onChange(of: presentedNowPlayingSong?.id, initial: true) { _, songID in
+            manager.setDetailPresentationActive(songID != nil, owner: detailPresentationOwner)
+        }
+        .onDisappear {
+            manager.setDetailPresentationActive(false, owner: detailPresentationOwner)
         }
         .task {
             if PlayCountNavigationRequestStore.consumeLatestRecapRequest() {

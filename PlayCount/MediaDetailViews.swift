@@ -141,11 +141,12 @@ struct RecapDrilldownContext {
 
 struct SongInfoView: View {
     let song: TopSong
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let reservesBottomAccessorySpace: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsNavigationTitle = false
+    @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
 
     init(
         song: TopSong,
@@ -157,6 +158,7 @@ struct SongInfoView: View {
         self.manager = manager
         self.recapContext = recapContext
         self.reservesBottomAccessorySpace = reservesBottomAccessorySpace
+        _detailUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
     }
 
     private var album: TopAlbum? {
@@ -178,14 +180,16 @@ struct SongInfoView: View {
         if let recapContext {
             return recapContext
         }
-        guard manager.monthlyRecap.hasActivity else { return nil }
+        let monthlyRecap = manager.detailMonthlyRecap
+        guard monthlyRecap.hasActivity else { return nil }
         return RecapDrilldownContext(
-            monthTitle: manager.monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
-            songs: manager.monthlyRecap.topSongs
+            monthTitle: monthlyRecap.monthStart.formatted(.dateTime.month(.wide).year()),
+            songs: monthlyRecap.topSongs
         )
     }
 
     var body: some View {
+        let _ = detailUpdates.revision
         let resolvedRecapContext = detailRecapContext
         let albumSongs = album.map { manager.songs(for: $0) } ?? []
         let artistSongs = artist.map { manager.songs(for: $0) } ?? []
@@ -547,17 +551,33 @@ private struct SongDetailHeader: View {
     let song: TopSong
     let album: TopAlbum?
     let artist: TopArtist?
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var playbackState: MediaLibraryManager.NowPlayingState?
+
+    init(
+        song: TopSong,
+        album: TopAlbum?,
+        artist: TopArtist?,
+        manager: MediaLibraryManager,
+        recapContext: RecapDrilldownContext?
+    ) {
+        self.song = song
+        self.album = album
+        self.artist = artist
+        self.manager = manager
+        self.recapContext = recapContext
+        _playbackState = State(initialValue: manager.nowPlayingState)
+    }
 
     private var isCurrentSong: Bool {
-        manager.nowPlayingState?.song?.id == song.id
+        playbackState?.song?.id == song.id
     }
 
     private var isPlayingCurrentSong: Bool {
-        isCurrentSong && (manager.nowPlayingState?.isPlaying == true)
+        isCurrentSong && (playbackState?.isPlaying == true)
     }
 
     private var playButtonTitle: String {
@@ -608,6 +628,17 @@ private struct SongDetailHeader: View {
                 manager: manager,
                 recapContext: recapContext
             )
+        }
+        .onReceive(manager.$nowPlayingState) { state in
+            switch (playbackState, state) {
+            case (nil, nil):
+                return
+            case let (current?, updated?) where current.isDisplayEquivalent(to: updated):
+                return
+            default:
+                break
+            }
+            playbackState = state
         }
     }
 
@@ -1281,7 +1312,7 @@ private struct MonthlyDetailSongSection: View {
 private struct RelatedSongsSection: View {
     let title: String
     let songs: [TopSong]
-    @ObservedObject var manager: MediaLibraryManager
+    let manager: MediaLibraryManager
     let sortMetric: MediaLibraryManager.SortMetric
     let currentSongID: UInt64?
     let displayLimit: Int?

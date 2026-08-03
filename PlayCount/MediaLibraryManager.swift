@@ -157,6 +157,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     
     static let shared = MediaLibraryManager()
 
+    final class DetailPresentationUpdates: ObservableObject {
+        @Published private(set) var revision = 0
+
+        fileprivate func notify() {
+            revision &+= 1
+        }
+    }
+
     private struct LibraryIndexes {
         let songsByPersistentID: [UInt64: TopSong]
         let albumsByPersistentID: [UInt64: TopAlbum]
@@ -189,6 +197,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let topArtists: [TopArtist]
         let indexes: LibraryIndexes
         let sortMetric: SortMetric
+    }
+
+    private struct DeferredLibraryPresentation {
+        let preparedSnapshot: PreparedLibrarySnapshot
+        let recap: MonthlyRecap
+        let updatesSearchIndex: Bool
     }
     
     enum SortMetric: String, CaseIterable, Identifiable {
@@ -293,6 +307,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
     @Published private(set) var availableRecapMonths: [Date] = []
     let nowPlayingProgress = NowPlayingProgress()
+    let detailPresentationUpdates = DetailPresentationUpdates()
 
     private let fetchLimit: Int
     private lazy var mediaLibrary = MPMediaLibrary.default()
@@ -342,6 +357,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private var albumListenTimeRanks: [UInt64: Int] = [:]
     private var artistPlayCountRanks: [UInt64: Int] = [:]
     private var artistListenTimeRanks: [UInt64: Int] = [:]
+    private var activeDetailPresentationOwners: Set<UUID> = []
+    private var deferredLibraryPresentation: DeferredLibraryPresentation?
+    private var deferredSnapshotFlushGeneration = 0
 
     init(
         fetchLimit: Int = 0,
@@ -394,15 +412,28 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     func debugLoadLibraryFixture(
         songs: [TopSong],
         albums: [TopAlbum],
-        artists: [TopArtist]
+        artists: [TopArtist],
+        recap: MonthlyRecap? = nil
     ) {
-        librarySongs = songs
-        libraryAlbums = albums
-        libraryArtists = artists
-        librarySummary = LibrarySummary(songs: songs, albums: albums, artists: artists)
-        applySortAndLimit()
-        updateLibraryIndexes(songs: songs, albums: albums, artists: artists)
+        applyOrDeferPreparedLibrarySnapshot(
+            Self.prepareLibrarySnapshot(
+                MediaLibrarySnapshot(songs: songs, albums: albums, artists: artists),
+                sortMetric: sortMetric,
+                fetchLimit: fetchLimit
+            ),
+            recap: recap ?? monthlyRecap,
+            updatesSearchIndex: false
+        )
         hasLoadedInitialSnapshot = true
+    }
+
+    func debugPublishRecapFixture(_ recap: MonthlyRecap) {
+        updateDeferredLibraryRecap(recap)
+        monthlyRecap = recap
+    }
+
+    var debugRecapHydrationSongIDs: [UInt64] {
+        recapHydrationSnapshot?.songs.map(\.id) ?? librarySongs.map(\.id)
     }
     #endif
 
@@ -569,7 +600,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                         Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
                     }
                         ?? .empty(for: currentMonth)
-                    self.applyPreparedLibrarySnapshot(
+                    self.applyOrDeferPreparedLibrarySnapshot(
                         preparedCachedSnapshot,
                         recap: cachedRecap,
                         updatesSearchIndex: false
@@ -588,6 +619,37 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 
     func syncRecapFromCloud() {
         scheduleRecapCloudSync()
+    }
+
+    /// Keeps bulk library publications from invalidating an actively scrolled
+    /// detail sheet. The newest prepared snapshot is applied shortly after the
+    /// sheet dismisses, outside its interactive transition.
+    func setDetailPresentationActive(_ isActive: Bool, owner: UUID) {
+        let membershipChanged: Bool
+        if isActive {
+            membershipChanged = activeDetailPresentationOwners.insert(owner).inserted
+        } else {
+            membershipChanged = activeDetailPresentationOwners.remove(owner) != nil
+        }
+        guard membershipChanged else { return }
+        deferredSnapshotFlushGeneration &+= 1
+
+        guard activeDetailPresentationOwners.isEmpty else { return }
+        let generation = deferredSnapshotFlushGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self,
+                  self.activeDetailPresentationOwners.isEmpty,
+                  self.deferredSnapshotFlushGeneration == generation,
+                  let deferred = self.deferredLibraryPresentation else {
+                return
+            }
+            self.deferredLibraryPresentation = nil
+            self.applyPreparedLibrarySnapshot(
+                deferred.preparedSnapshot,
+                recap: deferred.recap,
+                updatesSearchIndex: deferred.updatesSearchIndex
+            )
+        }
     }
 
     @discardableResult
@@ -664,7 +726,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.handleAuthorizationLostDuringRefresh()
                 return false
             }
-            self.applyPreparedLibrarySnapshot(result.0, recap: result.1)
+            self.applyOrDeferPreparedLibrarySnapshot(result.0, recap: result.1)
             self.seedRecapCaches(from: result.2, currentRecap: result.1)
             self.availableRecapMonths = result.2.availableMonthStarts
             self.hasLoadedInitialSnapshot = true
@@ -852,9 +914,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let token = MutationValidityToken()
         cloudSyncToken?.invalidate()
         cloudSyncToken = token
-        let sourceSongs = librarySongs
-        let sourceAlbums = libraryAlbums
-        let sourceArtists = libraryArtists
+        let deferredSnapshot = recapHydrationSnapshot
+        let sourceSongs = deferredSnapshot?.songs ?? librarySongs
+        let sourceAlbums = deferredSnapshot?.albums ?? libraryAlbums
+        let sourceArtists = deferredSnapshot?.artists ?? libraryArtists
 
         let task = Task { [weak self, snapshotStore, recapCloudSyncService] in
             _ = await recapCloudSyncService.sync(
@@ -889,6 +952,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
                 } ?? self.monthlyRecap
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: currentRecap)
+                self.updateDeferredLibraryRecap(currentRecap)
                 self.monthlyRecap = currentRecap
                 if !cachedPresentation.availableMonthStarts.isEmpty {
                     self.availableRecapMonths = cachedPresentation.availableMonthStarts
@@ -1156,7 +1220,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.handleAuthorizationLostDuringRefresh()
                     return
                 }
-                self.applyPreparedLibrarySnapshot(
+                self.applyOrDeferPreparedLibrarySnapshot(
                     preparedSnapshot,
                     recap: self.monthlyRecap,
                     updatesSearchIndex: false
@@ -1171,9 +1235,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.loadingStage = .preparingInsights
 
                 if snapshotReason != .playbackChanged {
-                    let indexedSongs = self.topSongs
-                    let indexedAlbums = self.topAlbums
-                    let indexedArtists = self.topArtists
+                    let indexedSongs = preparedSnapshot.sortedSongs
+                    let indexedAlbums = preparedSnapshot.sortedAlbums
+                    let indexedArtists = preparedSnapshot.sortedArtists
                     Task(priority: .utility) {
                         await PlayCountSiriIntegration.updateSearchIndex(
                             songs: indexedSongs,
@@ -1250,6 +1314,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     return
                 }
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: recap)
+                self.updateDeferredLibraryRecap(recap)
                 self.monthlyRecap = recap
                 self.availableRecapMonths = availableMonths
                 self.isLoading = false
@@ -1287,6 +1352,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         isPreparingInsights = false
         loadingStage = .idle
         pendingSnapshotReason = nil
+        activeDetailPresentationOwners.removeAll()
+        deferredLibraryPresentation = nil
+        deferredSnapshotFlushGeneration &+= 1
         isBackgroundRefreshInFlight = false
         isRecapCloudSyncInFlight = false
         pendingRecapCloudSync = false
@@ -1400,6 +1468,51 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    private func applyOrDeferPreparedLibrarySnapshot(
+        _ prepared: PreparedLibrarySnapshot,
+        recap: MonthlyRecap,
+        updatesSearchIndex: Bool = true
+    ) {
+        guard activeDetailPresentationOwners.isEmpty else {
+            deferredLibraryPresentation = DeferredLibraryPresentation(
+                preparedSnapshot: prepared,
+                recap: recap,
+                updatesSearchIndex: (deferredLibraryPresentation?.updatesSearchIndex ?? false) || updatesSearchIndex
+            )
+            detailPresentationUpdates.notify()
+            return
+        }
+        deferredSnapshotFlushGeneration &+= 1
+        deferredLibraryPresentation = nil
+        applyPreparedLibrarySnapshot(
+            prepared,
+            recap: recap,
+            updatesSearchIndex: updatesSearchIndex
+        )
+    }
+
+    private func updateDeferredLibraryRecap(_ recap: MonthlyRecap) {
+        guard let deferredLibraryPresentation else { return }
+        self.deferredLibraryPresentation = DeferredLibraryPresentation(
+            preparedSnapshot: deferredLibraryPresentation.preparedSnapshot,
+            recap: recap,
+            updatesSearchIndex: deferredLibraryPresentation.updatesSearchIndex
+        )
+        detailPresentationUpdates.notify()
+    }
+
+    var detailMonthlyRecap: MonthlyRecap {
+        deferredLibraryPresentation?.recap ?? monthlyRecap
+    }
+
+    private var detailLibraryIndexes: LibraryIndexes? {
+        deferredLibraryPresentation?.preparedSnapshot.indexes
+    }
+
+    private var recapHydrationSnapshot: MediaLibrarySnapshot? {
+        deferredLibraryPresentation?.preparedSnapshot.snapshot
     }
 
     private func applyLibrarySnapshot(
@@ -1549,7 +1662,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func song(withPersistentID id: UInt64) -> TopSong? {
-        if let match = songsByPersistentID[id] {
+        if let match = detailLibraryIndexes?.songsByPersistentID[id] ?? songsByPersistentID[id] {
             return match
         }
 
@@ -1557,35 +1670,36 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func song(matchingTitle title: String, artist: String) -> TopSong? {
-        songsByTitleArtistKey[Self.titleArtistKey(title: title, artist: artist)]
+        let key = Self.titleArtistKey(title: title, artist: artist)
+        return detailLibraryIndexes?.songsByTitleArtistKey[key] ?? songsByTitleArtistKey[key]
     }
 
     func playCountRank(of song: TopSong) -> Int? {
-        songPlayCountRanks[song.id]
+        detailLibraryIndexes?.songPlayCountRanks[song.id] ?? songPlayCountRanks[song.id]
     }
 
     func listenTimeRank(of song: TopSong) -> Int? {
-        songListenTimeRanks[song.id]
+        detailLibraryIndexes?.songListenTimeRanks[song.id] ?? songListenTimeRanks[song.id]
     }
 
     func playCountRank(of album: TopAlbum) -> Int? {
-        albumPlayCountRanks[album.id]
+        detailLibraryIndexes?.albumPlayCountRanks[album.id] ?? albumPlayCountRanks[album.id]
     }
 
     func listenTimeRank(of album: TopAlbum) -> Int? {
-        albumListenTimeRanks[album.id]
+        detailLibraryIndexes?.albumListenTimeRanks[album.id] ?? albumListenTimeRanks[album.id]
     }
 
     func playCountRank(of artist: TopArtist) -> Int? {
-        artistPlayCountRanks[artist.id]
+        detailLibraryIndexes?.artistPlayCountRanks[artist.id] ?? artistPlayCountRanks[artist.id]
     }
 
     func listenTimeRank(of artist: TopArtist) -> Int? {
-        artistListenTimeRanks[artist.id]
+        detailLibraryIndexes?.artistListenTimeRanks[artist.id] ?? artistListenTimeRanks[artist.id]
     }
 
     func album(withPersistentID id: UInt64) -> TopAlbum? {
-        if let match = albumsByPersistentID[id] {
+        if let match = detailLibraryIndexes?.albumsByPersistentID[id] ?? albumsByPersistentID[id] {
             return match
         }
 
@@ -1593,11 +1707,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func album(matchingTitle title: String, artist: String) -> TopAlbum? {
-        albumsByTitleArtistKey[Self.titleArtistKey(title: title, artist: artist)]
+        let key = Self.titleArtistKey(title: title, artist: artist)
+        return detailLibraryIndexes?.albumsByTitleArtistKey[key] ?? albumsByTitleArtistKey[key]
     }
 
     func artist(withPersistentID id: UInt64) -> TopArtist? {
-        if let match = artistsByPersistentID[id] {
+        if let match = detailLibraryIndexes?.artistsByPersistentID[id] ?? artistsByPersistentID[id] {
             return match
         }
 
@@ -1605,7 +1720,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func artist(matchingName name: String) -> TopArtist? {
-        artistsByNameKey[Self.normalizedLookupKey(name)]
+        let key = Self.normalizedLookupKey(name)
+        return detailLibraryIndexes?.artistsByNameKey[key] ?? artistsByNameKey[key]
     }
 
     func artworkForAlbum(title: String, artist: String) -> MPMediaItemArtwork? {
@@ -1625,9 +1741,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func songsForAlbum(_ album: TopAlbum) -> [TopSong] {
-        let idMatches = album.id == 0 ? [] : (songsByAlbumID[album.id] ?? [])
+        let indexes = detailLibraryIndexes
+        let idMatches = album.id == 0 ? [] : (indexes?.songsByAlbumID[album.id] ?? songsByAlbumID[album.id] ?? [])
 
-        let albumKeyMatches = songsByAlbumKey[Self.titleArtistKey(title: album.title, artist: album.artist)] ?? []
+        let key = Self.titleArtistKey(title: album.title, artist: album.artist)
+        let albumKeyMatches = indexes?.songsByAlbumKey[key] ?? songsByAlbumKey[key] ?? []
         let legacyMatches = albumKeyMatches.filter { song in
             song.albumPersistentID == 0 && (
                 (album.artistPersistentID != 0 && song.artistPersistentID == album.artistPersistentID) ||
@@ -1647,9 +1765,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func songsForArtist(_ artist: TopArtist) -> [TopSong] {
-        let idMatches = artist.id == 0 ? [] : (songsByArtistID[artist.id] ?? [])
+        let indexes = detailLibraryIndexes
+        let idMatches = artist.id == 0 ? [] : (indexes?.songsByArtistID[artist.id] ?? songsByArtistID[artist.id] ?? [])
 
-        let artistNameMatches = songsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
+        let key = Self.normalizedLookupKey(artist.name)
+        let artistNameMatches = indexes?.songsByArtistKey[key] ?? songsByArtistKey[key] ?? []
         let legacyMatches = artistNameMatches.filter { $0.artistPersistentID == 0 }
 
         if legacyMatches.isEmpty {
@@ -1663,8 +1783,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func albumsForArtist(_ artist: TopArtist) -> [TopAlbum] {
-        let idMatches = artist.id == 0 ? [] : (albumsByArtistID[artist.id] ?? [])
-        let nameMatches = albumsByArtistKey[Self.normalizedLookupKey(artist.name)] ?? []
+        let indexes = detailLibraryIndexes
+        let idMatches = artist.id == 0 ? [] : (indexes?.albumsByArtistID[artist.id] ?? albumsByArtistID[artist.id] ?? [])
+        let key = Self.normalizedLookupKey(artist.name)
+        let nameMatches = indexes?.albumsByArtistKey[key] ?? albumsByArtistKey[key] ?? []
 
         if idMatches.isEmpty {
             return nameMatches

@@ -4,6 +4,159 @@ import MediaPlayer
 @testable import PlayCount
 
 final class MediaLibraryManagerIndexTests: XCTestCase {
+    @MainActor
+    func testDetailPresentationDefersBulkLibraryPublicationUntilDismissal() async {
+        let manager = MediaLibraryManager(
+            recapCloudSyncService: nil,
+            startsAutomatically: false
+        )
+        let cachedSong = song(id: 1, title: "Cached", artist: "Artist", playCount: 1)
+        let refreshedSong = song(id: 2, title: "Refreshed", artist: "Artist", playCount: 2)
+        manager.debugLoadLibraryFixture(songs: [cachedSong], albums: [], artists: [])
+
+        let owner = UUID()
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(songs: [refreshedSong], albums: [], artists: [])
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [cachedSong.id])
+
+        manager.setDetailPresentationActive(false, owner: owner)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [refreshedSong.id])
+    }
+
+    @MainActor
+    func testDeferredLibraryPublicationKeepsItsMatchingRecap() async {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let refreshedSong = song(id: 2, title: "Refreshed", artist: "Artist", playCount: 2)
+        let refreshedRecap = MonthlyRecap.empty(
+            for: Date(timeIntervalSince1970: 1_893_456_000)
+        )
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(
+            songs: [refreshedSong],
+            albums: [],
+            artists: [],
+            recap: refreshedRecap
+        )
+        manager.setDetailPresentationActive(false, owner: owner)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.monthlyRecap.monthStart, refreshedRecap.monthStart)
+    }
+
+    @MainActor
+    func testLaterRecapPreparationUpdatesDeferredLibraryPayload() async {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let refreshedSong = song(id: 2, title: "Refreshed", artist: "Artist", playCount: 2)
+        let preparedRecap = MonthlyRecap.empty(
+            for: Date(timeIntervalSince1970: 1_896_134_400)
+        )
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(songs: [refreshedSong], albums: [], artists: [])
+        manager.debugPublishRecapFixture(preparedRecap)
+        manager.setDetailPresentationActive(false, owner: owner)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.monthlyRecap.monthStart, preparedRecap.monthStart)
+    }
+
+    @MainActor
+    func testNewerImmediateLibraryPublicationCancelsOlderDismissalFlush() async {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let deferredSong = song(id: 2, title: "Deferred", artist: "Artist", playCount: 2)
+        let newestSong = song(id: 3, title: "Newest", artist: "Artist", playCount: 3)
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(songs: [deferredSong], albums: [], artists: [])
+        manager.setDetailPresentationActive(false, owner: owner)
+        manager.debugLoadLibraryFixture(songs: [newestSong], albums: [], artists: [])
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [newestSong.id])
+    }
+
+    @MainActor
+    func testOverlappingDetailPresentationsWaitForEveryOwnerToDismiss() async {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let firstOwner = UUID()
+        let secondOwner = UUID()
+        let cachedSong = song(id: 1, title: "Cached", artist: "Artist", playCount: 1)
+        let refreshedSong = song(id: 2, title: "Refreshed", artist: "Artist", playCount: 2)
+        manager.debugLoadLibraryFixture(songs: [cachedSong], albums: [], artists: [])
+
+        manager.setDetailPresentationActive(true, owner: firstOwner)
+        manager.setDetailPresentationActive(true, owner: secondOwner)
+        manager.debugLoadLibraryFixture(songs: [refreshedSong], albums: [], artists: [])
+        manager.setDetailPresentationActive(false, owner: firstOwner)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [cachedSong.id])
+
+        manager.setDetailPresentationActive(false, owner: secondOwner)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [refreshedSong.id])
+    }
+
+    @MainActor
+    func testColdLaunchDetailReadsDeferredIndexesWithoutBulkPublication() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let deferredArtist = artist(id: 30, name: "Artist", playCount: 4)
+        let deferredAlbum = album(
+            id: 20,
+            title: "Album",
+            artist: deferredArtist.name,
+            playCount: 4,
+            artistPersistentID: deferredArtist.id
+        )
+        let deferredSong = song(
+            id: 10,
+            title: "Song",
+            artist: deferredArtist.name,
+            playCount: 4,
+            albumPersistentID: deferredAlbum.id,
+            artistPersistentID: deferredArtist.id
+        )
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(
+            songs: [deferredSong],
+            albums: [deferredAlbum],
+            artists: [deferredArtist]
+        )
+
+        XCTAssertTrue(manager.topSongs.isEmpty)
+        XCTAssertEqual(manager.album(withPersistentID: deferredAlbum.id)?.id, deferredAlbum.id)
+        XCTAssertEqual(manager.artist(withPersistentID: deferredArtist.id)?.id, deferredArtist.id)
+        XCTAssertEqual(manager.songs(for: deferredAlbum).map(\.id), [deferredSong.id])
+        XCTAssertEqual(manager.songs(for: deferredArtist).map(\.id), [deferredSong.id])
+        XCTAssertEqual(manager.playCountRank(of: deferredSong), 1)
+        XCTAssertEqual(manager.detailPresentationUpdates.revision, 1)
+    }
+
+    @MainActor
+    func testCloudRecapHydrationPrefersDeferredFreshLibrary() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let owner = UUID()
+        let publishedSong = song(id: 1, title: "Published", artist: "Artist", playCount: 1)
+        let deferredSong = song(id: 2, title: "Deferred", artist: "Artist", playCount: 2)
+        manager.debugLoadLibraryFixture(songs: [publishedSong], albums: [], artists: [])
+
+        manager.setDetailPresentationActive(true, owner: owner)
+        manager.debugLoadLibraryFixture(songs: [deferredSong], albums: [], artists: [])
+
+        XCTAssertEqual(manager.topSongs.map(\.id), [publishedSong.id])
+        XCTAssertEqual(manager.debugRecapHydrationSongIDs, [deferredSong.id])
+    }
+
     func testNowPlayingDisplayEquivalenceDoesNotDependOnArtworkObjectIdentity() {
         let firstArtwork = MPMediaItemArtwork(boundsSize: CGSize(width: 100, height: 100)) { _ in UIImage() }
         let secondArtwork = MPMediaItemArtwork(boundsSize: CGSize(width: 100, height: 100)) { _ in UIImage() }

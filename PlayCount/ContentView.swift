@@ -110,6 +110,7 @@ private struct AuthorizedLibraryView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var selectedTab: LibraryTab = .screenshotInitialTab
     @State private var presentedNowPlayingSong: TopSong?
+    @State private var detailPresentationOwner = UUID()
     @State private var presentedScreenshotArtist: TopArtist?
     @State private var presentedScreenshotAlbum: TopAlbum?
 
@@ -212,6 +213,12 @@ private struct AuthorizedLibraryView: View {
             NavigationStack {
                 SongInfoView(song: song, manager: manager)
             }
+        }
+        .onChange(of: presentedNowPlayingSong?.id, initial: true) { _, songID in
+            manager.setDetailPresentationActive(songID != nil, owner: detailPresentationOwner)
+        }
+        .onDisappear {
+            manager.setDetailPresentationActive(false, owner: detailPresentationOwner)
         }
         .sheet(item: $presentedScreenshotArtist) { artist in
             NavigationStack {
