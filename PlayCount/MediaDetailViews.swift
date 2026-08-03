@@ -1663,10 +1663,11 @@ private struct ArtistAlbumsListView: View {
 private struct MediaDetailBackground: View {
     let artwork: MPMediaItemArtwork?
     @Environment(\.colorScheme) private var colorScheme
+    @State private var artworkColorComponents: (Double, Double, Double)?
 
     var body: some View {
         ZStack {
-            if let gradientColors = gradientColors {
+            if let gradientColors {
                 LinearGradient(
                     colors: gradientColors,
                     startPoint: .topLeading,
@@ -1687,10 +1688,24 @@ private struct MediaDetailBackground: View {
             )
         }
         .ignoresSafeArea()
+        .task(id: artwork.map(ObjectIdentifier.init)) {
+            guard let artwork else {
+                artworkColorComponents = nil
+                return
+            }
+            artworkColorComponents = nil
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            let components = await Task.detached(priority: .utility) {
+                artwork.averageColorComponents()
+            }.value
+            guard !Task.isCancelled else { return }
+            artworkColorComponents = components
+        }
     }
 
     private var gradientColors: [Color]? {
-        guard let components = artwork?.averageColorComponents() else {
+        guard let components = artworkColorComponents else {
             return nil
         }
 

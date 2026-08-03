@@ -123,8 +123,12 @@ struct iPadLibraryView: View {
                 return
             }
 
-            if let song = state.song, presentedNowPlayingSong?.id == song.id {
-                presentedNowPlayingSong = song
+            if let song = state.song,
+               let presentedNowPlayingSong,
+               presentedNowPlayingSong.id == song.id {
+                if !presentedNowPlayingSong.isDetailEquivalent(to: song) {
+                    self.presentedNowPlayingSong = song
+                }
             } else if presentedNowPlayingSong != nil {
                 presentedNowPlayingSong = state.song
             }

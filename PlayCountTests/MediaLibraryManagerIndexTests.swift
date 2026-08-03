@@ -1,8 +1,44 @@
 import XCTest
 import UIKit
+import MediaPlayer
 @testable import PlayCount
 
 final class MediaLibraryManagerIndexTests: XCTestCase {
+    func testNowPlayingDisplayEquivalenceDoesNotDependOnArtworkObjectIdentity() {
+        let firstArtwork = MPMediaItemArtwork(boundsSize: CGSize(width: 100, height: 100)) { _ in UIImage() }
+        let secondArtwork = MPMediaItemArtwork(boundsSize: CGSize(width: 100, height: 100)) { _ in UIImage() }
+        let first = MediaLibraryManager.NowPlayingState(
+            title: "Current Song",
+            subtitle: "Artist — Album",
+            artwork: firstArtwork,
+            duration: 180,
+            isPlaying: true,
+            playCount: 12,
+            song: nil
+        )
+        let second = MediaLibraryManager.NowPlayingState(
+            title: "Current Song",
+            subtitle: "Artist — Album",
+            artwork: secondArtwork,
+            duration: 180,
+            isPlaying: true,
+            playCount: 12,
+            song: nil
+        )
+        let missingArtwork = MediaLibraryManager.NowPlayingState(
+            title: "Current Song",
+            subtitle: "Artist — Album",
+            artwork: nil,
+            duration: 180,
+            isPlaying: true,
+            playCount: 12,
+            song: nil
+        )
+
+        XCTAssertTrue(first.isDisplayEquivalent(to: second))
+        XCTAssertFalse(first.isDisplayEquivalent(to: missingArtwork))
+    }
+
     @MainActor
     func testRecapShareCardRendersCompletePortraitCanvas() throws {
         let song = MonthlyRecap.RankedSong(

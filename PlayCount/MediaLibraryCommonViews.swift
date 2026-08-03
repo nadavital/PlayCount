@@ -6,10 +6,12 @@ import CoreImage.CIFilterBuiltins
 private enum ArtworkImageCache {
     private static let cache = NSCache<NSString, UIImage>()
 
+    static func cachedImage(for artwork: MPMediaItemArtwork, size: CGSize) -> UIImage? {
+        cache.object(forKey: key(for: artwork, size: size))
+    }
+
     static func image(for artwork: MPMediaItemArtwork, size: CGSize) -> UIImage? {
-        let pixelWidth = Int(size.width.rounded(.up))
-        let pixelHeight = Int(size.height.rounded(.up))
-        let key = "\(ObjectIdentifier(artwork))-\(pixelWidth)x\(pixelHeight)" as NSString
+        let key = key(for: artwork, size: size)
 
         if let image = cache.object(forKey: key) {
             return image
@@ -21,6 +23,12 @@ private enum ArtworkImageCache {
 
         cache.setObject(image, forKey: key)
         return image
+    }
+
+    private static func key(for artwork: MPMediaItemArtwork, size: CGSize) -> NSString {
+        let pixelWidth = Int(size.width.rounded(.up))
+        let pixelHeight = Int(size.height.rounded(.up))
+        return "\(ObjectIdentifier(artwork))-\(pixelWidth)x\(pixelHeight)" as NSString
     }
 }
 
@@ -164,8 +172,47 @@ struct ArtworkView: View {
 
     var body: some View {
         Group {
-            if let artwork,
-               let image = ArtworkImageCache.image(for: artwork, size: size) {
+            if max(size.width, size.height) > 128 {
+                DeferredArtworkImage(artwork: artwork, size: size)
+            } else if let artwork,
+                      let image = ArtworkImageCache.image(for: artwork, size: size) {
+                artworkImage(image)
+            } else {
+                artworkPlaceholder
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05))
+        }
+    }
+
+    private func artworkImage(_ image: UIImage) -> some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+    }
+
+    private var artworkPlaceholder: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.12))
+            Image(systemName: "music.note")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct DeferredArtworkImage: View {
+    let artwork: MPMediaItemArtwork?
+    let size: CGSize
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -178,11 +225,21 @@ struct ArtworkView: View {
                 }
             }
         }
-        .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.05))
+        .task(id: artwork.map(ObjectIdentifier.init)) {
+            guard let artwork else {
+                image = nil
+                return
+            }
+            if let cached = ArtworkImageCache.cachedImage(for: artwork, size: size) {
+                image = cached
+                return
+            }
+            image = nil
+            let rendered = await Task.detached(priority: .userInitiated) {
+                ArtworkImageCache.image(for: artwork, size: size)
+            }.value
+            guard !Task.isCancelled else { return }
+            image = rendered
         }
     }
 }

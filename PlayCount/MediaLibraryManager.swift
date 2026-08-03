@@ -57,6 +57,25 @@ struct TopSong: Identifiable {
         self.trackNumber = trackNumber
         self.playbackStoreID = playbackStoreID
     }
+
+    func isDetailEquivalent(to other: TopSong) -> Bool {
+        id == other.id &&
+            title == other.title &&
+            artist == other.artist &&
+            albumTitle == other.albumTitle &&
+            albumArtist == other.albumArtist &&
+            playCount == other.playCount &&
+            skipCount == other.skipCount &&
+            totalPlayDuration == other.totalPlayDuration &&
+            playbackDuration == other.playbackDuration &&
+            lastPlayedDate == other.lastPlayedDate &&
+            dateAdded == other.dateAdded &&
+            (artwork == nil) == (other.artwork == nil) &&
+            albumPersistentID == other.albumPersistentID &&
+            artistPersistentID == other.artistPersistentID &&
+            trackNumber == other.trackNumber &&
+            playbackStoreID == other.playbackStoreID
+    }
 }
 
 private struct MediaLibrarySnapshot {
@@ -137,6 +156,40 @@ private final class MutationValidityToken: @unchecked Sendable {
 final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     
     static let shared = MediaLibraryManager()
+
+    private struct LibraryIndexes {
+        let songsByPersistentID: [UInt64: TopSong]
+        let albumsByPersistentID: [UInt64: TopAlbum]
+        let artistsByPersistentID: [UInt64: TopArtist]
+        let songsByTitleArtistKey: [String: TopSong]
+        let albumsByTitleArtistKey: [String: TopAlbum]
+        let artistsByNameKey: [String: TopArtist]
+        let songsByAlbumID: [UInt64: [TopSong]]
+        let songsByAlbumKey: [String: [TopSong]]
+        let songsByArtistID: [UInt64: [TopSong]]
+        let songsByArtistKey: [String: [TopSong]]
+        let albumsByArtistID: [UInt64: [TopAlbum]]
+        let albumsByArtistKey: [String: [TopAlbum]]
+        let songPlayCountRanks: [UInt64: Int]
+        let songListenTimeRanks: [UInt64: Int]
+        let albumPlayCountRanks: [UInt64: Int]
+        let albumListenTimeRanks: [UInt64: Int]
+        let artistPlayCountRanks: [UInt64: Int]
+        let artistListenTimeRanks: [UInt64: Int]
+    }
+
+    private struct PreparedLibrarySnapshot {
+        let snapshot: MediaLibrarySnapshot
+        let summary: LibrarySummary
+        let sortedSongs: [TopSong]
+        let sortedAlbums: [TopAlbum]
+        let sortedArtists: [TopArtist]
+        let topSongs: [TopSong]
+        let topAlbums: [TopAlbum]
+        let topArtists: [TopArtist]
+        let indexes: LibraryIndexes
+        let sortMetric: SortMetric
+    }
     
     enum SortMetric: String, CaseIterable, Identifiable {
         case playCount
@@ -488,11 +541,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         hasStartedInitialRefresh = true
         isLoading = true
         loadingStage = .readingLibrary
+        let initialSortMetric = sortMetric
+        let initialFetchLimit = fetchLimit
 
         DispatchQueue.global(qos: .utility).async { [weak self, presentationCache, snapshotStore] in
             guard let self else { return }
             let cached = presentationCache.load(maximumAge: self.maximumPresentationCacheAge)
             let cachedSnapshot = cached.map { Self.librarySnapshot(from: $0.songs) }
+            let preparedCachedSnapshot = cachedSnapshot.map {
+                Self.prepareLibrarySnapshot($0, sortMetric: initialSortMetric, fetchLimit: initialFetchLimit)
+            }
             let cachedPresentation = snapshotStore.cachedRecapPresentation(
                 sourceSongs: cachedSnapshot?.songs ?? [],
                 sourceAlbums: cachedSnapshot?.albums ?? [],
@@ -505,13 +563,17 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.handleAuthorizationLostDuringRefresh()
                     return
                 }
-                if let cached, let cachedSnapshot, !self.hasLoadedInitialSnapshot {
+                if let cached, let preparedCachedSnapshot, !self.hasLoadedInitialSnapshot {
                     let currentMonth = Calendar.current.startOfMonth(containing: Date())
                     let cachedRecap = cachedPresentation.monthlyRecaps.last {
                         Calendar.current.isDate($0.monthStart, equalTo: currentMonth, toGranularity: .month)
                     }
                         ?? .empty(for: currentMonth)
-                    self.applyLibrarySnapshot(cachedSnapshot, recap: cachedRecap, updatesSearchIndex: false)
+                    self.applyPreparedLibrarySnapshot(
+                        preparedCachedSnapshot,
+                        recap: cachedRecap,
+                        updatesSearchIndex: false
+                    )
                     self.seedRecapCaches(from: cachedPresentation, currentRecap: cachedRecap)
                     self.availableRecapMonths = cachedPresentation.availableMonthStarts
                     self.hasLoadedInitialSnapshot = true
@@ -539,7 +601,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
         #endif
 
-        let operation: (generation: Int, token: MutationValidityToken)? = await MainActor.run {
+        let operation: (generation: Int, token: MutationValidityToken, sortMetric: SortMetric, fetchLimit: Int)? = await MainActor.run {
             guard MPMediaLibrary.authorizationStatus() == .authorized else {
                 self.handleAuthorizationLostDuringRefresh()
                 return nil
@@ -550,14 +612,19 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             let token = MutationValidityToken()
             self.snapshotMutationToken?.invalidate()
             self.snapshotMutationToken = token
-            return (self.snapshotMutationGeneration, token)
+            return (self.snapshotMutationGeneration, token, self.sortMetric, self.fetchLimit)
         }
         guard let operation else { return false }
         let generation = operation.generation
         let token = operation.token
 
-        let result: (MediaLibrarySnapshot, MonthlyRecap, CachedRecapPresentation)? = await Task.detached(priority: .utility) { [snapshotStore] in
+        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation)? = await Task.detached(priority: .utility) { [snapshotStore] in
             let snapshot = Self.fetchLibrarySnapshot()
+            let preparedSnapshot = Self.prepareLibrarySnapshot(
+                snapshot,
+                sortMetric: operation.sortMetric,
+                fetchLimit: operation.fetchLimit
+            )
             guard MPMediaLibrary.authorizationStatus() == .authorized else { return nil }
             guard await MainActor.run(body: {
                 self.snapshotMutationGeneration == generation
@@ -577,7 +644,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 sourceAlbums: snapshot.albums,
                 sourceArtists: snapshot.artists
             )
-            return (snapshot, recap, cachedPresentation)
+            return (preparedSnapshot, recap, cachedPresentation)
         }.value
 
         guard let result else {
@@ -597,7 +664,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.handleAuthorizationLostDuringRefresh()
                 return false
             }
-            self.applyLibrarySnapshot(result.0, recap: result.1)
+            self.applyPreparedLibrarySnapshot(result.0, recap: result.1)
             self.seedRecapCaches(from: result.2, currentRecap: result.1)
             self.availableRecapMonths = result.2.availableMonthStarts
             self.hasLoadedInitialSnapshot = true
@@ -612,7 +679,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
         if didApply {
             await Task.detached(priority: .background) { [presentationCache] in
-                presentationCache.save(songs: result.0.songs) {
+                presentationCache.save(songs: result.0.snapshot.songs) {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 }
             }.value
@@ -1069,11 +1136,18 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let token = MutationValidityToken()
         snapshotMutationToken?.invalidate()
         snapshotMutationToken = token
+        let refreshSortMetric = sortMetric
+        let refreshFetchLimit = fetchLimit
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
             let snapshot = Self.fetchLibrarySnapshot()
+            let preparedSnapshot = Self.prepareLibrarySnapshot(
+                snapshot,
+                sortMetric: refreshSortMetric,
+                fetchLimit: refreshFetchLimit
+            )
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -1082,8 +1156,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.handleAuthorizationLostDuringRefresh()
                     return
                 }
-                self.applyLibrarySnapshot(
-                    snapshot,
+                self.applyPreparedLibrarySnapshot(
+                    preparedSnapshot,
                     recap: self.monthlyRecap,
                     updatesSearchIndex: false
                 )
@@ -1260,27 +1334,84 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private static func prepareLibrarySnapshot(
+        _ snapshot: MediaLibrarySnapshot,
+        sortMetric: SortMetric,
+        fetchLimit: Int
+    ) -> PreparedLibrarySnapshot {
+        let sortedSongs = sortSongs(snapshot.songs, by: sortMetric)
+        let sortedAlbums = sortAlbums(snapshot.albums, by: sortMetric)
+        let sortedArtists = sortArtists(snapshot.artists, by: sortMetric)
+        return PreparedLibrarySnapshot(
+            snapshot: snapshot,
+            summary: LibrarySummary(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists
+            ),
+            sortedSongs: sortedSongs,
+            sortedAlbums: sortedAlbums,
+            sortedArtists: sortedArtists,
+            topSongs: fetchLimit > 0 ? Array(sortedSongs.prefix(fetchLimit)) : sortedSongs,
+            topAlbums: fetchLimit > 0 ? Array(sortedAlbums.prefix(fetchLimit)) : sortedAlbums,
+            topArtists: fetchLimit > 0 ? Array(sortedArtists.prefix(fetchLimit)) : sortedArtists,
+            indexes: makeLibraryIndexes(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists,
+                sortMetric: sortMetric
+            ),
+            sortMetric: sortMetric
+        )
+    }
+
+    private func applyPreparedLibrarySnapshot(
+        _ prepared: PreparedLibrarySnapshot,
+        recap: MonthlyRecap,
+        updatesSearchIndex: Bool = true
+    ) {
+        let snapshot = prepared.snapshot
+        librarySongs = snapshot.songs
+        libraryAlbums = snapshot.albums
+        libraryArtists = snapshot.artists
+        librarySummary = prepared.summary
+        monthlyRecap = recap
+        topSongs = prepared.topSongs
+        topAlbums = prepared.topAlbums
+        topArtists = prepared.topArtists
+        applyLibraryIndexes(prepared.indexes)
+
+        // A metric change while the background preparation was in flight is
+        // uncommon, but the visible ordering must still match the toolbar.
+        if prepared.sortMetric != sortMetric {
+            applySortAndLimit()
+            resortGroupedIndexes()
+        }
+
+        if updatesSearchIndex {
+            let indexedSongs = prepared.sortedSongs
+            let indexedAlbums = prepared.sortedAlbums
+            let indexedArtists = prepared.sortedArtists
+            Task {
+                await PlayCountSiriIntegration.updateSearchIndex(
+                    songs: indexedSongs,
+                    albums: indexedAlbums,
+                    artists: indexedArtists
+                )
+            }
+        }
+    }
+
     private func applyLibrarySnapshot(
         _ snapshot: MediaLibrarySnapshot,
         recap: MonthlyRecap,
         updatesSearchIndex: Bool = true
     ) {
-        librarySongs = snapshot.songs
-        libraryAlbums = snapshot.albums
-        libraryArtists = snapshot.artists
-        librarySummary = LibrarySummary(songs: snapshot.songs, albums: snapshot.albums, artists: snapshot.artists)
-        monthlyRecap = recap
-        applySortAndLimit()
-        updateLibraryIndexes(songs: snapshot.songs, albums: snapshot.albums, artists: snapshot.artists)
-        if updatesSearchIndex {
-            Task {
-                await PlayCountSiriIntegration.updateSearchIndex(
-                    songs: sortSongs(snapshot.songs),
-                    albums: sortAlbums(snapshot.albums),
-                    artists: sortArtists(snapshot.artists)
-                )
-            }
-        }
+        applyPreparedLibrarySnapshot(
+            Self.prepareLibrarySnapshot(snapshot, sortMetric: sortMetric, fetchLimit: fetchLimit),
+            recap: recap,
+            updatesSearchIndex: updatesSearchIndex
+        )
     }
 
     private func resortGroupedIndexes() {
@@ -1293,44 +1424,92 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func updateLibraryIndexes(songs: [TopSong], albums: [TopAlbum], artists: [TopArtist]) {
-        songsByPersistentID = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
-        albumsByPersistentID = Dictionary(albums.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
-        artistsByPersistentID = Dictionary(artists.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current })
-        songsByTitleArtistKey = Dictionary(
-            songs.map { (Self.titleArtistKey(title: $0.title, artist: $0.artist), $0) },
-            uniquingKeysWith: { current, _ in current }
+        applyLibraryIndexes(
+            Self.makeLibraryIndexes(
+                songs: songs,
+                albums: albums,
+                artists: artists,
+                sortMetric: sortMetric
+            )
         )
-        albumsByTitleArtistKey = Dictionary(
-            albums.map { (Self.titleArtistKey(title: $0.title, artist: $0.artist), $0) },
-            uniquingKeysWith: { current, _ in current }
-        )
-        artistsByNameKey = Dictionary(
-            artists.map { (Self.normalizedLookupKey($0.name), $0) },
-            uniquingKeysWith: { current, _ in current }
-        )
+    }
 
-        songsByAlbumID = Dictionary(grouping: songs.filter { $0.albumPersistentID != 0 }, by: \.albumPersistentID)
-            .mapValues(sortSongs)
-        songsByAlbumKey = Dictionary(
-            Self.albumLookupPairs(for: songs),
-            uniquingKeysWith: { current, additional in current + additional }
+    private static func makeLibraryIndexes(
+        songs: [TopSong],
+        albums: [TopAlbum],
+        artists: [TopArtist],
+        sortMetric: SortMetric
+    ) -> LibraryIndexes {
+        let sortSongGroup: ([TopSong]) -> [TopSong] = { sortSongs($0, by: sortMetric) }
+        let sortAlbumGroup: ([TopAlbum]) -> [TopAlbum] = { sortAlbums($0, by: sortMetric) }
+        return LibraryIndexes(
+            songsByPersistentID: Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current }),
+            albumsByPersistentID: Dictionary(albums.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current }),
+            artistsByPersistentID: Dictionary(artists.map { ($0.id, $0) }, uniquingKeysWith: { current, _ in current }),
+            songsByTitleArtistKey: Dictionary(
+                songs.map { (titleArtistKey(title: $0.title, artist: $0.artist), $0) },
+                uniquingKeysWith: { current, _ in current }
+            ),
+            albumsByTitleArtistKey: Dictionary(
+                albums.map { (titleArtistKey(title: $0.title, artist: $0.artist), $0) },
+                uniquingKeysWith: { current, _ in current }
+            ),
+            artistsByNameKey: Dictionary(
+                artists.map { (normalizedLookupKey($0.name), $0) },
+                uniquingKeysWith: { current, _ in current }
+            ),
+            songsByAlbumID: Dictionary(
+                grouping: songs.filter { $0.albumPersistentID != 0 },
+                by: \.albumPersistentID
+            ).mapValues(sortSongGroup),
+            songsByAlbumKey: Dictionary(
+                albumLookupPairs(for: songs),
+                uniquingKeysWith: { current, additional in current + additional }
+            ).mapValues(sortSongGroup),
+            songsByArtistID: Dictionary(
+                grouping: songs.filter { $0.artistPersistentID != 0 },
+                by: \.artistPersistentID
+            ).mapValues(sortSongGroup),
+            songsByArtistKey: Dictionary(
+                grouping: songs,
+                by: { normalizedLookupKey($0.artist) }
+            ).mapValues(sortSongGroup),
+            albumsByArtistID: Dictionary(
+                grouping: albums.filter { $0.artistPersistentID != 0 },
+                by: \.artistPersistentID
+            ).mapValues(sortAlbumGroup),
+            albumsByArtistKey: Dictionary(
+                grouping: albums,
+                by: { normalizedLookupKey($0.artist) }
+            ).mapValues(sortAlbumGroup),
+            songPlayCountRanks: rankMap(for: songs.sorted(by: isHigherPlayCountSong).map(\.id)),
+            songListenTimeRanks: rankMap(for: songs.sorted(by: isHigherListenTimeSong).map(\.id)),
+            albumPlayCountRanks: rankMap(for: albums.sorted(by: isHigherPlayCountAlbum).map(\.id)),
+            albumListenTimeRanks: rankMap(for: albums.sorted(by: isHigherListenTimeAlbum).map(\.id)),
+            artistPlayCountRanks: rankMap(for: artists.sorted(by: isHigherPlayCountArtist).map(\.id)),
+            artistListenTimeRanks: rankMap(for: artists.sorted(by: isHigherListenTimeArtist).map(\.id))
         )
-        .mapValues(sortSongs)
-        songsByArtistID = Dictionary(grouping: songs.filter { $0.artistPersistentID != 0 }, by: \.artistPersistentID)
-            .mapValues(sortSongs)
-        songsByArtistKey = Dictionary(grouping: songs, by: { Self.normalizedLookupKey($0.artist) })
-            .mapValues(sortSongs)
-        albumsByArtistID = Dictionary(grouping: albums.filter { $0.artistPersistentID != 0 }, by: \.artistPersistentID)
-            .mapValues(sortAlbums)
-        albumsByArtistKey = Dictionary(grouping: albums, by: { Self.normalizedLookupKey($0.artist) })
-            .mapValues(sortAlbums)
+    }
 
-        songPlayCountRanks = Self.rankMap(for: songs.sorted(by: Self.isHigherPlayCountSong).map(\.id))
-        songListenTimeRanks = Self.rankMap(for: songs.sorted(by: Self.isHigherListenTimeSong).map(\.id))
-        albumPlayCountRanks = Self.rankMap(for: albums.sorted(by: Self.isHigherPlayCountAlbum).map(\.id))
-        albumListenTimeRanks = Self.rankMap(for: albums.sorted(by: Self.isHigherListenTimeAlbum).map(\.id))
-        artistPlayCountRanks = Self.rankMap(for: artists.sorted(by: Self.isHigherPlayCountArtist).map(\.id))
-        artistListenTimeRanks = Self.rankMap(for: artists.sorted(by: Self.isHigherListenTimeArtist).map(\.id))
+    private func applyLibraryIndexes(_ indexes: LibraryIndexes) {
+        songsByPersistentID = indexes.songsByPersistentID
+        albumsByPersistentID = indexes.albumsByPersistentID
+        artistsByPersistentID = indexes.artistsByPersistentID
+        songsByTitleArtistKey = indexes.songsByTitleArtistKey
+        albumsByTitleArtistKey = indexes.albumsByTitleArtistKey
+        artistsByNameKey = indexes.artistsByNameKey
+        songsByAlbumID = indexes.songsByAlbumID
+        songsByAlbumKey = indexes.songsByAlbumKey
+        songsByArtistID = indexes.songsByArtistID
+        songsByArtistKey = indexes.songsByArtistKey
+        albumsByArtistID = indexes.albumsByArtistID
+        albumsByArtistKey = indexes.albumsByArtistKey
+        songPlayCountRanks = indexes.songPlayCountRanks
+        songListenTimeRanks = indexes.songListenTimeRanks
+        albumPlayCountRanks = indexes.albumPlayCountRanks
+        albumListenTimeRanks = indexes.albumListenTimeRanks
+        artistPlayCountRanks = indexes.artistPlayCountRanks
+        artistListenTimeRanks = indexes.artistListenTimeRanks
     }
 
     func songs(for album: TopAlbum, limit: Int? = nil) -> [TopSong] {
@@ -1643,6 +1822,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func sortSongs(_ songs: [TopSong]) -> [TopSong] {
+        Self.sortSongs(songs, by: sortMetric)
+    }
+
+    private static func sortSongs(_ songs: [TopSong], by sortMetric: SortMetric) -> [TopSong] {
         songs.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
@@ -1900,6 +2083,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     #endif
 
     private func sortAlbums(_ albums: [TopAlbum]) -> [TopAlbum] {
+        Self.sortAlbums(albums, by: sortMetric)
+    }
+
+    private static func sortAlbums(_ albums: [TopAlbum], by sortMetric: SortMetric) -> [TopAlbum] {
         albums.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
@@ -1911,6 +2098,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private func sortArtists(_ artists: [TopArtist]) -> [TopArtist] {
+        Self.sortArtists(artists, by: sortMetric)
+    }
+
+    private static func sortArtists(_ artists: [TopArtist], by sortMetric: SortMetric) -> [TopArtist] {
         artists.sorted { lhs, rhs in
             switch sortMetric {
             case .playCount:
@@ -2182,19 +2373,9 @@ extension MediaLibraryManager {
         let song: TopSong?
 
         func isDisplayEquivalent(to other: NowPlayingState) -> Bool {
-            let artworksEqual: Bool
-            switch (artwork, other.artwork) {
-            case (nil, nil):
-                artworksEqual = true
-            case let (left?, right?):
-                artworksEqual = left === right
-            default:
-                artworksEqual = false
-            }
-
             return title == other.title &&
                 subtitle == other.subtitle &&
-                artworksEqual &&
+                (artwork == nil) == (other.artwork == nil) &&
                 duration == other.duration &&
                 isPlaying == other.isPlaying &&
                 playCount == other.playCount &&
