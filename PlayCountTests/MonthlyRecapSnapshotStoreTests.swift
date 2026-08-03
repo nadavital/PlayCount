@@ -1555,6 +1555,72 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(yearly.unattributedPlayDelta, 30)
     }
 
+    func testExistingInflatedGapLedgerIsMigratedOnceOnColdLoad() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountGapPolicyMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let mayEnd = date(year: 2026, month: 5, day: 31)
+        let julyReturn = date(year: 2026, month: 7, day: 10)
+        let julyLatest = date(year: 2026, month: 7, day: 15)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "gap-policy-migration"
+        )
+
+        _ = store.record(songs: [song(id: 1, title: "Migrated Gap", playCount: 100)], at: mayEnd, reason: .foreground)
+        _ = store.record(songs: [song(id: 1, title: "Migrated Gap", playCount: 130)], at: julyReturn, reason: .appLaunch)
+        _ = store.record(songs: [song(id: 1, title: "Migrated Gap", playCount: 135)], at: julyLatest, reason: .foreground)
+
+        let legacyRankedSong = MonthlyRecap.RankedSong(
+            id: 1,
+            title: "Migrated Gap",
+            artist: "Artist",
+            albumTitle: "Album",
+            playDelta: 35,
+            skipDelta: 0,
+            listeningDuration: 35 * 180,
+            artwork: nil
+        )
+        store.debugInstallPreGapPolicyRecap(
+            MonthlyRecap(
+                monthStart: calendar.startOfMonth(containing: julyLatest),
+                generatedAt: julyLatest,
+                lastCaptureReason: .foreground,
+                trackingStart: mayEnd,
+                snapshotCount: 2,
+                totalPlayDelta: 35,
+                totalSkipDelta: 0,
+                totalListeningDuration: 35 * 180,
+                playedSongCount: 1,
+                newSongCount: 0,
+                topSongs: [legacyRankedSong],
+                topArtists: [],
+                topAlbums: [],
+                biggestGainers: [],
+                topNewSongs: []
+            )
+        )
+
+        let migrated = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "gap-policy-migration"
+        )
+        XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).totalPlayDelta, 5)
+        XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 35)
+        XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.unattributedPlayDelta, 30)
+
+        let secondColdLoad = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "gap-policy-migration"
+        )
+        XCTAssertEqual(secondColdLoad.recap(forMonthContaining: julyLatest).totalPlayDelta, 5)
+        XCTAssertEqual(secondColdLoad.syncedYearlyRecap(for: 2026)?.unattributedPlayDelta, 30)
+    }
+
     func testAdjacentMonthBoundaryKeepsExistingContinuousTrackingBehavior() {
         let store = makeStore(named: "adjacent-month")
         let juneEnd = date(year: 2026, month: 6, day: 30)

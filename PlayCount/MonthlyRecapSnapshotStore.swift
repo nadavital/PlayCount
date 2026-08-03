@@ -590,6 +590,7 @@ extension MonthlyRecap {
 final class MonthlyRecapSnapshotStore {
     fileprivate static let maxSyncPayloadBytes = 250_000
     fileprivate static let minSyncedSongCount = 100
+    private static let currentGapPolicyVersion = 1
     fileprivate static let maxPrioritySyncedSongCount = 120
     fileprivate static let maxSyncedRecapRankedSongCount = 250
     fileprivate static let maxSyncedRecapRankedGroupCount = 100
@@ -1052,6 +1053,7 @@ final class MonthlyRecapSnapshotStore {
 
     private struct StoredSnapshots: Codable {
         var schemaVersion: Int
+        var gapPolicyVersion: Int
         var snapshots: [LibrarySnapshot]
         var monthlyLedgers: [SyncedMonthlyRecap]
         var syncedRecaps: [SyncedMonthlyRecap]
@@ -1060,6 +1062,7 @@ final class MonthlyRecapSnapshotStore {
 
         init(
             schemaVersion: Int,
+            gapPolicyVersion: Int = 1,
             snapshots: [LibrarySnapshot],
             monthlyLedgers: [SyncedMonthlyRecap] = [],
             syncedRecaps: [SyncedMonthlyRecap] = [],
@@ -1067,6 +1070,7 @@ final class MonthlyRecapSnapshotStore {
             unattributedIntervals: [UnattributedRecapInterval] = []
         ) {
             self.schemaVersion = schemaVersion
+            self.gapPolicyVersion = gapPolicyVersion
             self.snapshots = snapshots
             self.monthlyLedgers = monthlyLedgers
             self.syncedRecaps = syncedRecaps
@@ -1076,6 +1080,7 @@ final class MonthlyRecapSnapshotStore {
 
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
+            case gapPolicyVersion
             case snapshots
             case monthlyLedgers
             case syncedRecaps
@@ -1086,6 +1091,7 @@ final class MonthlyRecapSnapshotStore {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+            gapPolicyVersion = try container.decodeIfPresent(Int.self, forKey: .gapPolicyVersion) ?? 0
             snapshots = try container.decode([LibrarySnapshot].self, forKey: .snapshots)
             monthlyLedgers = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .monthlyLedgers) ?? []
             syncedRecaps = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .syncedRecaps) ?? []
@@ -1147,6 +1153,7 @@ final class MonthlyRecapSnapshotStore {
             }
 
             let syncedRecaps: [SyncedMonthlyRecap] = try metadataCodable("monthlyRecaps", in: database) ?? []
+            let gapPolicyVersion = try metadataInteger("gapPolicyVersion", in: database) ?? 0
             let monthlyLedgers: [SyncedMonthlyRecap] = try metadataCodable("monthlyLedgers", in: database) ?? syncedRecaps
             let syncedYearlyRecaps: [SyncedYearlyRecap] = try metadataCodable("yearlyRecaps", in: database) ?? []
             let unattributedIntervals: [UnattributedRecapInterval] = try metadataCodable(
@@ -1199,6 +1206,7 @@ final class MonthlyRecapSnapshotStore {
 
             return StoredSnapshots(
                 schemaVersion: Self.schemaVersion,
+                gapPolicyVersion: gapPolicyVersion,
                 snapshots: snapshots,
                 monthlyLedgers: monthlyLedgers,
                 syncedRecaps: syncedRecaps,
@@ -1243,6 +1251,7 @@ final class MonthlyRecapSnapshotStore {
                 }
 
                 try setMetadataInteger(Self.schemaVersion, for: "schemaVersion", in: database)
+                try setMetadataInteger(stored.gapPolicyVersion, for: "gapPolicyVersion", in: database)
                 try setMetadataCodable(stored.monthlyLedgers, for: "monthlyLedgers", in: database)
                 try setMetadataCodable(stored.syncedRecaps, for: "monthlyRecaps", in: database)
                 try setMetadataCodable(stored.syncedYearlyRecaps, for: "yearlyRecaps", in: database)
@@ -1732,6 +1741,25 @@ final class MonthlyRecapSnapshotStore {
             for url in [ledgerURL, URL(fileURLWithPath: ledgerURL.path + "-wal"), URL(fileURLWithPath: ledgerURL.path + "-shm")] {
                 try? FileManager.default.removeItem(at: url)
             }
+            loadedSnapshots = nil
+        }
+    }
+
+    func debugInstallPreGapPolicyRecap(_ recap: MonthlyRecap) {
+        accessQueue.sync {
+            var stored = loadLocked()
+            let ledger = SyncedMonthlyRecap(recap: recap, preservingAllRankings: true)
+            stored.gapPolicyVersion = 0
+            stored.unattributedIntervals = []
+            stored.monthlyLedgers.removeAll { $0.monthStart == recap.monthStart }
+            stored.monthlyLedgers.append(ledger)
+            stored.syncedRecaps.removeAll { $0.monthStart == recap.monthStart }
+            stored.syncedRecaps.append(ledger.compacted())
+            stored.syncedYearlyRecaps = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: []
+            )
+            saveLocked(stored)
             loadedSnapshots = nil
         }
     }
@@ -2862,8 +2890,7 @@ final class MonthlyRecapSnapshotStore {
         by monthlyRecaps: [MonthlyRecap]
     ) -> Bool {
         let coverage = monthlyRecaps.compactMap { recap -> (Date, Date)? in
-            guard recap.snapshotCount > 1,
-                  let trackingStart = recap.trackingStart,
+            guard let trackingStart = recap.trackingStart,
                   recap.generatedAt > trackingStart else {
                 return nil
             }
@@ -3392,7 +3419,7 @@ final class MonthlyRecapSnapshotStore {
                 monthStart: monthStart,
                 generatedAt: latest.capturedAt,
                 lastCaptureReason: latest.reason,
-                trackingStart: ordered.first?.capturedAt,
+                trackingStart: baseline.capturedAt,
                 snapshotCount: inMonth.count,
                 totalPlayDelta: aggregateDeltas?.playDelta ?? deltas.reduce(0) { $0 + $1.playDelta },
                 totalSkipDelta: aggregateDeltas?.skipDelta ?? deltas.reduce(0) { $0 + $1.skipDelta },
@@ -4036,13 +4063,87 @@ final class MonthlyRecapSnapshotStore {
         return lhs.playDelta > rhs.playDelta
     }
 
+    /// Upgrades ledgers written before missed-month intervals were modeled.
+    /// Only month boundaries with at least one fully skipped calendar month are
+    /// inspected, and only their destination month/year summaries are replaced.
+    private func migrateGapPolicyIfNeeded(in stored: inout StoredSnapshots) -> Bool {
+        guard stored.gapPolicyVersion < Self.currentGapPolicyVersion else { return false }
+        stored.gapPolicyVersion = Self.currentGapPolicyVersion
+
+        let streams = Dictionary(grouping: stored.snapshots.sortedForSyncPayloads()) {
+            $0.logicalDeviceKey(fallbackDeviceIdentifier: deviceIdentifier)
+        }
+        var discoveredIntervals: [UnattributedRecapInterval] = []
+        var affectedMonths: Set<Date> = []
+
+        for stream in streams.values {
+            let ordered = canonicalSnapshots(stream)
+            guard ordered.count > 1 else { continue }
+            for index in 1..<ordered.count {
+                let previous = ordered[index - 1]
+                let current = ordered[index]
+                guard isUnobservedMonthGap(from: previous.capturedAt, to: current.capturedAt) else {
+                    continue
+                }
+                affectedMonths.insert(calendar.startOfMonth(containing: current.capturedAt))
+                if let interval = unattributedInterval(
+                    from: previous,
+                    to: current,
+                    history: ordered
+                ) {
+                    discoveredIntervals.append(interval)
+                }
+            }
+        }
+
+        guard !affectedMonths.isEmpty else { return true }
+        if stored.monthlyLedgers.isEmpty {
+            stored.monthlyLedgers = stored.syncedRecaps
+        }
+        stored.unattributedIntervals = retainedUnattributedIntervals(
+            Self.mergedUnattributedIntervals(stored.unattributedIntervals + discoveredIntervals),
+            now: stored.snapshots.map(\.capturedAt).max() ?? Date()
+        )
+
+        for monthStart in affectedMonths {
+            let rebuilt = SyncedMonthlyRecap(
+                recap: snapshotRecap(for: monthStart, snapshots: stored.snapshots),
+                preservingAllRankings: true
+            )
+            let existing = stored.monthlyLedgers.first { $0.monthStart == monthStart }
+            if let existing, existing.snapshotCount > rebuilt.snapshotCount {
+                continue
+            }
+            stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+            stored.monthlyLedgers.append(rebuilt)
+            stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+            stored.syncedRecaps.append(rebuilt.compacted())
+        }
+        stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
+        stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
+
+        let affectedYears = Set(affectedMonths.map { calendar.component(.year, from: $0) })
+        let rebuiltYears = yearlyRecaps(
+            from: stored.monthlyLedgers,
+            unattributedIntervals: stored.unattributedIntervals
+        ).filter { affectedYears.contains($0.year) }
+        stored.syncedYearlyRecaps.removeAll { affectedYears.contains($0.year) }
+        stored.syncedYearlyRecaps.append(contentsOf: rebuiltYears)
+        stored.syncedYearlyRecaps.sort { $0.year < $1.year }
+        return true
+    }
+
     private func loadLocked() -> StoredSnapshots {
         if let loadedSnapshots {
             return loadedSnapshots
         }
 
         let ledger = LedgerDatabase(url: ledgerURL)
-        if let stored = try? ledger.load() {
+        if var stored = try? ledger.load() {
+            if migrateGapPolicyIfNeeded(in: &stored) {
+                try? ledger.save(stored)
+                writeSummaryCache(for: stored)
+            }
             loadedSnapshots = stored
             return stored
         }
