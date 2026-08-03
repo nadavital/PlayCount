@@ -160,6 +160,8 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
     let biggestAlbumGainers: [MovementGroup]
     let biggestArtistGainers: [MovementGroup]
     let topNewSongs: [RankedSong]
+    let unattributedPlayDelta: Int
+    let unattributedListeningDuration: TimeInterval
 
     init(
         monthStart: Date,
@@ -178,7 +180,9 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         biggestGainers: [MovementSong],
         biggestAlbumGainers: [MovementGroup] = [],
         biggestArtistGainers: [MovementGroup] = [],
-        topNewSongs: [RankedSong]
+        topNewSongs: [RankedSong],
+        unattributedPlayDelta: Int = 0,
+        unattributedListeningDuration: TimeInterval = 0
     ) {
         self.monthStart = monthStart
         self.generatedAt = generatedAt
@@ -197,6 +201,8 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         self.biggestAlbumGainers = biggestAlbumGainers
         self.biggestArtistGainers = biggestArtistGainers
         self.topNewSongs = topNewSongs
+        self.unattributedPlayDelta = unattributedPlayDelta
+        self.unattributedListeningDuration = unattributedListeningDuration
     }
 
     var hasActivity: Bool {
@@ -225,7 +231,9 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
             biggestGainers: [],
             biggestAlbumGainers: [],
             biggestArtistGainers: [],
-            topNewSongs: []
+            topNewSongs: [],
+            unattributedPlayDelta: 0,
+            unattributedListeningDuration: 0
         )
     }
 }
@@ -249,6 +257,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
     let encodedSnapshot: Data
     let encodedRecaps: Data?
     let encodedYearlyRecaps: Data?
+    let encodedUnattributedIntervals: Data?
 
     init(
         id: String,
@@ -256,7 +265,8 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         counterSignature: String,
         encodedSnapshot: Data,
         encodedRecaps: Data? = nil,
-        encodedYearlyRecaps: Data? = nil
+        encodedYearlyRecaps: Data? = nil,
+        encodedUnattributedIntervals: Data? = nil
     ) {
         self.id = id
         self.capturedAt = capturedAt
@@ -264,6 +274,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         self.encodedSnapshot = encodedSnapshot
         self.encodedRecaps = encodedRecaps
         self.encodedYearlyRecaps = encodedYearlyRecaps
+        self.encodedUnattributedIntervals = encodedUnattributedIntervals
     }
 }
 
@@ -435,7 +446,11 @@ extension MonthlyRecap {
             biggestGainers: biggestGainers,
             biggestAlbumGainers: [],
             biggestArtistGainers: [],
-            topNewSongs: newSongs
+            topNewSongs: newSongs,
+            unattributedPlayDelta: orderedMonthlyRecaps.reduce(0) { $0 + $1.unattributedPlayDelta },
+            unattributedListeningDuration: orderedMonthlyRecaps.reduce(0) {
+                $0 + $1.unattributedListeningDuration
+            }
         )
     }
 
@@ -588,6 +603,7 @@ final class MonthlyRecapSnapshotStore {
         let deviceIdentifier: String?
         let aggregateCounters: AggregateCounters?
         let songs: [SongSnapshot]
+        let encodedUnattributedIntervals: Data?
 
         init(
             capturedAt: Date,
@@ -596,7 +612,8 @@ final class MonthlyRecapSnapshotStore {
             scannedSongCount: Int?,
             deviceIdentifier: String?,
             aggregateCounters: AggregateCounters? = nil,
-            songs: [SongSnapshot]
+            songs: [SongSnapshot],
+            encodedUnattributedIntervals: Data? = nil
         ) {
             self.capturedAt = capturedAt
             self.reason = reason
@@ -605,6 +622,7 @@ final class MonthlyRecapSnapshotStore {
             self.deviceIdentifier = deviceIdentifier
             self.aggregateCounters = aggregateCounters
             self.songs = songs
+            self.encodedUnattributedIntervals = encodedUnattributedIntervals
         }
     }
 
@@ -756,6 +774,8 @@ final class MonthlyRecapSnapshotStore {
         let biggestAlbumGainers: [MovementGroup]?
         let biggestArtistGainers: [MovementGroup]?
         let topNewSongs: [RankedSong]
+        let unattributedPlayDelta: Int?
+        let unattributedListeningDuration: TimeInterval?
 
         var id: Date { monthStart }
 
@@ -863,6 +883,8 @@ final class MonthlyRecapSnapshotStore {
                     playbackStoreID: $0.playbackStoreID
                 )
             }
+            unattributedPlayDelta = recap.unattributedPlayDelta
+            unattributedListeningDuration = recap.unattributedListeningDuration
         }
 
         func monthlyRecap(artworkLookup: ArtworkLookup) -> MonthlyRecap {
@@ -950,7 +972,9 @@ final class MonthlyRecapSnapshotStore {
                         recordingIdentity: $0.recordingIdentity,
                         playbackStoreID: $0.playbackStoreID
                     )
-                }
+                },
+                unattributedPlayDelta: unattributedPlayDelta ?? 0,
+                unattributedListeningDuration: unattributedListeningDuration ?? 0
             )
         }
 
@@ -975,6 +999,52 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    fileprivate struct UnattributedRecapInterval: Codable, Equatable, Identifiable {
+        let id: String
+        let startedAt: Date
+        let endedAt: Date
+        let deviceIdentifier: String
+        let recap: SyncedMonthlyRecap
+
+        init(startedAt: Date, endedAt: Date, deviceIdentifier: String, recap: MonthlyRecap) {
+            let startMilliseconds = Int64((startedAt.timeIntervalSince1970 * 1_000).rounded())
+            let endMilliseconds = Int64((endedAt.timeIntervalSince1970 * 1_000).rounded())
+            id = "\(deviceIdentifier)|\(startMilliseconds)|\(endMilliseconds)"
+            self.startedAt = startedAt
+            self.endedAt = endedAt
+            self.deviceIdentifier = deviceIdentifier
+            self.recap = SyncedMonthlyRecap(recap: recap, preservingAllRankings: true)
+        }
+
+        private init(
+            id: String,
+            startedAt: Date,
+            endedAt: Date,
+            deviceIdentifier: String,
+            recap: SyncedMonthlyRecap
+        ) {
+            self.id = id
+            self.startedAt = startedAt
+            self.endedAt = endedAt
+            self.deviceIdentifier = deviceIdentifier
+            self.recap = recap
+        }
+
+        func compacted() -> UnattributedRecapInterval {
+            UnattributedRecapInterval(
+                id: id,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                deviceIdentifier: deviceIdentifier,
+                recap: recap.compacted()
+            )
+        }
+
+        func monthlyRecap(artworkLookup: ArtworkLookup) -> MonthlyRecap {
+            recap.monthlyRecap(artworkLookup: artworkLookup)
+        }
+    }
+
     private struct SyncedRecapSummaries: Codable, Equatable {
         let monthlyRecaps: [SyncedMonthlyRecap]
         let yearlyRecaps: [SyncedYearlyRecap]
@@ -986,19 +1056,22 @@ final class MonthlyRecapSnapshotStore {
         var monthlyLedgers: [SyncedMonthlyRecap]
         var syncedRecaps: [SyncedMonthlyRecap]
         var syncedYearlyRecaps: [SyncedYearlyRecap]
+        var unattributedIntervals: [UnattributedRecapInterval]
 
         init(
             schemaVersion: Int,
             snapshots: [LibrarySnapshot],
             monthlyLedgers: [SyncedMonthlyRecap] = [],
             syncedRecaps: [SyncedMonthlyRecap] = [],
-            syncedYearlyRecaps: [SyncedYearlyRecap] = []
+            syncedYearlyRecaps: [SyncedYearlyRecap] = [],
+            unattributedIntervals: [UnattributedRecapInterval] = []
         ) {
             self.schemaVersion = schemaVersion
             self.snapshots = snapshots
             self.monthlyLedgers = monthlyLedgers
             self.syncedRecaps = syncedRecaps
             self.syncedYearlyRecaps = syncedYearlyRecaps
+            self.unattributedIntervals = unattributedIntervals
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -1007,6 +1080,7 @@ final class MonthlyRecapSnapshotStore {
             case monthlyLedgers
             case syncedRecaps
             case syncedYearlyRecaps
+            case unattributedIntervals
         }
 
         init(from decoder: Decoder) throws {
@@ -1016,6 +1090,10 @@ final class MonthlyRecapSnapshotStore {
             monthlyLedgers = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .monthlyLedgers) ?? []
             syncedRecaps = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .syncedRecaps) ?? []
             syncedYearlyRecaps = try container.decodeIfPresent([SyncedYearlyRecap].self, forKey: .syncedYearlyRecaps) ?? []
+            unattributedIntervals = try container.decodeIfPresent(
+                [UnattributedRecapInterval].self,
+                forKey: .unattributedIntervals
+            ) ?? []
         }
     }
 
@@ -1071,6 +1149,10 @@ final class MonthlyRecapSnapshotStore {
             let syncedRecaps: [SyncedMonthlyRecap] = try metadataCodable("monthlyRecaps", in: database) ?? []
             let monthlyLedgers: [SyncedMonthlyRecap] = try metadataCodable("monthlyLedgers", in: database) ?? syncedRecaps
             let syncedYearlyRecaps: [SyncedYearlyRecap] = try metadataCodable("yearlyRecaps", in: database) ?? []
+            let unattributedIntervals: [UnattributedRecapInterval] = try metadataCodable(
+                "unattributedIntervals",
+                in: database
+            ) ?? []
             let sql = "SELECT record FROM snapshots ORDER BY sequence ASC"
             let statement = try prepare(sql, in: database)
             defer { sqlite3_finalize(statement) }
@@ -1120,7 +1202,8 @@ final class MonthlyRecapSnapshotStore {
                 snapshots: snapshots,
                 monthlyLedgers: monthlyLedgers,
                 syncedRecaps: syncedRecaps,
-                syncedYearlyRecaps: syncedYearlyRecaps
+                syncedYearlyRecaps: syncedYearlyRecaps,
+                unattributedIntervals: unattributedIntervals
             )
         }
 
@@ -1163,6 +1246,7 @@ final class MonthlyRecapSnapshotStore {
                 try setMetadataCodable(stored.monthlyLedgers, for: "monthlyLedgers", in: database)
                 try setMetadataCodable(stored.syncedRecaps, for: "monthlyRecaps", in: database)
                 try setMetadataCodable(stored.syncedYearlyRecaps, for: "yearlyRecaps", in: database)
+                try setMetadataCodable(stored.unattributedIntervals, for: "unattributedIntervals", in: database)
                 try execute("COMMIT", in: database)
             } catch {
                 try? execute("ROLLBACK", in: database)
@@ -1810,6 +1894,11 @@ final class MonthlyRecapSnapshotStore {
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
                 didChange = true
             }
+            let retainedIntervals = retainedUnattributedIntervals(stored.unattributedIntervals, now: Date())
+            if retainedIntervals != stored.unattributedIntervals {
+                stored.unattributedIntervals = retainedIntervals
+                didChange = true
+            }
             if didChange && updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
                 didChange = true
             }
@@ -1819,6 +1908,7 @@ final class MonthlyRecapSnapshotStore {
             }
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
             let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
+            let encodedUnattributedIntervals = Self.encodedUnattributedIntervals(stored.unattributedIntervals)
             let syncSnapshots = compactSnapshotsForCloudSync(
                 from: stored.snapshots,
                 currentDeviceIdentifier: deviceIdentifier
@@ -1834,7 +1924,8 @@ final class MonthlyRecapSnapshotStore {
                     )
                 },
                 encodedRecaps: encodedRecaps,
-                encodedYearlyRecaps: encodedYearlyRecaps
+                encodedYearlyRecaps: encodedYearlyRecaps,
+                encodedUnattributedIntervals: encodedUnattributedIntervals
             )
             .uniquedByID()
         }
@@ -1845,6 +1936,11 @@ final class MonthlyRecapSnapshotStore {
             var stored = loadLocked()
             var didChange = backfillAggregateCounters(in: &stored)
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
+                didChange = true
+            }
+            let retainedIntervals = retainedUnattributedIntervals(stored.unattributedIntervals, now: Date())
+            if retainedIntervals != stored.unattributedIntervals {
+                stored.unattributedIntervals = retainedIntervals
                 didChange = true
             }
             if didChange && updateSyncedRecaps(in: &stored, snapshots: stored.snapshots) {
@@ -1865,6 +1961,7 @@ final class MonthlyRecapSnapshotStore {
             )
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
             let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
+            let encodedUnattributedIntervals = Self.encodedUnattributedIntervals(stored.unattributedIntervals)
             return Self.attachRecapSummariesToLatestPayload(
                 localSnapshots.sortedForSyncPayloads().compactMap { snapshot in
                     snapshot.syncPayload(
@@ -1872,7 +1969,8 @@ final class MonthlyRecapSnapshotStore {
                     )
                 },
                 encodedRecaps: encodedRecaps,
-                encodedYearlyRecaps: encodedYearlyRecaps
+                encodedYearlyRecaps: encodedYearlyRecaps,
+                encodedUnattributedIntervals: encodedUnattributedIntervals
             )
             .uniquedByID()
         }
@@ -1895,6 +1993,7 @@ final class MonthlyRecapSnapshotStore {
             }
             let incomingSyncedRecaps = payloads.flatMap(Self.syncedRecaps)
             let incomingSyncedYearlyRecaps = payloads.flatMap(Self.syncedYearlyRecaps)
+            let incomingUnattributedIntervals = payloads.flatMap(Self.unattributedIntervals)
             var didChange = false
 
             for payload in payloads {
@@ -1919,6 +2018,16 @@ final class MonthlyRecapSnapshotStore {
             let mergedSyncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + incomingSyncedYearlyRecaps)
             if mergedSyncedYearlyRecaps != stored.syncedYearlyRecaps {
                 stored.syncedYearlyRecaps = mergedSyncedYearlyRecaps
+                didChange = true
+            }
+            let mergedUnattributedIntervals = Self.mergedUnattributedIntervals(
+                stored.unattributedIntervals + incomingUnattributedIntervals
+            )
+            if mergedUnattributedIntervals != stored.unattributedIntervals {
+                stored.unattributedIntervals = retainedUnattributedIntervals(
+                    mergedUnattributedIntervals,
+                    now: now
+                )
                 didChange = true
             }
 
@@ -2008,7 +2117,24 @@ final class MonthlyRecapSnapshotStore {
             })
             updated.snapshots.append(snapshot)
             updated.snapshots = retainedCanonicalSnapshots(from: updated.snapshots, now: capturedAt)
-            updateIncrementalRecap(in: &updated, previous: previous, current: snapshot)
+            if let previous, isUnobservedMonthGap(from: previous.capturedAt, to: snapshot.capturedAt) {
+                if let interval = unattributedInterval(
+                    from: previous,
+                    to: snapshot,
+                    history: updated.snapshots
+                ) {
+                    updated.unattributedIntervals = Self.mergedUnattributedIntervals(
+                        updated.unattributedIntervals + [interval]
+                    )
+                }
+                updated.unattributedIntervals = retainedUnattributedIntervals(
+                    updated.unattributedIntervals,
+                    now: capturedAt
+                )
+                establishMonthlyBaseline(in: &updated, current: snapshot)
+            } else {
+                updateIncrementalRecap(in: &updated, previous: previous, current: snapshot)
+            }
             updated.snapshots = compactSnapshotsForLocalStorage(from: updated.snapshots)
             if shouldCommit() {
                 saveLocked(updated)
@@ -2036,11 +2162,27 @@ final class MonthlyRecapSnapshotStore {
         return snapshot.counterSignature != previous.counterSignature
     }
 
+    private func isUnobservedMonthGap(from start: Date, to end: Date) -> Bool {
+        let startMonth = calendar.startOfMonth(containing: start)
+        let endMonth = calendar.startOfMonth(containing: end)
+        return (calendar.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0) > 1
+    }
+
     private func retainedSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
         guard let cutoff = calendar.date(byAdding: .month, value: -retentionMonths, to: now) else {
             return snapshots
         }
         return snapshots.filter { $0.capturedAt >= cutoff }
+    }
+
+    private func retainedUnattributedIntervals(
+        _ intervals: [UnattributedRecapInterval],
+        now: Date
+    ) -> [UnattributedRecapInterval] {
+        guard let cutoff = calendar.date(byAdding: .month, value: -retentionMonths, to: now) else {
+            return intervals
+        }
+        return intervals.filter { $0.endedAt >= cutoff }
     }
 
     private func retainedCanonicalSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
@@ -2115,10 +2257,11 @@ final class MonthlyRecapSnapshotStore {
     private static func attachRecapSummariesToLatestPayload(
         _ payloads: [RecapSnapshotSyncPayload],
         encodedRecaps: Data?,
-        encodedYearlyRecaps: Data?
+        encodedYearlyRecaps: Data?,
+        encodedUnattributedIntervals: Data?
     ) -> [RecapSnapshotSyncPayload] {
         guard !payloads.isEmpty,
-              encodedRecaps != nil || encodedYearlyRecaps != nil else {
+              encodedRecaps != nil || encodedYearlyRecaps != nil || encodedUnattributedIntervals != nil else {
             return payloads
         }
 
@@ -2139,13 +2282,38 @@ final class MonthlyRecapSnapshotStore {
                 )
             }
 
+            let encodedSnapshot: Data
+            if let encodedUnattributedIntervals,
+               let snapshot = try? JSONDecoder.playCount.decode(
+                   LibrarySnapshot.self,
+                   from: payload.encodedSnapshot
+               ),
+               let enriched = try? JSONEncoder.playCount.encode(
+                   LibrarySnapshot(
+                       capturedAt: snapshot.capturedAt,
+                       reason: snapshot.reason,
+                       appVersion: snapshot.appVersion,
+                       scannedSongCount: snapshot.scannedSongCount,
+                       deviceIdentifier: snapshot.deviceIdentifier,
+                       aggregateCounters: snapshot.aggregateCounters,
+                       songs: snapshot.songs,
+                       encodedUnattributedIntervals: encodedUnattributedIntervals
+                   )
+               ),
+               enriched.count <= maxSyncPayloadBytes {
+                encodedSnapshot = enriched
+            } else {
+                encodedSnapshot = payload.encodedSnapshot
+            }
+
             return RecapSnapshotSyncPayload(
                 id: payload.id,
                 capturedAt: payload.capturedAt,
                 counterSignature: payload.counterSignature,
-                encodedSnapshot: payload.encodedSnapshot,
+                encodedSnapshot: encodedSnapshot,
                 encodedRecaps: encodedRecaps,
-                encodedYearlyRecaps: encodedYearlyRecaps
+                encodedYearlyRecaps: encodedYearlyRecaps,
+                encodedUnattributedIntervals: encodedUnattributedIntervals
             )
         }
     }
@@ -2176,7 +2344,10 @@ final class MonthlyRecapSnapshotStore {
         let mergedLedgers = Self.mergedSyncedRecaps(startingLedgers + generatedLedgers)
         let generatedRecaps = generatedLedgers.map { $0.compacted() }
         let mergedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + generatedRecaps)
-        let generatedYearlyRecaps = yearlyRecaps(from: mergedLedgers)
+        let generatedYearlyRecaps = yearlyRecaps(
+            from: mergedLedgers,
+            unattributedIntervals: stored.unattributedIntervals
+        )
         let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
             stored.syncedYearlyRecaps + generatedYearlyRecaps
         )
@@ -2488,8 +2659,126 @@ final class MonthlyRecapSnapshotStore {
         stored.syncedRecaps.append(ledger.compacted())
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
         if rebuildYearly {
-            stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
+            stored.syncedYearlyRecaps = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            )
         }
+    }
+
+    private func establishMonthlyBaseline(
+        in stored: inout StoredSnapshots,
+        current: LibrarySnapshot,
+        rebuildYearly: Bool = true
+    ) {
+        let monthStart = calendar.startOfMonth(containing: current.capturedAt)
+        let baseline = MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: current.capturedAt,
+            lastCaptureReason: current.reason,
+            trackingStart: current.capturedAt,
+            snapshotCount: 1,
+            totalPlayDelta: 0,
+            totalSkipDelta: 0,
+            totalListeningDuration: 0,
+            playedSongCount: 0,
+            newSongCount: 0,
+            topSongs: [],
+            topArtists: [],
+            topAlbums: [],
+            biggestGainers: [],
+            topNewSongs: []
+        )
+        let fullBaseline = SyncedMonthlyRecap(recap: baseline, preservingAllRankings: true)
+        let compactBaseline = fullBaseline.compacted()
+        stored.monthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers + [fullBaseline])
+        stored.syncedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + [compactBaseline])
+        if rebuildYearly {
+            stored.syncedYearlyRecaps = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            )
+        }
+    }
+
+    private func unattributedInterval(
+        from previous: LibrarySnapshot,
+        to current: LibrarySnapshot,
+        history: [LibrarySnapshot]
+    ) -> UnattributedRecapInterval? {
+        guard previous.isSameDevice(as: current),
+              hasComparableCoverage(previous, latest: current) else {
+            return nil
+        }
+
+        let intervalEnd = current.capturedAt.addingTimeInterval(0.001)
+        let epochAnalysis = counterEpochAnalysis(
+            baseline: previous,
+            inMonth: [current],
+            latest: current,
+            history: history,
+            monthStart: previous.capturedAt,
+            monthEnd: intervalEnd
+        )
+        let aggregate = aggregateDeltas(
+            latest: current,
+            baseline: previous,
+            counterEpochAnalysis: epochAnalysis
+        )
+        let rankedDeltas = rankingDeltas(
+            from: epochAnalysis.deltas.filter { $0.playDelta > 0 },
+            monthStart: previous.capturedAt,
+            monthEnd: intervalEnd,
+            aggregatePlayDelta: aggregate?.playDelta
+        )
+        let totalPlayDelta = aggregate?.playDelta ?? epochAnalysis.deltas.reduce(0) { $0 + $1.playDelta }
+        let totalSkipDelta = aggregate?.skipDelta ?? epochAnalysis.deltas.reduce(0) { $0 + $1.skipDelta }
+        let totalListeningDuration = aggregate?.listeningDuration
+            ?? epochAnalysis.deltas.reduce(0) { $0 + $1.listeningDuration }
+        guard totalPlayDelta > 0 || totalSkipDelta > 0 else { return nil }
+
+        let artworkLookup = ArtworkLookup(sourceSongs: [])
+        let recap = MonthlyRecap(
+            monthStart: calendar.date(
+                from: DateComponents(year: calendar.component(.year, from: current.capturedAt), month: 1, day: 1)
+            ) ?? calendar.startOfMonth(containing: current.capturedAt),
+            generatedAt: current.capturedAt,
+            lastCaptureReason: current.reason,
+            trackingStart: previous.capturedAt,
+            snapshotCount: 2,
+            totalPlayDelta: totalPlayDelta,
+            totalSkipDelta: totalSkipDelta,
+            totalListeningDuration: totalListeningDuration,
+            playedSongCount: rankedDeltas.count,
+            newSongCount: 0,
+            topSongs: rankedDeltas.sorted(by: compareDeltas).map {
+                rankedSong(from: $0, artworkLookup: artworkLookup)
+            },
+            topArtists: groupedDeltas(
+                rankedDeltas,
+                id: artistGroupID,
+                title: { $0.latest.artist },
+                subtitle: { _ in "Artist" },
+                artwork: { _ in nil }
+            ),
+            topAlbums: groupedDeltas(
+                rankedDeltas,
+                id: albumGroupID,
+                title: { $0.latest.albumTitle },
+                subtitle: { $0.latest.albumArtist },
+                artwork: { _ in nil }
+            ),
+            biggestGainers: [],
+            topNewSongs: [],
+            unattributedPlayDelta: totalPlayDelta,
+            unattributedListeningDuration: totalListeningDuration
+        )
+        return UnattributedRecapInterval(
+            startedAt: previous.capturedAt,
+            endedAt: current.capturedAt,
+            deviceIdentifier: current.deviceIdentifier ?? deviceIdentifier,
+            recap: recap
+        )
     }
 
     private func syncedRecaps(from snapshots: [LibrarySnapshot]) -> [SyncedMonthlyRecap] {
@@ -2503,7 +2792,10 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
-    private func yearlyRecaps(from syncedRecaps: [SyncedMonthlyRecap]) -> [SyncedYearlyRecap] {
+    private func yearlyRecaps(
+        from syncedRecaps: [SyncedMonthlyRecap],
+        unattributedIntervals: [UnattributedRecapInterval]
+    ) -> [SyncedYearlyRecap] {
         let artworkLookup = ArtworkLookup(sourceSongs: [])
         let monthlyRecaps = syncedRecaps.map { $0.monthlyRecap(artworkLookup: artworkLookup) }
         let monthlyRecapsByYear = Dictionary(grouping: monthlyRecaps) {
@@ -2513,15 +2805,80 @@ final class MonthlyRecapSnapshotStore {
         return monthlyRecapsByYear.map { year, recaps in
             let months = recaps.map(\.monthStart).sorted()
             let fallbackMonth = months.first ?? calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? Date()
+            let gapRecaps = effectiveUnattributedIntervals(
+                for: year,
+                intervals: unattributedIntervals,
+                monthlyRecaps: recaps
+            ).map { $0.monthlyRecap(artworkLookup: artworkLookup) }
             let yearlyRecap = MonthlyRecap.yearly(
                 for: year,
                 months: months,
-                monthlyRecaps: recaps,
+                monthlyRecaps: recaps + gapRecaps,
                 fallbackMonth: fallbackMonth,
                 fallbackRecap: .empty(for: fallbackMonth, calendar: calendar)
             )
             return SyncedYearlyRecap(year: year, recap: yearlyRecap)
         }
+    }
+
+    private func effectiveUnattributedIntervals(
+        for year: Int,
+        intervals: [UnattributedRecapInterval],
+        monthlyRecaps: [MonthlyRecap]
+    ) -> [UnattributedRecapInterval] {
+        let sameYear = intervals.filter {
+            calendar.component(.year, from: $0.startedAt) == year &&
+                calendar.component(.year, from: $0.endedAt) == year
+        }.sorted {
+            if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+            return $0.endedAt < $1.endedAt
+        }
+
+        var nonOverlapping: [UnattributedRecapInterval] = []
+        for interval in sameYear {
+            guard let index = nonOverlapping.firstIndex(where: {
+                $0.startedAt < interval.endedAt && interval.startedAt < $0.endedAt
+            }) else {
+                nonOverlapping.append(interval)
+                continue
+            }
+            if Self.isHigherPrioritySyncedRecap(interval.recap, than: nonOverlapping[index].recap) {
+                nonOverlapping[index] = interval
+            }
+        }
+
+        return nonOverlapping.filter { interval in
+            !isFullyCovered(
+                from: interval.startedAt,
+                through: interval.endedAt,
+                by: monthlyRecaps
+            )
+        }
+    }
+
+    private func isFullyCovered(
+        from start: Date,
+        through end: Date,
+        by monthlyRecaps: [MonthlyRecap]
+    ) -> Bool {
+        let coverage = monthlyRecaps.compactMap { recap -> (Date, Date)? in
+            guard recap.snapshotCount > 1,
+                  let trackingStart = recap.trackingStart,
+                  recap.generatedAt > trackingStart else {
+                return nil
+            }
+            let lower = max(start, trackingStart)
+            let upper = min(end, recap.generatedAt)
+            return lower < upper ? (lower, upper) : nil
+        }.sorted { $0.0 < $1.0 }
+
+        var coveredThrough = start
+        for range in coverage {
+            guard range.0 <= coveredThrough.addingTimeInterval(1) else { return false }
+            coveredThrough = max(coveredThrough, range.1)
+            if coveredThrough >= end { return true }
+        }
+        return false
     }
 
     private static func encodedSyncedRecaps(_ recaps: [SyncedMonthlyRecap]) -> Data? {
@@ -2532,6 +2889,11 @@ final class MonthlyRecapSnapshotStore {
     private static func encodedSyncedYearlyRecaps(_ recaps: [SyncedYearlyRecap]) -> Data? {
         guard !recaps.isEmpty else { return nil }
         return try? JSONEncoder.playCount.encode(recaps)
+    }
+
+    private static func encodedUnattributedIntervals(_ intervals: [UnattributedRecapInterval]) -> Data? {
+        guard !intervals.isEmpty else { return nil }
+        return try? JSONEncoder.playCount.encode(intervals.map { $0.compacted() })
     }
 
     private static func syncedRecaps(from payload: RecapSnapshotSyncPayload) -> [SyncedMonthlyRecap] {
@@ -2555,6 +2917,17 @@ final class MonthlyRecapSnapshotStore {
             return []
         }
         return summaries.yearlyRecaps
+    }
+
+    private static func unattributedIntervals(
+        from payload: RecapSnapshotSyncPayload
+    ) -> [UnattributedRecapInterval] {
+        let embeddedData = (try? JSONDecoder.playCount.decode(
+            LibrarySnapshot.self,
+            from: payload.encodedSnapshot
+        ))?.encodedUnattributedIntervals
+        guard let data = payload.encodedUnattributedIntervals ?? embeddedData else { return [] }
+        return (try? JSONDecoder.playCount.decode([UnattributedRecapInterval].self, from: data)) ?? []
     }
 
     private static func mergedSyncedRecaps(_ recaps: [SyncedMonthlyRecap]) -> [SyncedMonthlyRecap] {
@@ -2599,6 +2972,26 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    private static func mergedUnattributedIntervals(
+        _ intervals: [UnattributedRecapInterval]
+    ) -> [UnattributedRecapInterval] {
+        var intervalsByID: [String: UnattributedRecapInterval] = [:]
+        for interval in intervals {
+            guard let existing = intervalsByID[interval.id] else {
+                intervalsByID[interval.id] = interval
+                continue
+            }
+            if isHigherPrioritySyncedRecap(interval.recap, than: existing.recap) {
+                intervalsByID[interval.id] = interval
+            }
+        }
+        return intervalsByID.values.sorted {
+            if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+            if $0.endedAt != $1.endedAt { return $0.endedAt < $1.endedAt }
+            return $0.id < $1.id
+        }
+    }
+
     private static func isHigherPrioritySyncedRecap(_ lhs: SyncedMonthlyRecap, than rhs: SyncedMonthlyRecap) -> Bool {
         if lhs.hasActivity != rhs.hasActivity {
             return lhs.hasActivity
@@ -2614,6 +3007,12 @@ final class MonthlyRecapSnapshotStore {
 
         if lhs.totalListeningDuration != rhs.totalListeningDuration {
             return lhs.totalListeningDuration > rhs.totalListeningDuration
+        }
+
+        let lhsUnattributed = lhs.unattributedPlayDelta ?? 0
+        let rhsUnattributed = rhs.unattributedPlayDelta ?? 0
+        if lhsUnattributed != rhsUnattributed {
+            return lhsUnattributed < rhsUnattributed
         }
 
         if lhs.playedSongCount != rhs.playedSongCount {
@@ -3405,7 +3804,7 @@ final class MonthlyRecapSnapshotStore {
             $0.capturedAt < monthStart &&
                 $0.isSameDevice(as: latest) &&
                 hasComparableCoverage($0, latest: latest)
-        }) {
+        }), !isUnobservedMonthGap(from: beforeMonth.capturedAt, to: latest.capturedAt) {
             return beforeMonth
         }
 
@@ -3663,7 +4062,8 @@ final class MonthlyRecapSnapshotStore {
                       verified.snapshots.map(\.syncIdentifier) == legacy.snapshots.map(\.syncIdentifier),
                       verified.monthlyLedgers == legacy.monthlyLedgers,
                       verified.syncedRecaps == legacy.syncedRecaps,
-                      verified.syncedYearlyRecaps == legacy.syncedYearlyRecaps else {
+                      verified.syncedYearlyRecaps == legacy.syncedYearlyRecaps,
+                      verified.unattributedIntervals == legacy.unattributedIntervals else {
                     throw CocoaError(.fileReadCorruptFile)
                 }
 
@@ -3719,11 +4119,27 @@ final class MonthlyRecapSnapshotStore {
                 from: stored.snapshots,
                 now: snapshot.capturedAt
             )
-            updateIncrementalRecap(in: &stored, previous: previous, current: snapshot, rebuildYearly: false)
+            if let previous, isUnobservedMonthGap(from: previous.capturedAt, to: snapshot.capturedAt) {
+                if let interval = unattributedInterval(
+                    from: previous,
+                    to: snapshot,
+                    history: stored.snapshots
+                ) {
+                    stored.unattributedIntervals = Self.mergedUnattributedIntervals(
+                        stored.unattributedIntervals + [interval]
+                    )
+                }
+                establishMonthlyBaseline(in: &stored, current: snapshot, rebuildYearly: false)
+            } else {
+                updateIncrementalRecap(in: &stored, previous: previous, current: snapshot, rebuildYearly: false)
+            }
             stored.snapshots = compactSnapshotsForLocalStorage(from: stored.snapshots)
         }
 
-        stored.syncedYearlyRecaps = yearlyRecaps(from: stored.monthlyLedgers)
+        stored.syncedYearlyRecaps = yearlyRecaps(
+            from: stored.monthlyLedgers,
+            unattributedIntervals: stored.unattributedIntervals
+        )
 
         // Preserve any higher-quality Cloud summary that was already cached.
         if let data = try? Data(contentsOf: summaryFileURL),
@@ -4135,17 +4551,37 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
     func syncPayload(
         prioritySongIDs: Set<UInt64>,
         encodedRecaps: Data? = nil,
-        encodedYearlyRecaps: Data? = nil
+        encodedYearlyRecaps: Data? = nil,
+        encodedUnattributedIntervals: Data? = nil
     ) -> RecapSnapshotSyncPayload? {
-        let snapshot = snapshotForSyncPayload(prioritySongIDs: prioritySongIDs)
-        guard let data = try? JSONEncoder.playCount.encode(snapshot) else { return nil }
+        let baseSnapshot = snapshotForSyncPayload(prioritySongIDs: prioritySongIDs)
+        let snapshot = Self(
+            capturedAt: baseSnapshot.capturedAt,
+            reason: baseSnapshot.reason,
+            appVersion: baseSnapshot.appVersion,
+            scannedSongCount: baseSnapshot.scannedSongCount,
+            deviceIdentifier: baseSnapshot.deviceIdentifier,
+            aggregateCounters: baseSnapshot.aggregateCounters,
+            songs: baseSnapshot.songs,
+            encodedUnattributedIntervals: encodedUnattributedIntervals
+        )
+        guard let encodedSnapshot = try? JSONEncoder.playCount.encode(snapshot) else { return nil }
+        let data: Data
+        if encodedSnapshot.count <= MonthlyRecapSnapshotStore.maxSyncPayloadBytes {
+            data = encodedSnapshot
+        } else if let fallback = try? JSONEncoder.playCount.encode(baseSnapshot) {
+            data = fallback
+        } else {
+            return nil
+        }
         return RecapSnapshotSyncPayload(
             id: snapshot.syncIdentifier,
             capturedAt: snapshot.capturedAt,
             counterSignature: snapshot.counterSignature,
             encodedSnapshot: data,
             encodedRecaps: encodedRecaps,
-            encodedYearlyRecaps: encodedYearlyRecaps
+            encodedYearlyRecaps: encodedYearlyRecaps,
+            encodedUnattributedIntervals: encodedUnattributedIntervals
         )
     }
 

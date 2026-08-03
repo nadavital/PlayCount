@@ -511,6 +511,13 @@ struct MonthlyRecapView: View {
                             onSelectMonth: { selectMonth($0) }
                         )
 
+                        if isShowingYearAggregate, recap.unattributedPlayDelta > 0 {
+                            RecapTrackingCoverageNotice(
+                                playCount: recap.unattributedPlayDelta,
+                                listeningDuration: recap.unattributedListeningDuration
+                            )
+                        }
+
                         if recap.hasActivity {
                             recapSections
                         } else {
@@ -705,9 +712,13 @@ struct MonthlyRecapView: View {
     private var baselineSection: some View {
         RecapSurface {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Your baseline is set")
+                Text(recap.snapshotCount == 0 ? "No tracking data" : "Your baseline is set")
                     .font(.title3.weight(.semibold))
-                Text("Come back after listening and your most-played songs, albums, and artists will appear here.")
+                Text(
+                    recap.snapshotCount == 0
+                        ? "PlayCount didn't observe your library during this month, so it won't guess where your plays belong."
+                        : "Come back after listening and your most-played songs, albums, and artists will appear here."
+                )
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -2118,6 +2129,29 @@ private struct RecapGroupRow: View {
             MetricBadge(text: "+\(group.playDelta)")
         }
         .padding(.vertical, 9)
+    }
+}
+
+private struct RecapTrackingCoverageNotice: View {
+    let playCount: Int
+    let listeningDuration: TimeInterval
+
+    var body: some View {
+        RecapSurface {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Includes activity from an untracked interval")
+                        .font(.callout.weight(.semibold))
+                    Text("\(playCount.formatted()) plays · \(listeningDuration.formattedListeningMinutes) couldn't be assigned to a specific month.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "calendar.badge.exclamationmark")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
