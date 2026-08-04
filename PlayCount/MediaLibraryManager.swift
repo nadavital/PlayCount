@@ -831,7 +831,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     func yearlyRecap(for year: Int) -> MonthlyRecap {
         #if DEBUG
         if Self.isScreenshotModeEnabled {
-            return Self.screenshotRecap(from: Self.screenshotSongs)
+            let months = Self.screenshotRecapMonths(endingAt: monthlyRecap.monthStart)
+                .filter { Calendar.current.component(.year, from: $0) == year }
+            let recaps = months.map { Self.screenshotRecap(from: Self.screenshotSongs, monthStart: $0) }
+            return Self.yearlyRecap(
+                for: year,
+                months: months,
+                monthlyRecaps: recaps,
+                fallbackMonth: monthlyRecap.monthStart,
+                fallbackRecap: monthlyRecap
+            )
         }
         #endif
 
@@ -857,6 +866,19 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func yearlyMonthlyHighlights(for year: Int) -> [YearlyRecapMonthlyHighlight] {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return Self.screenshotRecapMonths(endingAt: monthlyRecap.monthStart)
+                .filter { Calendar.current.component(.year, from: $0) == year }
+                .map {
+                    YearlyRecapMonthlyHighlight(
+                        month: $0,
+                        recap: Self.screenshotRecap(from: Self.screenshotSongs, monthStart: $0)
+                    )
+                }
+        }
+        #endif
+
         if let cached = yearlyMonthlyHighlightsCache[year] {
             return cached
         }

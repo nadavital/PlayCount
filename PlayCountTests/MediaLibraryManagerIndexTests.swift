@@ -287,17 +287,53 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
     }
 
     @MainActor
-    func testRecapShareCardRendersCompletePortraitCanvas() throws {
-        let song = MonthlyRecap.RankedSong(
-            id: 1,
-            title: "A Long Enough Song Title to Exercise Layout",
-            artist: "Nova Lane",
-            albumTitle: "Glass Coast",
-            playDelta: 42,
-            skipDelta: 0,
-            listeningDuration: 7_560,
-            artwork: nil
-        )
+    func testEveryRecapShareTemplateRendersCompleteStoryCanvas() throws {
+        let songs = (1...10).map { index in
+            MonthlyRecap.RankedSong(
+                id: UInt64(index),
+                title: "A Long Song Title \(index)",
+                artist: "Artist \(index)",
+                albumTitle: "Album \(index)",
+                playDelta: 50 - index,
+                skipDelta: 0,
+                listeningDuration: TimeInterval(7_560 - index * 60),
+                artwork: nil
+            )
+        }
+        let groups = (1...10).map { index in
+            MonthlyRecap.RankedGroup(
+                id: "group-\(index)",
+                title: "A Long Album or Artist Name \(index)",
+                subtitle: "Subtitle \(index)",
+                playDelta: 50 - index,
+                listeningDuration: TimeInterval(7_560 - index * 60),
+                artwork: nil
+            )
+        }
+        let songGainers = songs.map { song in
+            MonthlyRecap.MovementSong(
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                playDelta: song.playDelta,
+                rankChange: 20,
+                currentRank: 4,
+                previousRank: 24,
+                artwork: nil
+            )
+        }
+        let groupGainers = groups.map { group in
+            MonthlyRecap.MovementGroup(
+                id: group.id,
+                title: group.title,
+                subtitle: group.subtitle,
+                playDelta: group.playDelta,
+                rankChange: 20,
+                currentRank: 4,
+                previousRank: 24,
+                artwork: nil
+            )
+        }
         let recap = MonthlyRecap(
             monthStart: Date(),
             generatedAt: Date(),
@@ -309,6 +345,90 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             totalListeningDuration: 45_660,
             playedSongCount: 12,
             newSongCount: 1,
+            topSongs: songs,
+            topArtists: groups,
+            topAlbums: groups,
+            biggestGainers: songGainers,
+            biggestAlbumGainers: groupGainers,
+            biggestArtistGainers: groupGainers,
+            topNewSongs: []
+        )
+        let palette = RecapSharePalette(artworks: [], fallbackSeed: 42)
+        let calendar = Calendar(identifier: .gregorian)
+        let yearStart = calendar.date(from: DateComponents(year: 2026, month: 1, day: 1))!
+        let trendPoints = (0..<12).compactMap { offset -> RecapShareTrendPoint? in
+            guard let month = calendar.date(byAdding: .month, value: offset, to: yearStart) else { return nil }
+            return RecapShareTrendPoint(
+                month: month,
+                plays: 120 + offset * 18,
+                listeningMinutes: Double(410 + offset * 56)
+            )
+        }
+
+        for template in RecapShareTemplate.allCases {
+            let image = try XCTUnwrap(
+                RecapShareRenderer.image(
+                    recap: recap,
+                    periodTitle: "July 2026",
+                    palette: palette,
+                    template: template,
+                    trendPoints: trendPoints
+                )
+            )
+            XCTAssertEqual(image.size.width, 360, accuracy: 0.5, "\(template)")
+            XCTAssertEqual(image.size.height, 640, accuracy: 0.5, "\(template)")
+            XCTAssertEqual(image.cgImage?.width, 1_080, "\(template)")
+            XCTAssertEqual(image.cgImage?.height, 1_920, "\(template)")
+            XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 10_000, "\(template)")
+        }
+
+        for category in RecapShareGainerCategory.allCases {
+            let image = try XCTUnwrap(
+                RecapShareRenderer.image(
+                    recap: recap,
+                    periodTitle: "July 2026",
+                    palette: palette,
+                    template: .biggestGainers,
+                    gainerCategory: category
+                )
+            )
+            XCTAssertEqual(image.cgImage?.width, 1_080, "\(category)")
+            XCTAssertEqual(image.cgImage?.height, 1_920, "\(category)")
+        }
+    }
+
+    @MainActor
+    func testRecapOverviewExportResolvesArtworkBeforeRendering() throws {
+        var artworkRequestCount = 0
+        let sourceImage = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 400)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 400, height: 400))
+        }
+        let artwork = MPMediaItemArtwork(boundsSize: sourceImage.size) { _ in
+            artworkRequestCount += 1
+            return sourceImage
+        }
+        let song = MonthlyRecap.RankedSong(
+            id: 1,
+            title: "Green Light",
+            artist: "Artist",
+            albumTitle: "Album",
+            playDelta: 42,
+            skipDelta: 0,
+            listeningDuration: 9_000,
+            artwork: artwork
+        )
+        let recap = MonthlyRecap(
+            monthStart: Date(),
+            generatedAt: Date(),
+            lastCaptureReason: .foreground,
+            trackingStart: Date(),
+            snapshotCount: 2,
+            totalPlayDelta: 42,
+            totalSkipDelta: 0,
+            totalListeningDuration: 9_000,
+            playedSongCount: 1,
+            newSongCount: 0,
             topSongs: [song],
             topArtists: [],
             topAlbums: [],
@@ -316,14 +436,15 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             topNewSongs: []
         )
 
-        let image = try XCTUnwrap(
-            RecapShareRenderer.image(recap: recap, periodTitle: "July 2026", artwork: nil)
+        let image = RecapShareRenderer.image(
+            recap: recap,
+            periodTitle: "July 2026",
+            palette: RecapSharePalette(artworks: [], fallbackSeed: 7),
+            template: .overview
         )
-        XCTAssertEqual(image.size.width, 390, accuracy: 0.5)
-        XCTAssertEqual(image.size.height, 700, accuracy: 0.5)
-        XCTAssertEqual(image.cgImage?.width, 1_170)
-        XCTAssertEqual(image.cgImage?.height, 2_100)
-        XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 10_000)
+
+        XCTAssertNotNil(image)
+        XCTAssertGreaterThan(artworkRequestCount, 0, "Export must resolve cover art synchronously before ImageRenderer snapshots the card")
     }
 
     func testInitializationDefersStoredRecapLoading() throws {
@@ -793,6 +914,76 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(yearlyRecap.topSongs.count, 250)
         XCTAssertEqual(yearlyRecap.topNewSongs.first?.title, "Low Delta New Song")
         XCTAssertEqual(yearlyRecap.playedSongCount, 261)
+    }
+
+    func testYearlyRecapAggregatesAlbumAndArtistGainers() {
+        let january = date(year: 2026, month: 1, day: 1)
+        let february = date(year: 2026, month: 2, day: 1)
+        let climbingAlbumJanuary = MonthlyRecap.MovementGroup(
+            id: "10", title: "Shared Title", subtitle: "Artist A",
+            playDelta: 12, rankChange: 5, currentRank: 8, previousRank: 13, artwork: nil
+        )
+        let climbingAlbumFebruary = MonthlyRecap.MovementGroup(
+            id: "99", title: "shared title", subtitle: "artist a",
+            playDelta: 18, rankChange: 9, currentRank: 4, previousRank: 13, artwork: nil
+        )
+        let distinctAlbum = MonthlyRecap.MovementGroup(
+            id: "11", title: "Shared Title", subtitle: "Artist B",
+            playDelta: 8, rankChange: 4, currentRank: 12, previousRank: 16, artwork: nil
+        )
+        let artistJanuary = MonthlyRecap.MovementGroup(
+            id: "20", title: "Climbing Artist", subtitle: "Artist",
+            playDelta: 20, rankChange: 6, currentRank: 7, previousRank: 13, artwork: nil
+        )
+        let artistFebruary = MonthlyRecap.MovementGroup(
+            id: "21", title: "climbing artist", subtitle: "Artist",
+            playDelta: 25, rankChange: 11, currentRank: 2, previousRank: 13, artwork: nil
+        )
+
+        func recap(
+            month: Date,
+            albums: [MonthlyRecap.MovementGroup],
+            artists: [MonthlyRecap.MovementGroup]
+        ) -> MonthlyRecap {
+            MonthlyRecap(
+                monthStart: month,
+                generatedAt: month,
+                lastCaptureReason: .foreground,
+                trackingStart: month,
+                snapshotCount: 2,
+                totalPlayDelta: 0,
+                totalSkipDelta: 0,
+                totalListeningDuration: 0,
+                playedSongCount: 0,
+                newSongCount: 0,
+                topSongs: [],
+                topArtists: [],
+                topAlbums: [],
+                biggestGainers: [],
+                biggestAlbumGainers: albums,
+                biggestArtistGainers: artists,
+                topNewSongs: []
+            )
+        }
+
+        let januaryRecap = recap(month: january, albums: [climbingAlbumJanuary, distinctAlbum], artists: [artistJanuary])
+        let februaryRecap = recap(month: february, albums: [climbingAlbumFebruary], artists: [artistFebruary])
+        let yearly = MonthlyRecap.yearly(
+            for: 2026,
+            months: [january, february],
+            monthlyRecaps: [januaryRecap, februaryRecap],
+            fallbackMonth: january,
+            fallbackRecap: januaryRecap
+        )
+
+        XCTAssertEqual(yearly.biggestAlbumGainers.count, 2)
+        XCTAssertEqual(yearly.biggestAlbumGainers.first?.playDelta, 30)
+        XCTAssertEqual(yearly.biggestAlbumGainers.first?.rankChange, 9)
+        XCTAssertEqual(yearly.biggestAlbumGainers.first?.id, "99")
+        XCTAssertEqual(yearly.biggestArtistGainers.count, 1)
+        XCTAssertEqual(yearly.biggestArtistGainers.first?.playDelta, 45)
+        XCTAssertEqual(yearly.biggestArtistGainers.first?.rankChange, 11)
+        XCTAssertEqual(yearly.biggestArtistGainers.first?.id, "21")
     }
 
     private func manager(

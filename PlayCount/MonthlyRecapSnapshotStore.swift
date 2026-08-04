@@ -372,6 +372,8 @@ extension MonthlyRecap {
         var albums: [String: RankedGroupAggregate] = [:]
         var artists: [String: RankedGroupAggregate] = [:]
         var movement: [UInt64: MovementSongAggregate] = [:]
+        var albumMovement: [String: MovementGroupAggregate] = [:]
+        var artistMovement: [String: MovementGroupAggregate] = [:]
         var newSongIDs: [String] = []
         var newSongIDSet: Set<String> = []
 
@@ -406,6 +408,18 @@ extension MonthlyRecap {
             for song in recap.biggestGainers {
                 movement[song.id, default: MovementSongAggregate(song: song)].merge(song)
             }
+            for group in recap.biggestAlbumGainers {
+                let key = [
+                    "album",
+                    normalizedRecapIdentityComponent(group.title),
+                    normalizedRecapIdentityComponent(group.subtitle)
+                ].joined(separator: ":")
+                albumMovement[key, default: MovementGroupAggregate(group: group)].merge(group)
+            }
+            for group in recap.biggestArtistGainers {
+                let key = "artist:\(normalizedRecapIdentityComponent(group.title))"
+                artistMovement[key, default: MovementGroupAggregate(group: group)].merge(group)
+            }
         }
 
         let rankedSongs = songs.values
@@ -423,6 +437,14 @@ extension MonthlyRecap {
         let biggestGainers = movement.values
             .map(\.movementSong)
             .sorted { $0.rankChange > $1.rankChange }
+
+        let biggestAlbumGainers = albumMovement.values
+            .map(\.movementGroup)
+            .sorted(by: Self.movementGroupSort)
+
+        let biggestArtistGainers = artistMovement.values
+            .map(\.movementGroup)
+            .sorted(by: Self.movementGroupSort)
 
         let newSongs = newSongIDs.compactMap { key in
             songs[key]?.rankedSong
@@ -444,8 +466,8 @@ extension MonthlyRecap {
             topArtists: rankedArtists,
             topAlbums: rankedAlbums,
             biggestGainers: biggestGainers,
-            biggestAlbumGainers: [],
-            biggestArtistGainers: [],
+            biggestAlbumGainers: biggestAlbumGainers,
+            biggestArtistGainers: biggestArtistGainers,
             topNewSongs: newSongs,
             unattributedPlayDelta: orderedMonthlyRecaps.reduce(0) { $0 + $1.unattributedPlayDelta },
             unattributedListeningDuration: orderedMonthlyRecaps.reduce(0) {
@@ -584,6 +606,63 @@ extension MonthlyRecap {
                 artwork: artwork
             )
         }
+    }
+
+    private struct MovementGroupAggregate {
+        var id: String
+        var title: String
+        var subtitle: String
+        var playDelta: Int
+        var rankChange: Int
+        var currentRank: Int
+        var previousRank: Int?
+        var artwork: MPMediaItemArtwork?
+
+        init(group: MonthlyRecap.MovementGroup) {
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            playDelta = 0
+            rankChange = 0
+            currentRank = group.currentRank
+            previousRank = group.previousRank
+            artwork = group.artwork
+        }
+
+        mutating func merge(_ group: MonthlyRecap.MovementGroup) {
+            playDelta += group.playDelta
+            rankChange = max(rankChange, group.rankChange)
+            id = group.id
+            title = group.title
+            subtitle = group.subtitle
+            currentRank = group.currentRank
+            previousRank = group.previousRank
+            artwork = group.artwork ?? artwork
+        }
+
+        var movementGroup: MonthlyRecap.MovementGroup {
+            MonthlyRecap.MovementGroup(
+                id: id,
+                title: title,
+                subtitle: subtitle,
+                playDelta: playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: artwork
+            )
+        }
+    }
+
+    private static func movementGroupSort(
+        _ lhs: MonthlyRecap.MovementGroup,
+        _ rhs: MonthlyRecap.MovementGroup
+    ) -> Bool {
+        if lhs.rankChange != rhs.rankChange { return lhs.rankChange > rhs.rankChange }
+        if lhs.playDelta != rhs.playDelta { return lhs.playDelta > rhs.playDelta }
+        let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+        return lhs.subtitle.localizedCaseInsensitiveCompare(rhs.subtitle) == .orderedAscending
     }
 }
 

@@ -1,3 +1,4 @@
+import Charts
 import MediaPlayer
 import SwiftUI
 
@@ -31,6 +32,30 @@ private extension View {
 
 }
 
+private enum RecapGainerCategory: String, CaseIterable, Identifiable {
+    case songs = "Songs"
+    case albums = "Albums"
+    case artists = "Artists"
+
+    var id: Self { self }
+}
+
+private enum YearlyRecapSection: String, CaseIterable, Identifiable {
+    case overview = "Overview"
+    case trends = "Trends"
+    case byMonth = "By Month"
+
+    var id: Self { self }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "rectangle.grid.2x2.fill"
+        case .trends: "chart.xyaxis.line"
+        case .byMonth: "calendar"
+        }
+    }
+}
+
 struct MonthlyRecapView: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -46,6 +71,8 @@ struct MonthlyRecapView: View {
     @State private var cachedArtworkHighlightsSignature = ""
     @State private var cachedRecapBackgroundPalette: RecapBackgroundPalette?
     @State private var hasScheduledInitialCloudSync = false
+    @State private var isPresentingShareStudio = false
+    @State private var selectedYearlySection: YearlyRecapSection = .overview
 
     #if DEBUG
     @State private var reminderStatusMessage: String?
@@ -64,28 +91,35 @@ struct MonthlyRecapView: View {
     }
 
     private struct RecapGainersSection: View {
-        enum Kind: String, CaseIterable, Identifiable {
-            case songs = "Songs"
-            case albums = "Albums"
-            case artists = "Artists"
-            var id: Self { self }
-        }
-
         let songs: [MonthlyRecap.MovementSong]
         let albums: [MonthlyRecap.MovementGroup]
         let artists: [MonthlyRecap.MovementGroup]
         @ObservedObject var manager: MediaLibraryManager
+        let recapContext: RecapDrilldownContext
         let openDestination: (RecapNavigationDestination) -> Void
-        @State private var selection: Kind = .songs
+        @State private var selection: RecapGainerCategory = .songs
 
-        private var availableKinds: [Kind] {
-            Kind.allCases.filter {
+        private var availableKinds: [RecapGainerCategory] {
+            RecapGainerCategory.allCases.filter {
                 switch $0 { case .songs: !songs.isEmpty; case .albums: !albums.isEmpty; case .artists: !artists.isEmpty }
             }
         }
 
         var body: some View {
-            RecapRankingSection(title: "Biggest Gainers") {
+            RecapRankingSection(
+                title: "Biggest Gainers",
+                totalCount: selectedCount,
+                visibleCount: 5
+            ) {
+                RecapFullGainersView(
+                    category: selection,
+                    songs: songs,
+                    albums: albums,
+                    artists: artists,
+                    manager: manager,
+                    recapContext: recapContext
+                )
+            } content: {
                 VStack(spacing: 8) {
                     if availableKinds.count > 1 {
                         Picker("Gainer category", selection: $selection) {
@@ -99,6 +133,14 @@ struct MonthlyRecapView: View {
                 }
                 .onAppear { normalizeSelection() }
                 .onChange(of: availableKinds) { _, _ in normalizeSelection() }
+            }
+        }
+
+        private var selectedCount: Int {
+            switch selection {
+            case .songs: songs.count
+            case .albums: albums.count
+            case .artists: artists.count
             }
         }
 
@@ -555,17 +597,15 @@ struct MonthlyRecapView: View {
             manager.refreshForRecapSequence(reason: .manualRefresh)
         }
         .background(RecapBackground(palette: recapBackgroundPalette))
-        .overlay(alignment: .topTrailing) {
-            floatingYearPicker
-                .padding(.top, 8)
-                .padding(.trailing, 18)
+        .navigationTitle("Recap")
+        .playCountPrimaryTitleDisplayMode()
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                recapYearPicker
+                recapShareButton
+            }
         }
-        .overlay(alignment: .topLeading) {
-            recapShareButton
-                .padding(.top, 8)
-                .padding(.leading, 18)
-        }
-        .toolbar(.hidden, for: .navigationBar)
         .simultaneousGesture(monthSwipeGesture)
         .task(id: artworkHighlightsSignature) {
             updateCachedArtworkHighlightsIfNeeded()
@@ -574,6 +614,7 @@ struct MonthlyRecapView: View {
             applyPendingRecapMonth()
             syncSelectedMonthIfNeeded()
             scheduleInitialCloudSyncIfNeeded()
+            applyScreenshotPresentationIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openMonthlyRecap)) { _ in
             applyPendingRecapMonth()
@@ -587,12 +628,45 @@ struct MonthlyRecapView: View {
         .navigationDestination(item: $selectedRecapDestination) { destination in
             recapDestinationView(for: destination)
         }
+        .sheet(isPresented: $isPresentingShareStudio) {
+            RecapShareStudio(
+                recap: recap,
+                periodTitle: monthTitle,
+                palette: RecapSharePalette(
+                    artworks: cachedArtworkHighlights,
+                    fallbackSeed: recapBackgroundSeed
+                ),
+                trendPoints: isShowingYearAggregate ? yearlyTrendPoints : []
+            )
+        }
     }
 
     private func applyPendingRecapMonth() {
         guard let month = PlayCountNavigationRequestStore.consumeRequestedRecapMonth() else { return }
         isShowingYearAggregate = false
         selectedMonthStart = normalizedMonth(month)
+    }
+
+    private func applyScreenshotPresentationIfNeeded() {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-PlayCountScreenshotYearlyRecap") {
+            selectYearAggregate()
+        }
+        if let index = arguments.firstIndex(of: "-PlayCountScreenshotYearlySection"),
+           arguments.indices.contains(index + 1) {
+            selectedYearlySection = switch arguments[index + 1].lowercased() {
+            case "trends": .trends
+            case "month", "months", "bymonth": .byMonth
+            default: .overview
+            }
+        }
+        if arguments.contains("-PlayCountScreenshotShareStudio") {
+            DispatchQueue.main.async {
+                isPresentingShareStudio = true
+            }
+        }
+        #endif
     }
 
     private var isRegularWidth: Bool {
@@ -602,66 +676,76 @@ struct MonthlyRecapView: View {
     @ViewBuilder
     private var recapShareButton: some View {
         if recap.hasActivity {
-            ShareLink(
-                item: RecapSharePayload(
-                    recap: recap,
-                    periodTitle: monthTitle,
-                    artwork: recap.topSongs.first.flatMap(resolvedArtwork(for:))
-                ),
-                preview: SharePreview("My \(monthTitle) PlayCount Recap")
-            ) {
+            Button {
+                isPresentingShareStudio = true
+            } label: {
                 Image(systemName: "square.and.arrow.up")
                     .font(.subheadline.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Share recap")
-            .recapFloatingGlassButton()
         }
     }
 
     @ViewBuilder
     private var recapSections: some View {
         VStack(alignment: .leading, spacing: 22) {
-            LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
-                rankingSections
-            }
+            if isShowingYearAggregate {
+                RecapYearSectionPicker(selection: $selectedYearlySection)
 
-            if isShowingYearAggregate, hasYearlyMonthlyHighlights {
-                yearlyMonthlyBreakdownSection
+                switch selectedYearlySection {
+                case .overview:
+                    LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
+                        yearlyRankingSections
+                    }
+                case .trends:
+                    if !yearlyTrendPoints.isEmpty {
+                        RecapYearTrendSection(points: yearlyTrendPoints)
+                    }
+                    if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
+                        biggestGainersSection
+                    }
+                case .byMonth:
+                    if hasYearlyMonthlyHighlights {
+                        yearlyMonthlyBreakdownSection
+                    }
+                }
+            } else {
+                LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
+                    monthlyRankingSections
+                }
             }
         }
     }
 
     @ViewBuilder
-    private var rankingSections: some View {
-        if isShowingYearAggregate {
-            if !recap.topSongs.isEmpty {
-                topSongsSection
-            }
-            if !recap.topAlbums.isEmpty {
-                topAlbumsSection
-            }
-            if !recap.topArtists.isEmpty {
-                topArtistsSection
-            }
-        } else {
-            if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
-                biggestGainersSection
-            }
-            if !recap.topNewSongs.isEmpty {
-                topNewSongsSection
-            }
-            if !recap.topSongs.isEmpty {
-                topSongsSection
-            }
-            if !recap.topAlbums.isEmpty {
-                topAlbumsSection
-            }
-            if !recap.topArtists.isEmpty {
-                topArtistsSection
-            }
+    private var yearlyRankingSections: some View {
+        if !recap.topSongs.isEmpty {
+            topSongsSection
+        }
+        if !recap.topAlbums.isEmpty {
+            topAlbumsSection
+        }
+        if !recap.topArtists.isEmpty {
+            topArtistsSection
+        }
+    }
+
+    @ViewBuilder
+    private var monthlyRankingSections: some View {
+        if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
+            biggestGainersSection
+        }
+        if !recap.topNewSongs.isEmpty {
+            topNewSongsSection
+        }
+        if !recap.topSongs.isEmpty {
+            topSongsSection
+        }
+        if !recap.topAlbums.isEmpty {
+            topAlbumsSection
+        }
+        if !recap.topArtists.isEmpty {
+            topArtistsSection
         }
     }
 
@@ -670,7 +754,7 @@ struct MonthlyRecapView: View {
     ]
 
     @ViewBuilder
-    private var floatingYearPicker: some View {
+    private var recapYearPicker: some View {
         if hasMultipleRecapYears {
             Menu {
                 ForEach(availableRecapYears, id: \.self) { year in
@@ -695,16 +779,8 @@ struct MonthlyRecapView: View {
                         .font(.caption2.weight(.bold))
                 }
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 12)
-                .frame(height: 36)
-                .background(.regularMaterial, in: Capsule(style: .continuous))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                }
             }
             .tint(.primary)
-            .buttonStyle(.plain)
             .accessibilityLabel("Recap year")
         }
     }
@@ -755,6 +831,7 @@ struct MonthlyRecapView: View {
             albums: recap.biggestAlbumGainers,
             artists: recap.biggestArtistGainers,
             manager: manager,
+            recapContext: recapDrilldownContext,
             openDestination: openRecapDestination
         )
     }
@@ -833,6 +910,16 @@ struct MonthlyRecapView: View {
     private var hasYearlyMonthlyHighlights: Bool {
         yearlyMonthlyHighlights.contains {
             !$0.recap.topSongs.isEmpty || !$0.recap.topAlbums.isEmpty || !$0.recap.topArtists.isEmpty
+        }
+    }
+
+    private var yearlyTrendPoints: [RecapShareTrendPoint] {
+        yearlyMonthlyHighlights.map {
+            RecapShareTrendPoint(
+                month: $0.month,
+                plays: $0.recap.totalPlayDelta,
+                listeningMinutes: $0.recap.totalListeningDuration / 60
+            )
         }
     }
 
@@ -1209,6 +1296,199 @@ struct MonthlyRecapView: View {
         return formatter
     }()
 
+}
+
+private struct RecapYearSectionPicker: View {
+    @Binding var selection: YearlyRecapSection
+    @Namespace private var selectionAnimation
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(YearlyRecapSection.allCases) { section in
+                Button {
+                    withAnimation(.snappy(duration: 0.28)) {
+                        selection = section
+                    }
+                } label: {
+                    Label(section.rawValue, systemImage: section.systemImage)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .background {
+                            if selection == section {
+                                Capsule(style: .continuous)
+                                    .fill(Color.accentColor.gradient)
+                                    .matchedGeometryEffect(id: "year-section", in: selectionAnimation)
+                                    .shadow(color: Color.accentColor.opacity(0.24), radius: 8, y: 4)
+                            }
+                        }
+                        .foregroundStyle(selection == section ? Color.white : Color.secondary)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == section ? .isSelected : [])
+            }
+        }
+        .padding(5)
+        .background(.regularMaterial, in: .capsule)
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Yearly recap section")
+    }
+}
+
+private struct RecapYearTrendSection: View {
+    private enum Metric: String, CaseIterable, Identifiable {
+        case plays = "Plays"
+        case listeningTime = "Listening Time"
+
+        var id: Self { self }
+    }
+
+    let points: [RecapShareTrendPoint]
+    @State private var selectedMetric: Metric = .plays
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Year at a Glance")
+                .font(.title3.weight(.semibold))
+
+            RecapSurface {
+                VStack(alignment: .leading, spacing: 18) {
+                    Picker("Yearly trend metric", selection: $selectedMetric) {
+                        ForEach(Metric.allCases) { metric in
+                            Text(metric.rawValue).tag(metric)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(totalValue)
+                                .font(.system(.title, design: .rounded, weight: .bold))
+                                .contentTransition(.numericText())
+                            Text(totalLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let peakPoint {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(peakPoint.month.formatted(.dateTime.month(.wide)))
+                                    .font(.headline)
+                                Text("Peak month · \(formattedValue(for: peakPoint))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    Chart(points) { point in
+                        BarMark(
+                            x: .value("Month", point.month, unit: .month),
+                            y: .value(axisTitle, value(for: point)),
+                            width: .fixed(22)
+                        )
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Color.accentColor.opacity(0.42), Color.accentColor],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                        .clipShape(.capsule)
+                        .shadow(color: Color.accentColor.opacity(0.18), radius: 4, y: 2)
+                        .accessibilityLabel(point.month.formatted(.dateTime.month(.wide)))
+                        .accessibilityValue(formattedValue(for: point))
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .month)) { value in
+                            AxisValueLabel(format: .dateTime.month(.narrow))
+                            AxisGridLine().foregroundStyle(.clear)
+                        }
+                    }
+                    .chartYAxis(.hidden)
+                    .chartPlotStyle { plot in
+                        plot
+                            .background(Color.primary.opacity(0.035), in: .rect(cornerRadius: 14))
+                    }
+                    .frame(height: 160)
+
+                    if let comparisonText {
+                        Text(comparisonText)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
+                    }
+
+                    Text("Only months with tracked listening activity are shown.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private var axisTitle: String {
+        selectedMetric == .plays ? "Plays" : "Minutes"
+    }
+
+    private var totalValue: String {
+        switch selectedMetric {
+        case .plays:
+            points.reduce(0) { $0 + $1.plays }.formatted()
+        case .listeningTime:
+            (points.reduce(0) { $0 + $1.listeningMinutes } * 60).formattedListeningMinutes
+        }
+    }
+
+    private var totalLabel: String {
+        selectedMetric == .plays ? "plays in tracked months" : "listening in tracked months"
+    }
+
+    private var peakPoint: RecapShareTrendPoint? {
+        points.max { value(for: $0) < value(for: $1) }
+    }
+
+    private func value(for point: RecapShareTrendPoint) -> Double {
+        selectedMetric == .plays ? Double(point.plays) : point.listeningMinutes
+    }
+
+    private func formattedValue(for point: RecapShareTrendPoint) -> String {
+        switch selectedMetric {
+        case .plays:
+            return "\(point.plays.formatted()) plays"
+        case .listeningTime:
+            return "\(Int(point.listeningMinutes.rounded()).formatted()) minutes"
+        }
+    }
+
+    private var comparisonText: String? {
+        guard points.count >= 2,
+              let previous = points.dropLast().last,
+              let latest = points.last else {
+            return nil
+        }
+
+        let previousMonth = previous.month.formatted(.dateTime.month(.abbreviated))
+        let latestMonth = latest.month.formatted(.dateTime.month(.abbreviated))
+        let delta = value(for: latest) - value(for: previous)
+        let direction = delta >= 0 ? "+" : "−"
+        let magnitude = abs(delta)
+        let formattedDelta: String
+        switch selectedMetric {
+        case .plays:
+            formattedDelta = Int(magnitude.rounded()).formatted()
+        case .listeningTime:
+            formattedDelta = "\(Int(magnitude.rounded()).formatted()) min"
+        }
+        return "\(latestMonth) is \(direction)\(formattedDelta) from \(previousMonth)"
+    }
 }
 
 private struct RecapHeroPoster: View {
@@ -1774,6 +2054,161 @@ private struct RecapFullGroupsView: View {
         }
 
         return manager.artist(matchingName: group.title)
+    }
+}
+
+private struct RecapFullGainersView: View {
+    let category: RecapGainerCategory
+    let songs: [MonthlyRecap.MovementSong]
+    let albums: [MonthlyRecap.MovementGroup]
+    let artists: [MonthlyRecap.MovementGroup]
+    @ObservedObject var manager: MediaLibraryManager
+    let recapContext: RecapDrilldownContext
+
+    var body: some View {
+        List {
+            Section {
+                RecapGainerBarChart(items: chartItems)
+                    .frame(height: max(220, CGFloat(chartItems.count) * 34))
+                    .padding(.vertical, 8)
+            } header: {
+                Text("Additional Plays")
+            } footer: {
+                Text("Bar length represents plays added during this recap period. Rank movement appears in the details below.")
+            }
+
+            Section("Rank Movement") {
+            switch category {
+            case .songs:
+                ForEach(songs.prefix(10)) { song in
+                    if let item = manager.song(withPersistentID: song.id)
+                        ?? manager.song(matchingTitle: song.title, artist: song.artist) {
+                        NavigationLink {
+                            SongInfoView(song: item, manager: manager, recapContext: recapContext)
+                        } label: {
+                            RecapMovementRow(song: song)
+                        }
+                    } else {
+                        RecapMovementRow(song: song)
+                    }
+                }
+            case .albums:
+                ForEach(albums.prefix(10)) { group in
+                    if let item = resolvedAlbum(group) {
+                        NavigationLink {
+                            AlbumInfoView(album: item, manager: manager, recapContext: recapContext)
+                        } label: {
+                            RecapGroupMovementRow(group: group, systemImage: "rectangle.stack.fill")
+                        }
+                    } else {
+                        RecapGroupMovementRow(group: group, systemImage: "rectangle.stack.fill")
+                    }
+                }
+            case .artists:
+                ForEach(artists.prefix(10)) { group in
+                    if let item = resolvedArtist(group) {
+                        NavigationLink {
+                            ArtistInfoView(artist: item, manager: manager, recapContext: recapContext)
+                        } label: {
+                            RecapGroupMovementRow(group: group, systemImage: "person.fill")
+                        }
+                    } else {
+                        RecapGroupMovementRow(group: group, systemImage: "person.fill")
+                    }
+                }
+            }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
+        .navigationTitle("Top 10 \(category.rawValue) Gainers")
+        .playCountPushedTitleDisplayMode()
+        .toolbar(.visible, for: .navigationBar)
+    }
+
+    private var chartItems: [RecapGainerChartItem] {
+        switch category {
+        case .songs:
+            songs.prefix(10).map {
+                RecapGainerChartItem(id: "song-\($0.id)", title: $0.title, playDelta: $0.playDelta, rankChange: $0.rankChange)
+            }
+        case .albums:
+            albums.prefix(10).map {
+                RecapGainerChartItem(id: "album-\($0.id)", title: $0.title, playDelta: $0.playDelta, rankChange: $0.rankChange)
+            }
+        case .artists:
+            artists.prefix(10).map {
+                RecapGainerChartItem(id: "artist-\($0.id)", title: $0.title, playDelta: $0.playDelta, rankChange: $0.rankChange)
+            }
+        }
+    }
+
+    private func resolvedAlbum(_ group: MonthlyRecap.MovementGroup) -> TopAlbum? {
+        if let id = UInt64(group.id), let item = manager.album(withPersistentID: id) {
+            return item
+        }
+        return manager.album(matchingTitle: group.title, artist: group.subtitle)
+    }
+
+    private func resolvedArtist(_ group: MonthlyRecap.MovementGroup) -> TopArtist? {
+        if let id = UInt64(group.id), let item = manager.artist(withPersistentID: id) {
+            return item
+        }
+        return manager.artist(matchingName: group.title)
+    }
+}
+
+private struct RecapGainerChartItem: Identifiable {
+    let id: String
+    let title: String
+    let playDelta: Int
+    let rankChange: Int
+}
+
+private struct RecapGainerBarChart: View {
+    let items: [RecapGainerChartItem]
+
+    var body: some View {
+        Chart(items) { item in
+            BarMark(
+                x: .value("Additional plays", item.playDelta),
+                y: .value("Item", item.id)
+            )
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [Color.accentColor.opacity(0.62), Color.accentColor],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .clipShape(.rect(cornerRadius: 5))
+            .annotation(position: .trailing, spacing: 5) {
+                Text("+\(item.playDelta)")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel(item.title)
+            .accessibilityValue("Added \(item.playDelta) plays and moved up \(item.rankChange) ranks")
+        }
+        .chartXAxis {
+            AxisMarks(position: .bottom)
+        }
+        .chartYScale(domain: items.map(\.id))
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisValueLabel {
+                    if let id = value.as(String.self), let title = titlesByID[id] {
+                        Text(title)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+
+    private var titlesByID: [String: String] {
+        Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.title) })
     }
 }
 
