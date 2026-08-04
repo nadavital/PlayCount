@@ -66,7 +66,6 @@ struct MonthlyRecapView: View {
     @State private var isSuppressingRecapNavigation = false
     @State private var recapNavigationSuppressionToken = 0
     @State private var selectedRecapDestination: RecapNavigationDestination?
-    @State private var isUsingYearlyBreakdownStrip = false
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
     @State private var cachedArtworkHighlightsSignature = ""
     @State private var cachedRecapBackgroundPalette: RecapBackgroundPalette?
@@ -575,12 +574,14 @@ struct MonthlyRecapView: View {
                     .padding(.bottom, isRegularWidth ? 132 : 154)
                     .frame(maxWidth: 1120, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .recapMonthDragOffset(monthDragAxis == .horizontal ? monthDragDisplayOffset : nil)
+                    .recapMonthDragOffset(
+                        isMonthSwipeEnabled && monthDragAxis == .horizontal ? monthDragDisplayOffset : nil
+                    )
                     .disabled(isSuppressingRecapNavigation)
                 }
             }
             .scrollIndicators(.hidden)
-            .scrollDisabled(monthDragAxis == .horizontal)
+            .scrollDisabled(isMonthSwipeEnabled && monthDragAxis == .horizontal)
             .onChange(of: selectedRecapPageIdentifier) { _, _ in
                 scrollProxy.scrollTo(ScrollAnchor.recapTop, anchor: .top)
             }
@@ -606,7 +607,7 @@ struct MonthlyRecapView: View {
                 recapShareButton
             }
         }
-        .simultaneousGesture(monthSwipeGesture)
+        .simultaneousGesture(monthSwipeGesture, including: monthSwipeGestureMask)
         .task(id: artworkHighlightsSignature) {
             updateCachedArtworkHighlightsIfNeeded()
         }
@@ -938,8 +939,7 @@ struct MonthlyRecapView: View {
                         kind: .song(song)
                     )
                 },
-                destination: breakdownDestination(for:),
-                onScrollActivityChanged: setYearlyBreakdownScrollActivity
+                destination: breakdownDestination(for:)
             )
 
             RecapMonthlyBreakdownStrip(
@@ -955,8 +955,7 @@ struct MonthlyRecapView: View {
                         kind: .album(album)
                     )
                 },
-                destination: breakdownDestination(for:),
-                onScrollActivityChanged: setYearlyBreakdownScrollActivity
+                destination: breakdownDestination(for:)
             )
 
             RecapMonthlyBreakdownStrip(
@@ -972,8 +971,7 @@ struct MonthlyRecapView: View {
                         kind: .artist(artist)
                     )
                 },
-                destination: breakdownDestination(for:),
-                onScrollActivityChanged: setYearlyBreakdownScrollActivity
+                destination: breakdownDestination(for:)
             )
         }
     }
@@ -1074,10 +1072,6 @@ struct MonthlyRecapView: View {
             .onChanged { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                guard !isUsingYearlyBreakdownStrip else {
-                    resetMonthDragState()
-                    return
-                }
 
                 if monthDragAxis == .undecided {
                     guard resolvedMonthDragAxis(horizontal: horizontal, vertical: vertical) == .horizontal else {
@@ -1094,7 +1088,7 @@ struct MonthlyRecapView: View {
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                guard !isUsingYearlyBreakdownStrip, monthDragAxis == .horizontal else { return }
+                guard monthDragAxis == .horizontal else { return }
                 defer {
                     withAnimation(.smooth(duration: 0.22)) { resetMonthDragState() }
                     releaseRecapNavigationAfterSwipe()
@@ -1111,6 +1105,14 @@ struct MonthlyRecapView: View {
                     selectPreviousMonth()
                 }
             }
+    }
+
+    private var monthSwipeGestureMask: GestureMask {
+        isMonthSwipeEnabled ? .all : .none
+    }
+
+    private var isMonthSwipeEnabled: Bool {
+        !(isShowingYearAggregate && selectedYearlySection == .byMonth)
     }
 
     private var monthDragDisplayOffset: CGFloat {
@@ -1188,19 +1190,6 @@ struct MonthlyRecapView: View {
                 ArtistInfoView(artist: artist, manager: manager, recapContext: recapDrilldownContext)
             } else {
                 RecapUnavailableDetail(title: name)
-            }
-        }
-    }
-
-    private func setYearlyBreakdownScrollActivity(_ isActive: Bool) {
-        if isActive {
-            isUsingYearlyBreakdownStrip = true
-            resetMonthDragState()
-            suppressRecapNavigationDuringSwipe()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                isUsingYearlyBreakdownStrip = false
-                releaseRecapNavigationAfterSwipe()
             }
         }
     }
@@ -2377,7 +2366,6 @@ private struct RecapMonthlyBreakdownStrip<Destination: View>: View {
     let title: String
     let items: [RecapMonthlyBreakdownItem]
     let destination: (RecapMonthlyBreakdownItem) -> Destination
-    let onScrollActivityChanged: (Bool) -> Void
 
     var body: some View {
         if !items.isEmpty {
@@ -2400,21 +2388,9 @@ private struct RecapMonthlyBreakdownStrip<Destination: View>: View {
                         .padding(.vertical, 1)
                     }
                     .scrollIndicators(.hidden)
-                    .simultaneousGesture(scrollActivityGesture)
                 }
             }
         }
-    }
-
-    private var scrollActivityGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                onScrollActivityChanged(true)
-            }
-            .onEnded { _ in
-                onScrollActivityChanged(false)
-            }
     }
 }
 
