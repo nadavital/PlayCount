@@ -559,6 +559,17 @@ struct MonthlyRecapView: View {
                             )
                         }
 
+                        if shouldShowWeeklyInsights {
+                            RecapWeeklyInsightSection(
+                                comparison: manager.weeklyRecapComparison,
+                                artwork: weeklyTopSongArtwork
+                            )
+                        }
+
+                        if !earnedMilestones.isEmpty {
+                            RecapMilestonesSection(milestones: earnedMilestones)
+                        }
+
                         if recap.hasActivity {
                             recapSections
                         } else {
@@ -1065,6 +1076,25 @@ struct MonthlyRecapView: View {
             return String(selectedRecapYear)
         }
         return Self.monthFormatter.string(from: recap.monthStart)
+    }
+
+    private var shouldShowWeeklyInsights: Bool {
+        guard !isShowingYearAggregate else { return false }
+        return Calendar.current.isDate(
+            selectedMonthStartOrCurrent,
+            equalTo: manager.monthlyRecap.monthStart,
+            toGranularity: .month
+        )
+    }
+
+    private var earnedMilestones: [RecapMilestone] {
+        RecapMilestoneEngine.earnedMilestones(for: recap, periodName: monthTitle)
+    }
+
+    private var weeklyTopSongArtwork: MPMediaItemArtwork? {
+        guard let song = manager.weeklyRecapComparison.current.topSong else { return nil }
+        return manager.song(withPersistentID: song.id)?.artwork
+            ?? manager.song(matchingTitle: song.title, artist: song.artist)?.artwork
     }
 
     private var monthSwipeGesture: some Gesture {
@@ -2540,6 +2570,137 @@ private struct RecapGroupRow: View {
             MetricBadge(text: "+\(group.playDelta)")
         }
         .padding(.vertical, 9)
+    }
+}
+
+private struct RecapWeeklyInsightSection: View {
+    let comparison: WeeklyRecapComparison
+    let artwork: MPMediaItemArtwork?
+
+    private var current: WeeklyRecapInsight { comparison.current }
+
+    private var periodTitle: String {
+        let calendar = Calendar.current
+        let end = calendar.date(byAdding: .day, value: 6, to: current.weekStart) ?? current.weekStart
+        return "\(current.weekStart.formatted(.dateTime.month(.abbreviated).day()))–\(end.formatted(.dateTime.month(.abbreviated).day()))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("This Week")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Text(periodTitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            RecapSurface {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 0) {
+                        RecapSummaryItem(
+                            title: "Plays",
+                            value: current.totalPlayDelta.formatted(),
+                            systemImage: "play.fill"
+                        )
+                        Divider().padding(.vertical, 8)
+                        RecapSummaryItem(
+                            title: "Time",
+                            value: current.totalListeningDuration.formattedListeningMinutes,
+                            systemImage: "clock.fill"
+                        )
+                        Divider().padding(.vertical, 8)
+                        RecapSummaryItem(
+                            title: "Last Week",
+                            value: comparison.previous?.totalPlayDelta.formatted() ?? "—",
+                            systemImage: "arrow.left.arrow.right"
+                        )
+                    }
+
+                    if let song = current.topSong {
+                        Divider()
+                        HStack(spacing: 11) {
+                            ArtworkView(
+                                artwork: artwork,
+                                size: CGSize(width: 48, height: 48),
+                                cornerRadius: 10
+                            )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Leading This Week")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(song.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                Text(song.artist)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            MetricBadge(text: "+\(song.playDelta)")
+                        }
+                    } else {
+                        Text(baselineMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var baselineMessage: String {
+        if current.snapshotCount == 0 {
+            return "Open PlayCount after listening to begin weekly insights."
+        }
+        return "This week's baseline is set. New listening will appear here without guessing about earlier activity."
+    }
+}
+
+private struct RecapMilestonesSection: View {
+    let milestones: [RecapMilestone]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Milestones")
+                .font(.title3.weight(.semibold))
+
+            RecapSurface {
+                VStack(spacing: 0) {
+                    ForEach(milestones) { milestone in
+                        HStack(spacing: 12) {
+                            Image(systemName: milestone.systemImage)
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(width: 38, height: 38)
+                                .background(Color.accentColor.opacity(0.14), in: Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(milestone.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(2)
+                                Text(milestone.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundStyle(Color.accentColor)
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.vertical, 9)
+                        .accessibilityElement(children: .combine)
+
+                        if milestone.id != milestones.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

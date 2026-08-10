@@ -307,6 +307,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var libraryLastUpdated: Date?
     @Published private(set) var nowPlayingState: NowPlayingState?
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
+    @Published private(set) var weeklyRecapComparison: WeeklyRecapComparison = .empty()
     @Published private(set) var availableRecapMonths: [Date] = []
     let nowPlayingProgress = NowPlayingProgress()
     let detailPresentationUpdates = DetailPresentationUpdates()
@@ -315,6 +316,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private lazy var mediaLibrary = MPMediaLibrary.default()
     private lazy var musicPlayer = MPMusicPlayerController.systemMusicPlayer
     private let snapshotStore: MonthlyRecapSnapshotStore
+    private let weeklyInsightStore: WeeklyRecapInsightStore
     private let presentationCache: LibraryPresentationCache
     private let recapCloudSyncService: RecapCloudSyncService?
     private var notificationObservers: [NSObjectProtocol] = []
@@ -366,12 +368,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     init(
         fetchLimit: Int = 0,
         snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
+        weeklyInsightStore: WeeklyRecapInsightStore = WeeklyRecapInsightStore(),
         presentationCache: LibraryPresentationCache = .shared,
         recapCloudSyncService: RecapCloudSyncService? = MediaLibraryManager.defaultRecapCloudSyncService(),
         startsAutomatically: Bool = true
     ) {
         self.fetchLimit = fetchLimit
         self.snapshotStore = snapshotStore
+        self.weeklyInsightStore = weeklyInsightStore
         self.presentationCache = presentationCache
         self.recapCloudSyncService = recapCloudSyncService
 
@@ -685,7 +689,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let generation = operation.generation
         let token = operation.token
 
-        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation)? = await Task.detached(priority: .utility) { [snapshotStore] in
+        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore] in
             let snapshot = Self.fetchLibrarySnapshot()
             let preparedSnapshot = Self.prepareLibrarySnapshot(
                 snapshot,
@@ -696,11 +700,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             guard await MainActor.run(body: {
                 self.snapshotMutationGeneration == generation
             }) else { return nil }
+            let capturedAt = Date()
             let recap = snapshotStore.record(
                 songs: snapshot.songs,
                 albums: snapshot.albums,
                 artists: snapshot.artists,
-                at: Date(),
+                at: capturedAt,
                 reason: reason,
                 shouldCommit: {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
@@ -711,7 +716,10 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 sourceAlbums: snapshot.albums,
                 sourceArtists: snapshot.artists
             )
-            return (preparedSnapshot, recap, cachedPresentation)
+            let weeklyComparison = token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                ? weeklyInsightStore.record(recap: recap, at: capturedAt)
+                : weeklyInsightStore.currentComparison(at: capturedAt)
+            return (preparedSnapshot, recap, cachedPresentation, weeklyComparison)
         }.value
 
         guard let result else {
@@ -733,6 +741,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             }
             self.applyOrDeferPreparedLibrarySnapshot(result.0, recap: result.1)
             self.seedRecapCaches(from: result.2, currentRecap: result.1)
+            self.weeklyRecapComparison = result.3
             self.availableRecapMonths = result.2.availableMonthStarts
             self.hasLoadedInitialSnapshot = true
             self.hasStartedInitialRefresh = true
@@ -1308,7 +1317,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         generation: Int,
         token: MutationValidityToken
     ) {
-        DispatchQueue.global(qos: .utility).async { [weak self, snapshotStore] in
+        DispatchQueue.global(qos: .utility).async { [weak self, snapshotStore, weeklyInsightStore] in
             guard let self else { return }
             guard MPMediaLibrary.authorizationStatus() == .authorized else {
                 DispatchQueue.main.async { [weak self] in
@@ -1317,16 +1326,20 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 return
             }
 
+            let capturedAt = Date()
             let recap = snapshotStore.record(
                 songs: snapshot.songs,
                 albums: snapshot.albums,
                 artists: snapshot.artists,
-                at: Date(),
+                at: capturedAt,
                 reason: snapshotReason,
                 shouldCommit: {
                     token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 }
             )
+            let weeklyComparison = token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                ? weeklyInsightStore.record(recap: recap, at: capturedAt)
+                : weeklyInsightStore.currentComparison(at: capturedAt)
             let cachedPresentation = snapshotStore.cachedRecapPresentation(
                 sourceSongs: snapshot.songs,
                 sourceAlbums: snapshot.albums,
@@ -1346,6 +1359,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: recap)
                 let updatedDeferredPresentation = self.updateDeferredLibraryRecap(recap)
                 self.monthlyRecap = recap
+                self.weeklyRecapComparison = weeklyComparison
                 if !updatedDeferredPresentation {
                     self.detailPresentationUpdates.notify()
                 }
@@ -2781,6 +2795,7 @@ extension MediaLibraryManager {
         topArtists = Array(libraryArtists.prefix(20))
         updateLibraryIndexes(songs: librarySongs, albums: libraryAlbums, artists: libraryArtists)
         monthlyRecap = Self.screenshotRecap(from: songs)
+        weeklyRecapComparison = Self.screenshotWeeklyRecapComparison(from: songs)
         availableRecapMonths = Self.screenshotRecapMonths(endingAt: monthlyRecap.monthStart)
         hasLoadedInitialSnapshot = true
         isLoading = false
@@ -3014,6 +3029,43 @@ extension MediaLibraryManager {
                 )
             },
             topNewSongs: Array(rankedSongs.suffix(7))
+        )
+    }
+
+    private static func screenshotWeeklyRecapComparison(from songs: [TopSong]) -> WeeklyRecapComparison {
+        let calendar = Calendar.current
+        let now = Date()
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now)
+        let previousWeekStart = calendar.date(byAdding: .weekOfYear, value: -1, to: weekStart) ?? weekStart
+        return WeeklyRecapComparison(
+            current: WeeklyRecapInsight(
+                weekStart: weekStart,
+                generatedAt: now,
+                trackingStart: weekStart,
+                snapshotCount: 8,
+                totalPlayDelta: 74,
+                totalListeningDuration: 74 * 214,
+                topSong: WeeklyRecapInsight.RankedSong(
+                    id: songs[0].id,
+                    title: songs[0].title,
+                    artist: songs[0].artist,
+                    playDelta: 18
+                )
+            ),
+            previous: WeeklyRecapInsight(
+                weekStart: previousWeekStart,
+                generatedAt: weekStart.addingTimeInterval(-1),
+                trackingStart: previousWeekStart,
+                snapshotCount: 11,
+                totalPlayDelta: 61,
+                totalListeningDuration: 61 * 205,
+                topSong: WeeklyRecapInsight.RankedSong(
+                    id: songs[1].id,
+                    title: songs[1].title,
+                    artist: songs[1].artist,
+                    playDelta: 15
+                )
+            )
         )
     }
 
