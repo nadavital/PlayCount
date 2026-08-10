@@ -37,6 +37,20 @@ struct WeeklyRecapInsight: Equatable, Sendable {
 struct WeeklyRecapComparison: Equatable, Sendable {
     let current: WeeklyRecapInsight
     let previous: WeeklyRecapInsight?
+    let history: [WeeklyRecapInsight]
+
+    init(
+        current: WeeklyRecapInsight,
+        previous: WeeklyRecapInsight?,
+        history: [WeeklyRecapInsight]? = nil
+    ) {
+        self.current = current
+        self.previous = previous
+        let source = history ?? [previous, current].compactMap { $0 }
+        self.history = Dictionary(grouping: source, by: \.weekStart)
+            .compactMap { $0.value.max { $0.generatedAt < $1.generatedAt } }
+            .sorted { $0.weekStart < $1.weekStart }
+    }
 
     static func empty(at date: Date = Date(), calendar: Calendar = .current) -> WeeklyRecapComparison {
         WeeklyRecapComparison(current: .empty(for: date, calendar: calendar), previous: nil)
@@ -45,86 +59,157 @@ struct WeeklyRecapComparison: Equatable, Sendable {
 
 struct RecapMilestone: Identifiable, Equatable, Sendable {
     enum Kind: String, Sendable {
-        case plays
+        case artistDiscovery
+        case songDiscovery
         case listeningTime
-        case song
-        case album
-        case artist
+        case songBond
+        case albumHome
+        case artistEra
     }
 
     let kind: Kind
-    let threshold: Int
     let title: String
     let detail: String
     let systemImage: String
+    let currentValue: Double
+    let targetValue: Double
+    let unit: String
+    let earnedTarget: Double?
 
-    var id: String { "\(kind.rawValue)-\(threshold)-\(title)" }
+    var id: String { kind.rawValue }
+
+    var progress: Double {
+        guard targetValue > 0 else { return 0 }
+        return min(max(currentValue / targetValue, 0), 1)
+    }
+
+    var valueLabel: String {
+        let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
+        return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
+    }
+
+    var statusLabel: String {
+        if progress >= 1 {
+            return "Milestone unlocked"
+        }
+        if let earnedTarget {
+            return "\(formatted(earnedTarget)) reached · next \(formatted(targetValue))"
+        }
+        return "Next at \(formatted(targetValue))"
+    }
+
+    private func formatted(_ value: Double) -> String {
+        if value.rounded() == value {
+            return Int(value).formatted()
+        }
+        return value.formatted(.number.precision(.fractionLength(1)))
+    }
 }
 
 enum RecapMilestoneEngine {
-    static func earnedMilestones(for recap: MonthlyRecap, periodName: String) -> [RecapMilestone] {
+    static func milestones(for recap: MonthlyRecap, periodName: String) -> [RecapMilestone] {
         var milestones: [RecapMilestone] = []
 
-        if let threshold = highestReached(recap.totalPlayDelta, thresholds: [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000]) {
+        let artistCount = recap.topArtists.filter { $0.playDelta > 0 }.count
+        let artistProgress = progress(
+            value: Double(artistCount),
+            thresholds: [10, 25, 50, 100]
+        )
+        milestones.append(
+            RecapMilestone(
+                kind: .artistDiscovery,
+                title: artistDiscoveryTitle(for: artistProgress.target),
+                detail: "Artists heard in \(periodName)",
+                systemImage: "person.2.wave.2.fill",
+                currentValue: Double(artistCount),
+                targetValue: artistProgress.target,
+                unit: "artists",
+                earnedTarget: artistProgress.earned
+            )
+        )
+
+        let songProgress = progress(
+            value: Double(recap.playedSongCount),
+            thresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000]
+        )
+        milestones.append(
+            RecapMilestone(
+                kind: .songDiscovery,
+                title: songDiscoveryTitle(for: songProgress.target),
+                detail: "Different songs in \(periodName)",
+                systemImage: "music.note.list",
+                currentValue: Double(recap.playedSongCount),
+                targetValue: songProgress.target,
+                unit: "songs",
+                earnedTarget: songProgress.earned
+            )
+        )
+
+        let listeningHours = recap.totalListeningDuration / 3_600
+        let listeningProgress = progress(
+            value: listeningHours,
+            thresholds: [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500]
+        )
+        milestones.append(
+            RecapMilestone(
+                kind: .listeningTime,
+                title: listeningTitle(for: listeningProgress.target),
+                detail: "Your soundtrack for \(periodName)",
+                systemImage: "headphones",
+                currentValue: listeningHours,
+                targetValue: listeningProgress.target,
+                unit: "hours",
+                earnedTarget: listeningProgress.earned
+            )
+        )
+
+        if let song = recap.topSongs.first {
+            let hours = song.listeningDuration / 3_600
+            let songProgress = progress(value: hours, thresholds: [1, 3, 6, 12, 24, 48, 100, 250])
             milestones.append(
                 RecapMilestone(
-                    kind: .plays,
-                    threshold: threshold,
-                    title: "\(threshold.formatted()) plays",
-                    detail: "Reached in \(periodName)",
-                    systemImage: "play.fill"
+                    kind: .songBond,
+                    title: songBondTitle(for: songProgress.target),
+                    detail: "With \(song.title) by \(song.artist)",
+                    systemImage: "repeat",
+                    currentValue: hours,
+                    targetValue: songProgress.target,
+                    unit: "hours",
+                    earnedTarget: songProgress.earned
                 )
             )
         }
 
-        let listeningHours = Int(recap.totalListeningDuration / 3_600)
-        if let threshold = highestReached(listeningHours, thresholds: [5, 10, 25, 50, 100, 250, 500, 1_000]) {
+        if let album = recap.topAlbums.first {
+            let hours = album.listeningDuration / 3_600
+            let albumProgress = progress(value: hours, thresholds: [2, 5, 10, 24, 50, 100, 250])
             milestones.append(
                 RecapMilestone(
-                    kind: .listeningTime,
-                    threshold: threshold,
-                    title: "\(threshold.formatted()) listening hours",
-                    detail: "Reached in \(periodName)",
-                    systemImage: "clock.fill"
+                    kind: .albumHome,
+                    title: albumHomeTitle(for: albumProgress.target),
+                    detail: "Inside \(album.title) by \(album.subtitle)",
+                    systemImage: "rectangle.stack.fill",
+                    currentValue: hours,
+                    targetValue: albumProgress.target,
+                    unit: "hours",
+                    earnedTarget: albumProgress.earned
                 )
             )
         }
 
-        if let song = recap.topSongs.first,
-           let threshold = highestReached(song.playDelta, thresholds: [10, 25, 50, 100, 250, 500, 1_000]) {
+        if let artist = recap.topArtists.first {
+            let hours = artist.listeningDuration / 3_600
+            let artistProgress = progress(value: hours, thresholds: [5, 10, 25, 50, 100, 250, 500])
             milestones.append(
                 RecapMilestone(
-                    kind: .song,
-                    threshold: threshold,
-                    title: "\(threshold.formatted()) plays with \(song.title)",
-                    detail: song.artist,
-                    systemImage: "music.note"
-                )
-            )
-        }
-
-        if let album = recap.topAlbums.first,
-           let threshold = highestReached(album.playDelta, thresholds: [25, 50, 100, 250, 500, 1_000]) {
-            milestones.append(
-                RecapMilestone(
-                    kind: .album,
-                    threshold: threshold,
-                    title: "\(threshold.formatted()) plays from \(album.title)",
-                    detail: album.subtitle,
-                    systemImage: "rectangle.stack.fill"
-                )
-            )
-        }
-
-        if let artist = recap.topArtists.first,
-           let threshold = highestReached(artist.playDelta, thresholds: [25, 50, 100, 250, 500, 1_000, 2_500]) {
-            milestones.append(
-                RecapMilestone(
-                    kind: .artist,
-                    threshold: threshold,
-                    title: "\(threshold.formatted()) plays with \(artist.title)",
-                    detail: periodName,
-                    systemImage: "person.fill"
+                    kind: .artistEra,
+                    title: artistEraTitle(for: artistProgress.target),
+                    detail: "In your \(artist.title) era",
+                    systemImage: "star.circle.fill",
+                    currentValue: hours,
+                    targetValue: artistProgress.target,
+                    unit: "hours",
+                    earnedTarget: artistProgress.earned
                 )
             )
         }
@@ -132,8 +217,74 @@ enum RecapMilestoneEngine {
         return milestones
     }
 
-    private static func highestReached(_ value: Int, thresholds: [Int]) -> Int? {
-        thresholds.last { value >= $0 }
+    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?) {
+        let earned = thresholds.last { value >= $0 }
+        let target = thresholds.first { value < $0 } ?? thresholds.last ?? max(value, 1)
+        return (target, earned)
+    }
+
+    private static func artistDiscoveryTitle(for target: Double) -> String {
+        switch target {
+        case ...10: "Open Ears"
+        case ...25: "Sound Scout"
+        case ...50: "Scene Hopper"
+        default: "Musical Atlas"
+        }
+    }
+
+    private static func songDiscoveryTitle(for target: Double) -> String {
+        switch target {
+        case ...25: "Starter Mixtape"
+        case ...50: "Mixtape Maker"
+        case ...100: "The Songbook"
+        case ...250: "Deep Catalog"
+        case ...500: "Living Library"
+        case ...1_000: "Human Jukebox"
+        default: "Endless Queue"
+        }
+    }
+
+    private static func listeningTitle(for target: Double) -> String {
+        switch target {
+        case ...5: "Long Play"
+        case ...10: "Soundtrack Mode"
+        case ...25: "Around the Clock"
+        case ...50: "Audio Orbit"
+        case ...100: "Permanent Headphones"
+        default: "A Life in Sound"
+        }
+    }
+
+    private static func songBondTitle(for target: Double) -> String {
+        switch target {
+        case ...1: "On Repeat"
+        case ...3: "Extended Cut"
+        case ...6: "All-Day Loop"
+        case ...12: "Half-Day Anthem"
+        case ...24: "A Day With One Song"
+        case ...48: "Two-Day Obsession"
+        default: "Forever Track"
+        }
+    }
+
+    private static func albumHomeTitle(for target: Double) -> String {
+        switch target {
+        case ...2: "Front to Back"
+        case ...5: "Liner Notes Level"
+        case ...10: "Album Resident"
+        case ...24: "A Day Inside an Album"
+        default: "Permanent Rotation"
+        }
+    }
+
+    private static func artistEraTitle(for target: Double) -> String {
+        switch target {
+        case ...5: "Fan in the Making"
+        case ...10: "Inner Circle"
+        case ...25: "Full Artist Era"
+        case ...50: "Discography Dweller"
+        default: "Forever Fan"
+        }
     }
 }
 
@@ -320,7 +471,8 @@ final class WeeklyRecapInsightStore: @unchecked Sendable {
         }
         return WeeklyRecapComparison(
             current: currentBucket.map(insight(from:)) ?? .empty(for: date, calendar: calendar),
-            previous: previousBucket.map(insight(from:))
+            previous: previousBucket.map(insight(from:)),
+            history: ordered.suffix(8).map(insight(from:))
         )
     }
 

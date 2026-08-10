@@ -3036,36 +3036,30 @@ extension MediaLibraryManager {
         let calendar = Calendar.current
         let now = Date()
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now)
-        let previousWeekStart = calendar.date(byAdding: .weekOfYear, value: -1, to: weekStart) ?? weekStart
-        return WeeklyRecapComparison(
-            current: WeeklyRecapInsight(
-                weekStart: weekStart,
-                generatedAt: now,
-                trackingStart: weekStart,
-                snapshotCount: 8,
-                totalPlayDelta: 74,
-                totalListeningDuration: 74 * 214,
+        let weeklyPlays = [38, 52, 44, 69, 57, 83, 61, 74]
+        let history = weeklyPlays.enumerated().map { index, plays in
+            let offset = index - (weeklyPlays.count - 1)
+            let start = calendar.date(byAdding: .weekOfYear, value: offset, to: weekStart) ?? weekStart
+            let song = songs[index % songs.count]
+            return WeeklyRecapInsight(
+                weekStart: start,
+                generatedAt: index == weeklyPlays.count - 1 ? now : start.addingTimeInterval(6 * 24 * 60 * 60),
+                trackingStart: start,
+                snapshotCount: 8 + index,
+                totalPlayDelta: plays,
+                totalListeningDuration: TimeInterval(plays * (190 + index * 4)),
                 topSong: WeeklyRecapInsight.RankedSong(
-                    id: songs[0].id,
-                    title: songs[0].title,
-                    artist: songs[0].artist,
-                    playDelta: 18
-                )
-            ),
-            previous: WeeklyRecapInsight(
-                weekStart: previousWeekStart,
-                generatedAt: weekStart.addingTimeInterval(-1),
-                trackingStart: previousWeekStart,
-                snapshotCount: 11,
-                totalPlayDelta: 61,
-                totalListeningDuration: 61 * 205,
-                topSong: WeeklyRecapInsight.RankedSong(
-                    id: songs[1].id,
-                    title: songs[1].title,
-                    artist: songs[1].artist,
-                    playDelta: 15
+                    id: song.id,
+                    title: song.title,
+                    artist: song.artist,
+                    playDelta: max(8, plays / 4)
                 )
             )
+        }
+        return WeeklyRecapComparison(
+            current: history.last ?? .empty(for: now),
+            previous: history.dropLast().last,
+            history: history
         )
     }
 

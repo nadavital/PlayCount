@@ -62,6 +62,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         )
         XCTAssertEqual(updated.current.totalPlayDelta, 4)
         XCTAssertEqual(updated.previous?.totalPlayDelta, 8)
+        XCTAssertEqual(updated.history.map(\.totalPlayDelta), [8, 4])
     }
 
     func testMonthBoundaryWithinAWeekStartsFromNewMonthTotals() {
@@ -119,15 +120,30 @@ final class WeeklyRecapInsightsTests: XCTestCase {
     }
 
     func testMilestonesAreAutomaticAcrossOverallAndMediaCategories() {
-        let recap = recap(month: 8, plays: 520, songPlays: 120, listeningHours: 62)
-        let milestones = RecapMilestoneEngine.earnedMilestones(for: recap, periodName: "August 2026")
+        let recap = recap(
+            month: 8,
+            plays: 520,
+            songPlays: 120,
+            listeningHours: 62,
+            playedSongCount: 180,
+            artistCount: 63,
+            songHours: 24,
+            albumHours: 12,
+            artistHours: 30
+        )
+        let milestones = RecapMilestoneEngine.milestones(for: recap, periodName: "August 2026")
 
-        XCTAssertEqual(milestones.count, 5)
-        XCTAssertEqual(milestones[0].title, "500 plays")
-        XCTAssertEqual(milestones[1].title, "50 listening hours")
-        XCTAssertEqual(milestones[2].title, "100 plays with Glass Rain")
-        XCTAssertEqual(milestones[3].kind, .album)
-        XCTAssertEqual(milestones[4].kind, .artist)
+        XCTAssertEqual(milestones.count, 6)
+        XCTAssertEqual(milestones[0].title, "Musical Atlas")
+        XCTAssertEqual(milestones[0].valueLabel, "63 of 100 artists")
+        XCTAssertEqual(milestones[0].earnedTarget, 50)
+        XCTAssertEqual(milestones[1].title, "Deep Catalog")
+        XCTAssertEqual(milestones[1].targetValue, 250)
+        XCTAssertEqual(milestones[2].title, "Permanent Headphones")
+        XCTAssertEqual(milestones[3].title, "Two-Day Obsession")
+        XCTAssertEqual(milestones[3].earnedTarget, 24)
+        XCTAssertEqual(milestones[4].kind, .albumHome)
+        XCTAssertEqual(milestones[5].kind, .artistEra)
     }
 
     private func recap(
@@ -135,7 +151,12 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         month: Int,
         plays: Int,
         songPlays: Int,
-        listeningHours: Int? = nil
+        listeningHours: Int? = nil,
+        playedSongCount: Int = 1,
+        artistCount: Int = 1,
+        songHours: Int? = nil,
+        albumHours: Int? = nil,
+        artistHours: Int? = nil
     ) -> MonthlyRecap {
         let monthStart = date(year, month, 1)
         let duration = listeningHours.map { TimeInterval($0 * 3_600) } ?? TimeInterval(plays * 180)
@@ -146,7 +167,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             albumTitle: "Afterimages",
             playDelta: songPlays,
             skipDelta: 0,
-            listeningDuration: TimeInterval(songPlays * 180),
+            listeningDuration: songHours.map { TimeInterval($0 * 3_600) } ?? TimeInterval(songPlays * 180),
             artwork: nil,
             recordingIdentity: "store:1"
         )
@@ -159,26 +180,28 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             totalPlayDelta: plays,
             totalSkipDelta: 0,
             totalListeningDuration: duration,
-            playedSongCount: 1,
+            playedSongCount: playedSongCount,
             newSongCount: 0,
             topSongs: [song],
-            topArtists: [
+            topArtists: (0..<artistCount).map { index in
                 MonthlyRecap.RankedGroup(
-                    id: "artist:nova-lane",
-                    title: "Nova Lane",
+                    id: "artist:\(index)",
+                    title: index == 0 ? "Nova Lane" : "Artist \(index + 1)",
                     subtitle: "Artist",
-                    playDelta: songPlays,
-                    listeningDuration: song.listeningDuration,
+                    playDelta: index == 0 ? songPlays : 1,
+                    listeningDuration: index == 0
+                        ? (artistHours.map { TimeInterval($0 * 3_600) } ?? song.listeningDuration)
+                        : 180,
                     artwork: nil
                 )
-            ],
+            },
             topAlbums: [
                 MonthlyRecap.RankedGroup(
                     id: "album:afterimages",
                     title: "Afterimages",
                     subtitle: "Nova Lane",
                     playDelta: songPlays,
-                    listeningDuration: song.listeningDuration,
+                    listeningDuration: albumHours.map { TimeInterval($0 * 3_600) } ?? song.listeningDuration,
                     artwork: nil
                 )
             ],

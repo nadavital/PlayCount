@@ -566,8 +566,8 @@ struct MonthlyRecapView: View {
                             )
                         }
 
-                        if !earnedMilestones.isEmpty {
-                            RecapMilestonesSection(milestones: earnedMilestones)
+                        if !recapMilestones.isEmpty {
+                            RecapMilestonesSection(milestones: recapMilestones)
                         }
 
                         if recap.hasActivity {
@@ -1087,8 +1087,8 @@ struct MonthlyRecapView: View {
         )
     }
 
-    private var earnedMilestones: [RecapMilestone] {
-        RecapMilestoneEngine.earnedMilestones(for: recap, periodName: monthTitle)
+    private var recapMilestones: [RecapMilestone] {
+        RecapMilestoneEngine.milestones(for: recap, periodName: monthTitle)
     }
 
     private var weeklyTopSongArtwork: MPMediaItemArtwork? {
@@ -2648,6 +2648,10 @@ private struct RecapWeeklyInsightSection: View {
                     }
                 }
             }
+
+            if comparison.history.count > 1 {
+                RecapWeeklyHistoryChart(insights: comparison.history)
+            }
         }
     }
 
@@ -2659,48 +2663,148 @@ private struct RecapWeeklyInsightSection: View {
     }
 }
 
+private struct RecapWeeklyHistoryChart: View {
+    let insights: [WeeklyRecapInsight]
+
+    private var averageMinutes: Double {
+        guard !insights.isEmpty else { return 0 }
+        return insights.reduce(0) { $0 + $1.totalListeningDuration / 60 } / Double(insights.count)
+    }
+
+    private var currentWeekStart: Date? {
+        insights.last?.weekStart
+    }
+
+    var body: some View {
+        RecapSurface {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Listening History")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(insights.count) tracked weeks")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Chart {
+                    ForEach(insights, id: \.weekStart) { insight in
+                        BarMark(
+                            x: .value("Week", insight.weekStart, unit: .weekOfYear),
+                            y: .value("Minutes", insight.totalListeningDuration / 60),
+                            width: .ratio(0.64)
+                        )
+                        .foregroundStyle(
+                            insight.weekStart == currentWeekStart
+                                ? Color.accentColor
+                                : Color.accentColor.opacity(0.36)
+                        )
+                    }
+                    RuleMark(y: .value("Average", averageMinutes))
+                        .foregroundStyle(.secondary.opacity(0.55))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .weekOfYear)) { value in
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                            .font(.caption2)
+                        AxisTick().foregroundStyle(.tertiary)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                        AxisGridLine().foregroundStyle(.tertiary.opacity(0.45))
+                        AxisValueLabel {
+                            if let minutes = value.as(Double.self) {
+                                Text(minutes, format: .number.notation(.compactName))
+                            }
+                        }
+                        .font(.caption2)
+                    }
+                }
+                .frame(height: 142)
+                .accessibilityLabel("Weekly listening history in minutes")
+            }
+        }
+    }
+}
+
 private struct RecapMilestonesSection: View {
     let milestones: [RecapMilestone]
 
+    private let columns = [
+        GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 10, alignment: .top)
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Milestones")
-                .font(.title3.weight(.semibold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("Next Milestones")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Text("Automatic")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
 
-            RecapSurface {
-                VStack(spacing: 0) {
-                    ForEach(milestones) { milestone in
-                        HStack(spacing: 12) {
-                            Image(systemName: milestone.systemImage)
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
-                                .frame(width: 38, height: 38)
-                                .background(Color.accentColor.opacity(0.14), in: Circle())
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(milestone.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(2)
-                                Text(milestone.detail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "checkmark.seal.fill")
-                                .foregroundStyle(Color.accentColor)
-                                .accessibilityHidden(true)
-                        }
-                        .padding(.vertical, 9)
-                        .accessibilityElement(children: .combine)
-
-                        if milestone.id != milestones.last?.id {
-                            Divider()
-                        }
-                    }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                ForEach(milestones) { milestone in
+                    RecapMilestoneCard(milestone: milestone)
                 }
             }
         }
+    }
+}
+
+private struct RecapMilestoneCard: View {
+    let milestone: RecapMilestone
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                Image(systemName: milestone.systemImage)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 38, height: 38)
+                    .background(Color.accentColor.opacity(0.14), in: Circle())
+                Spacer(minLength: 8)
+                if milestone.progress >= 1 {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(milestone.title)
+                    .font(.subheadline.weight(.bold))
+                    .lineLimit(2)
+                Text(milestone.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            ProgressView(value: milestone.progress)
+                .tint(Color.accentColor)
+
+            Text(milestone.valueLabel)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+            Text(milestone.statusLabel)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 192, alignment: .topLeading)
+        .playCountCardSurface(cornerRadius: 18)
+        .accessibilityElement(children: .combine)
     }
 }
 
