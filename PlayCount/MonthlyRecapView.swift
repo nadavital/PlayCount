@@ -2731,80 +2731,181 @@ private struct RecapWeeklyHistoryChart: View {
 
 private struct RecapMilestonesSection: View {
     let milestones: [RecapMilestone]
+    @State private var isShowingAllMilestones = false
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 10, alignment: .top)
-    ]
+    private var featuredMilestones: ArraySlice<RecapMilestone> {
+        milestones.prefix(3)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Next Milestones")
+            if milestones.count > featuredMilestones.count {
+                Button {
+                    isShowingAllMilestones = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("Milestones")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text("View All")
+                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("Milestones")
                     .font(.title3.weight(.semibold))
-                Spacer()
-                Text("Automatic")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
             }
 
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-                ForEach(milestones) { milestone in
-                    RecapMilestoneCard(milestone: milestone)
+            RecapSurface {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(featuredMilestones) { milestone in
+                        RecapMilestoneBadgeTile(milestone: milestone, badgeSize: 72)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
             }
+        }
+        .sheet(isPresented: $isShowingAllMilestones) {
+            RecapMilestonesGallery(milestones: milestones)
         }
     }
 }
 
-private struct RecapMilestoneCard: View {
+private struct RecapMilestoneBadgeTile: View {
     let milestone: RecapMilestone
+    let badgeSize: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                Image(systemName: milestone.systemImage)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 38, height: 38)
-                    .background(Color.accentColor.opacity(0.14), in: Circle())
-                Spacer(minLength: 8)
-                if milestone.progress >= 1 {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(Color.accentColor)
-                        .accessibilityHidden(true)
-                }
-            }
+        VStack(spacing: 7) {
+            RecapMilestoneBadge(milestone: milestone, size: badgeSize)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(milestone.title)
-                    .font(.subheadline.weight(.bold))
-                    .lineLimit(2)
-                Text(milestone.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            Text(milestone.title)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
 
-            Spacer(minLength: 0)
-
-            ProgressView(value: milestone.progress)
-                .tint(Color.accentColor)
-
-            Text(milestone.valueLabel)
-                .font(.caption.weight(.semibold))
+            Text(milestone.compactValueLabel)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.78)
-            Text(milestone.statusLabel)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.7)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 192, alignment: .topLeading)
-        .playCountCardSurface(cornerRadius: 18)
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(milestone.title), \(milestone.valueLabel)")
+    }
+}
+
+private struct RecapMilestoneBadge: View {
+    let milestone: RecapMilestone
+    let size: CGFloat
+
+    private var progress: CGFloat {
+        CGFloat(milestone.progress)
+    }
+
+    private var gradient: AngularGradient {
+        AngularGradient(colors: colors + [colors[0]], center: .center)
+    }
+
+    private var colors: [Color] {
+        switch milestone.kind {
+        case .artistDiscovery: [.pink, .purple, .orange]
+        case .songDiscovery: [.cyan, .indigo, .purple]
+        case .listeningTime: [.orange, .pink, .red]
+        case .songBond: [.mint, .teal, .cyan]
+        case .albumHome: [.purple, .pink, .orange]
+        case .artistEra: [.yellow, .orange, .pink]
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.thinMaterial)
+
+            Circle()
+                .stroke(.primary.opacity(0.09), lineWidth: 5)
+
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(gradient, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+
+            Circle()
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+                .padding(8)
+
+            VStack(spacing: 1) {
+                Text(milestone.targetLabel)
+                    .font(.system(size: size * 0.25, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.62)
+                    .lineLimit(1)
+                Image(systemName: milestone.systemImage)
+                    .font(.system(size: size * 0.14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(size * 0.2)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: colors[0].opacity(0.2), radius: 8, y: 4)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct RecapMilestonesGallery: View {
+    let milestones: [RecapMilestone]
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 14, alignment: .top),
+        count: 3
+    )
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
+                    ForEach(milestones) { milestone in
+                        VStack(spacing: 9) {
+                            RecapMilestoneBadge(milestone: milestone, size: 88)
+
+                            Text(milestone.title)
+                                .font(.caption.weight(.bold))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+
+                            Text(milestone.compactValueLabel)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(milestone.title), \(milestone.valueLabel). \(milestone.statusLabel)")
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 22)
+            }
+            .navigationTitle("Milestones")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

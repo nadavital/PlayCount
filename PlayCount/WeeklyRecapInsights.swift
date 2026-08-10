@@ -88,6 +88,14 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
         return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
     }
 
+    var targetLabel: String {
+        formatted(targetValue)
+    }
+
+    var compactValueLabel: String {
+        "\(formatted(currentValue)) / \(formatted(targetValue)) \(unit)"
+    }
+
     var statusLabel: String {
         if progress >= 1 {
             return "Milestone unlocked"
