@@ -152,6 +152,7 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
     let totalSkipDelta: Int
     let totalListeningDuration: TimeInterval
     let playedSongCount: Int
+    let listenedArtistCount: Int
     let newSongCount: Int
     let topSongs: [RankedSong]
     let topArtists: [RankedGroup]
@@ -173,6 +174,7 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         totalSkipDelta: Int,
         totalListeningDuration: TimeInterval,
         playedSongCount: Int,
+        listenedArtistCount: Int? = nil,
         newSongCount: Int,
         topSongs: [RankedSong],
         topArtists: [RankedGroup],
@@ -193,6 +195,7 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         self.totalSkipDelta = totalSkipDelta
         self.totalListeningDuration = totalListeningDuration
         self.playedSongCount = playedSongCount
+        self.listenedArtistCount = listenedArtistCount ?? topArtists.filter { $0.playDelta > 0 }.count
         self.newSongCount = newSongCount
         self.topSongs = topSongs
         self.topArtists = topArtists
@@ -224,6 +227,7 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
             totalSkipDelta: 0,
             totalListeningDuration: 0,
             playedSongCount: 0,
+            listenedArtistCount: 0,
             newSongCount: 0,
             topSongs: [],
             topArtists: [],
@@ -846,6 +850,7 @@ final class MonthlyRecapSnapshotStore {
         let totalSkipDelta: Int
         let totalListeningDuration: TimeInterval
         let playedSongCount: Int
+        let listenedArtistCount: Int?
         let newSongCount: Int
         let topSongs: [RankedSong]
         let topArtists: [RankedGroup]
@@ -893,6 +898,7 @@ final class MonthlyRecapSnapshotStore {
             totalSkipDelta = recap.totalSkipDelta
             totalListeningDuration = recap.totalListeningDuration
             playedSongCount = recap.playedSongCount
+            listenedArtistCount = recap.listenedArtistCount
             newSongCount = recap.newSongCount
             let rankedSongs = preservingAllRankings
                 ? Array(recap.topSongs[...])
@@ -978,6 +984,7 @@ final class MonthlyRecapSnapshotStore {
                 totalSkipDelta: totalSkipDelta,
                 totalListeningDuration: totalListeningDuration,
                 playedSongCount: playedSongCount,
+                listenedArtistCount: listenedArtistCount,
                 newSongCount: newSongCount,
                 topSongs: topSongs.map {
                     MonthlyRecap.RankedSong(
@@ -4212,6 +4219,46 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
+    /// Backfills the exact artist total into compact recap summaries written before
+    /// that aggregate existed. Full monthly ledgers retain every ranked artist, so
+    /// they can upgrade old months and rebuild exact yearly unions without rescanning
+    /// the snapshot archive.
+    private func migrateListenedArtistCountsIfNeeded(in stored: inout StoredSnapshots) -> Bool {
+        let hasMissingCounts = stored.monthlyLedgers.contains { $0.listenedArtistCount == nil } ||
+            stored.syncedRecaps.contains { $0.listenedArtistCount == nil } ||
+            stored.syncedYearlyRecaps.contains { $0.recap.listenedArtistCount == nil }
+        guard hasMissingCounts else { return false }
+
+        let artworkLookup = ArtworkLookup(sourceSongs: [])
+        stored.monthlyLedgers = stored.monthlyLedgers.map {
+            SyncedMonthlyRecap(
+                recap: $0.monthlyRecap(artworkLookup: artworkLookup),
+                preservingAllRankings: true
+            )
+        }
+        stored.syncedRecaps = stored.syncedRecaps.map {
+            SyncedMonthlyRecap(recap: $0.monthlyRecap(artworkLookup: artworkLookup))
+        }
+        stored.syncedYearlyRecaps = stored.syncedYearlyRecaps.map {
+            SyncedYearlyRecap(
+                year: $0.year,
+                recap: $0.monthlyRecap(artworkLookup: artworkLookup)
+            )
+        }
+
+        if !stored.monthlyLedgers.isEmpty {
+            let rebuilt = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            )
+            let rebuiltYears = Set(rebuilt.map(\.year))
+            stored.syncedYearlyRecaps.removeAll { rebuiltYears.contains($0.year) }
+            stored.syncedYearlyRecaps.append(contentsOf: rebuilt)
+            stored.syncedYearlyRecaps.sort { $0.year < $1.year }
+        }
+        return true
+    }
+
     private func loadLocked() -> StoredSnapshots {
         if let loadedSnapshots {
             return loadedSnapshots
@@ -4219,7 +4266,11 @@ final class MonthlyRecapSnapshotStore {
 
         let ledger = LedgerDatabase(url: ledgerURL)
         if var stored = try? ledger.load() {
-            if migrateGapPolicyIfNeeded(in: &stored) {
+            var didMigrate = migrateGapPolicyIfNeeded(in: &stored)
+            if migrateListenedArtistCountsIfNeeded(in: &stored) {
+                didMigrate = true
+            }
+            if didMigrate {
                 try? ledger.save(stored)
                 writeSummaryCache(for: stored)
             }

@@ -403,10 +403,22 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         let latestDate = date(year: 2026, month: 5, day: 5, hour: 12)
         let largeSuffix = String(repeating: "x", count: 1_000)
         let baselineSongs = (1...1_200).map {
-            song(id: UInt64($0), title: "Song \($0) \(largeSuffix)", playCount: 10)
+            song(
+                id: UInt64($0),
+                title: "Song \($0) \(largeSuffix)",
+                artist: "Artist \($0)",
+                playCount: 10,
+                artistPersistentID: UInt64($0)
+            )
         }
         let latestSongs = (1...1_200).map {
-            song(id: UInt64($0), title: "Song \($0) \(largeSuffix)", playCount: 11)
+            song(
+                id: UInt64($0),
+                title: "Song \($0) \(largeSuffix)",
+                artist: "Artist \($0)",
+                playCount: 11,
+                artistPersistentID: UInt64($0)
+            )
         }
 
         _ = phoneStore.record(songs: baselineSongs, at: baselineDate, reason: .manualRefresh)
@@ -423,7 +435,10 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(iPadRecap.totalPlayDelta, sourceRecap.totalPlayDelta)
         XCTAssertEqual(iPadRecap.totalListeningDuration, sourceRecap.totalListeningDuration)
         XCTAssertEqual(iPadRecap.playedSongCount, sourceRecap.playedSongCount)
+        XCTAssertEqual(sourceRecap.listenedArtistCount, 1_200)
+        XCTAssertEqual(iPadRecap.listenedArtistCount, sourceRecap.listenedArtistCount)
         XCTAssertLessThan(iPadRecap.topSongs.count, baselineSongs.count)
+        XCTAssertLessThan(iPadRecap.topArtists.count, sourceRecap.listenedArtistCount)
     }
 
     func testHigherUserRecapTotalsWinOverLaterLowerDeviceBaseline() {

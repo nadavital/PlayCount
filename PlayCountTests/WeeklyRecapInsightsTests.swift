@@ -126,7 +126,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             songPlays: 120,
             listeningHours: 62,
             playedSongCount: 180,
-            artistCount: 63,
+            artistCount: 263,
             songHours: 24,
             albumHours: 12,
             artistHours: 30
@@ -134,9 +134,9 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         let milestones = RecapMilestoneEngine.milestones(for: recap, periodName: "August 2026")
 
         XCTAssertEqual(milestones.count, 6)
-        XCTAssertEqual(milestones[0].title, "Musical Atlas")
-        XCTAssertEqual(milestones[0].valueLabel, "63 of 100 artists")
-        XCTAssertEqual(milestones[0].earnedTarget, 50)
+        XCTAssertEqual(milestones[0].title, "World Tour")
+        XCTAssertEqual(milestones[0].valueLabel, "263 of 500 artists")
+        XCTAssertEqual(milestones[0].earnedTarget, 250)
         XCTAssertEqual(milestones[1].title, "Deep Catalog")
         XCTAssertEqual(milestones[1].targetValue, 250)
         XCTAssertEqual(milestones[2].title, "Permanent Headphones")
@@ -181,6 +181,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             totalSkipDelta: 0,
             totalListeningDuration: duration,
             playedSongCount: playedSongCount,
+            listenedArtistCount: artistCount,
             newSongCount: 0,
             topSongs: [song],
             topArtists: (0..<artistCount).map { index in

@@ -110,10 +110,10 @@ enum RecapMilestoneEngine {
     static func milestones(for recap: MonthlyRecap, periodName: String) -> [RecapMilestone] {
         var milestones: [RecapMilestone] = []
 
-        let artistCount = recap.topArtists.filter { $0.playDelta > 0 }.count
+        let artistCount = recap.listenedArtistCount
         let artistProgress = progress(
             value: Double(artistCount),
-            thresholds: [10, 25, 50, 100]
+            thresholds: [10, 25, 50, 100, 250, 500, 1_000]
         )
         milestones.append(
             RecapMilestone(
@@ -228,7 +228,10 @@ enum RecapMilestoneEngine {
         case ...10: "Open Ears"
         case ...25: "Sound Scout"
         case ...50: "Scene Hopper"
-        default: "Musical Atlas"
+        case ...100: "Musical Atlas"
+        case ...250: "Genre Voyager"
+        case ...500: "World Tour"
+        default: "Human Festival"
         }
     }
 
