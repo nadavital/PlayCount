@@ -627,8 +627,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     /// Keeps bulk library publications from invalidating an actively scrolled
-    /// detail sheet. The newest prepared snapshot is applied shortly after the
-    /// sheet dismisses, outside its interactive transition.
+    /// detail view. The newest prepared snapshot is applied shortly after the
+    /// last detail presentation ends, outside its interactive transition.
     func setDetailPresentationActive(_ isActive: Bool, owner: UUID) {
         let membershipChanged: Bool
         if isActive {

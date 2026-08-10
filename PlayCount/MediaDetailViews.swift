@@ -247,6 +247,7 @@ struct SongInfoView: View {
             }
         }
         .playCountSongEntityIdentifier(song)
+        .playCountStableDetailPresentation(manager: manager)
     }
 
     private var isRegularWidth: Bool {
@@ -367,6 +368,7 @@ struct AlbumInfoView: View {
             }
         }
         .playCountAlbumEntityIdentifier(resolvedAlbum)
+        .playCountStableDetailPresentation(manager: manager)
     }
 
     private var detailMetricPicker: some View {
@@ -585,6 +587,7 @@ struct ArtistInfoView: View {
             }
         }
         .playCountArtistEntityIdentifier(resolvedArtist)
+        .playCountStableDetailPresentation(manager: manager)
     }
 
     private var detailMetricPicker: some View {
@@ -1250,6 +1253,25 @@ private struct MediaDetailResponsiveHero<Content: View>: View {
 private extension View {
     func playCountDetailCardSurface(cornerRadius: CGFloat) -> some View {
         modifier(MediaDetailCardSurfaceModifier(cornerRadius: cornerRadius))
+    }
+
+    func playCountStableDetailPresentation(manager: MediaLibraryManager) -> some View {
+        modifier(StableDetailPresentationModifier(manager: manager))
+    }
+}
+
+private struct StableDetailPresentationModifier: ViewModifier {
+    let manager: MediaLibraryManager
+    @State private var owner = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                manager.setDetailPresentationActive(true, owner: owner)
+            }
+            .onDisappear {
+                manager.setDetailPresentationActive(false, owner: owner)
+            }
     }
 }
 
