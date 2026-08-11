@@ -134,14 +134,14 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         let milestones = RecapMilestoneEngine.milestones(for: recap, periodName: "August 2026")
 
         XCTAssertEqual(milestones.count, 6)
-        XCTAssertEqual(milestones[0].title, "World Tour")
+        XCTAssertEqual(milestones[0].title, "Artists Listened To")
         XCTAssertEqual(milestones[0].valueLabel, "263 of 500 artists")
         XCTAssertEqual(milestones[0].earnedTarget, 250)
-        XCTAssertEqual(milestones[0].stage, 5)
-        XCTAssertEqual(milestones[1].title, "Deep Catalog")
+        XCTAssertEqual(milestones[0].stage, 4)
+        XCTAssertEqual(milestones[1].title, "Songs Listened To")
         XCTAssertEqual(milestones[1].targetValue, 250)
-        XCTAssertEqual(milestones[2].title, "Permanent Headphones")
-        XCTAssertEqual(milestones[3].title, "Two-Day Obsession")
+        XCTAssertEqual(milestones[2].title, "Listening Time")
+        XCTAssertEqual(milestones[3].title, "Top Song Listening Time")
         XCTAssertEqual(milestones[3].earnedTarget, 24)
         XCTAssertEqual(milestones[4].kind, .albumHome)
         XCTAssertEqual(milestones[5].kind, .artistEra)
@@ -154,12 +154,12 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             title: "Glass Rain"
         )
         XCTAssertEqual(song.map(\.kind), [.songPlays, .songListeningTime])
-        XCTAssertEqual(song[0].title, "Heavy Rotation")
-        XCTAssertEqual(song[0].compactValueLabel, "63 / 100 plays")
-        XCTAssertEqual(song[0].stage, 3)
-        XCTAssertEqual(song[1].title, "Permanent Favorite")
-        XCTAssertEqual(song[1].compactValueLabel, "24 / 48 hours")
-        XCTAssertEqual(song[1].stage, 5)
+        XCTAssertEqual(song[0].title, "Song Plays")
+        XCTAssertEqual(song[0].compactValueLabel, "63 of 100 plays")
+        XCTAssertEqual(song[0].stage, 2)
+        XCTAssertEqual(song[1].title, "Time With Song")
+        XCTAssertEqual(song[1].compactValueLabel, "24 of 48 hours")
+        XCTAssertEqual(song[1].stage, 4)
 
         let album = MediaMilestoneEngine.album(
             playCount: 520,
@@ -167,6 +167,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             title: "Afterimages"
         )
         XCTAssertEqual(album.map(\.kind), [.albumPlays, .albumListeningTime])
+        XCTAssertEqual(album.map(\.title), ["Album Plays", "Time With Album"])
         XCTAssertEqual(album[0].targetValue, 1_000)
         XCTAssertEqual(album[1].targetValue, 100)
 
@@ -176,9 +177,29 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             name: "Nova Lane"
         )
         XCTAssertEqual(artist.map(\.kind), [.artistPlays, .artistListeningTime])
+        XCTAssertEqual(artist.map(\.title), ["Artist Plays", "Time With Artist"])
         XCTAssertEqual(artist[0].targetValue, 5_000)
-        XCTAssertEqual(artist[0].stage, 6)
+        XCTAssertEqual(artist[0].stage, 5)
         XCTAssertEqual(artist[1].targetValue, 500)
+    }
+
+    func testExactThresholdEarnsCurrentStageAndAdvancesDisplayedTarget() {
+        let milestones = MediaMilestoneEngine.song(
+            playCount: 50,
+            listeningDuration: 3 * 3_600,
+            title: "Glass Rain"
+        )
+
+        XCTAssertTrue(milestones[0].isEarned)
+        XCTAssertEqual(milestones[0].earnedTarget, 50)
+        XCTAssertEqual(milestones[0].targetValue, 100)
+        XCTAssertEqual(milestones[0].stage, 2)
+        XCTAssertEqual(milestones[0].statusLabel, "50 reached · next 100")
+
+        XCTAssertTrue(milestones[1].isEarned)
+        XCTAssertEqual(milestones[1].earnedTarget, 3)
+        XCTAssertEqual(milestones[1].targetValue, 6)
+        XCTAssertEqual(milestones[1].stage, 1)
     }
 
     private func recap(

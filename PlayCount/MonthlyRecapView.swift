@@ -2782,7 +2782,7 @@ struct MilestoneBadgeTile: View {
     let badgeSize: CGFloat
 
     var body: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 5) {
             MilestoneBadge(milestone: milestone, size: badgeSize)
 
             Text(milestone.title)
@@ -2800,7 +2800,7 @@ struct MilestoneBadgeTile: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(milestone.title), \(MilestoneMedalTier(stage: milestone.stage).name) medal, \(milestone.valueLabel)"
+            "\(milestone.title), \(MilestoneMedalTier(stage: milestone.stage).name) medal, \(milestone.valueLabel). \(milestone.statusLabel)"
         )
     }
 }
@@ -2809,139 +2809,156 @@ struct MilestoneBadge: View {
     let milestone: RecapMilestone
     let size: CGFloat
 
-    private var accent: Color {
-        switch milestone.kind {
-        case .artistDiscovery, .artistPlays: .pink
-        case .songDiscovery, .songPlays: .cyan
-        case .listeningTime: .orange
-        case .songBond, .songListeningTime: .mint
-        case .albumHome, .albumPlays: .purple
-        case .artistEra, .artistListeningTime: .yellow
-        case .albumListeningTime: .indigo
-        }
-    }
-
     var body: some View {
-        MilestoneMedal(
-            target: milestone.targetLabel,
-            emblem: milestone.systemImage,
-            progress: milestone.progress,
+        GlassMilestoneMedal(
             tier: MilestoneMedalTier(stage: milestone.stage),
-            accent: accent,
-            size: size,
+            systemImage: milestone.systemImage,
+            isLocked: !milestone.isEarned && !MilestonePreview.previewsUnlocked,
+            size: size
         )
     }
 }
 
-private struct MilestoneMedal: View {
-    let target: String
-    let emblem: String
-    let progress: Double
+private struct GlassMilestoneMedal: View {
     let tier: MilestoneMedalTier
-    let accent: Color
+    let systemImage: String
+    let isLocked: Bool
     let size: CGFloat
 
-    private var coinSize: CGFloat {
-        size * 0.76
-    }
-
     var body: some View {
-        ZStack(alignment: .top) {
-            medalRibbon
-                .frame(width: size * 0.58, height: size * 0.37)
+        ZStack {
+            badgeFace
+                .saturation(isLocked ? 0 : 1)
+                .opacity(isLocked ? 0.46 : 1)
+                .blur(radius: isLocked ? 0.8 : 0)
 
-            ZStack {
-                Circle()
-                    .fill(tier.edgeGradient)
-
-                Circle()
-                    .fill(tier.faceGradient)
-                    .padding(coinSize * 0.075)
-
-                Circle()
-                    .strokeBorder(.white.opacity(tier.highlightOpacity), lineWidth: 0.8)
-                    .padding(coinSize * 0.12)
-
-                Image(systemName: "music.note")
-                    .font(.system(size: coinSize * 0.48, weight: .black))
-                    .foregroundStyle(tier.engravingColor.opacity(0.075))
-                    .offset(x: coinSize * 0.08)
-
-                Circle()
-                    .trim(from: 0, to: CGFloat(progress))
-                    .stroke(
-                        accent,
-                        style: StrokeStyle(lineWidth: max(2, coinSize * 0.045), lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
-                    .padding(coinSize * 0.12)
-
-                VStack(spacing: 0) {
-                    Image(systemName: emblem)
-                        .font(.system(size: coinSize * 0.16, weight: .bold))
-                        .symbolRenderingMode(.monochrome)
-
-                    Text(target)
-                        .font(.system(size: coinSize * 0.28, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.55)
-                        .lineLimit(1)
-                }
-                .foregroundStyle(tier.foregroundColor)
-                .shadow(color: tier.textShadow, radius: 0.6, y: 0.5)
-                .padding(coinSize * 0.2)
+            if isLocked {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: size * 0.14, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: size * 0.3, height: size * 0.3)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay {
+                        Circle().strokeBorder(.white.opacity(0.3), lineWidth: 0.7)
+                    }
+                    .offset(x: size * 0.31, y: -size * 0.31)
+                    .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
             }
-            .frame(width: coinSize, height: coinSize)
-            .overlay {
-                Circle()
-                    .strokeBorder(tier.rimColor.opacity(0.75), lineWidth: max(1, coinSize * 0.025))
-            }
-            .shadow(color: .black.opacity(0.22), radius: size * 0.06, y: size * 0.035)
-            .offset(y: size * 0.26)
         }
-        .frame(width: size, height: size * 1.02)
+        .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 
-    private var medalRibbon: some View {
+    private var badgeFace: some View {
         ZStack {
-            MilestoneRibbonShape()
-                .fill(tier.ribbonGradient)
+            MilestoneAnimatedAura(tier: tier, size: size, isAnimated: !isLocked)
+                .frame(width: size * 0.62, height: size * 0.62)
+                .opacity(0.84)
 
-            HStack(spacing: size * 0.035) {
-                ForEach(Array(tier.ribbonStripeWidths.enumerated()), id: \.offset) { _, width in
-                    MilestoneRibbonShape()
-                        .fill(tier.ribbonStripe)
-                        .frame(width: size * width)
-                }
-            }
+            glassLens
 
-            MilestoneRibbonShape()
-                .strokeBorder(.white.opacity(0.13), lineWidth: 0.7)
+            Image(systemName: systemImage)
+                .font(.system(size: size * 0.3, weight: .semibold))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
         }
-        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        .shadow(color: tier.glassTint.opacity(0.18), radius: size * 0.1, y: size * 0.04)
+    }
+
+    @ViewBuilder
+    private var glassLens: some View {
+        if #available(iOS 26.0, *) {
+            Color.clear
+                .frame(width: size, height: size)
+                .glassEffect(
+                    .regular.tint(tier.glassTint.opacity(0.12)),
+                    in: .circle
+                )
+        } else {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                }
+                .frame(width: size, height: size)
+        }
     }
 }
 
-private struct MilestoneRibbonShape: InsettableShape {
-    var insetAmount: CGFloat = 0
+private struct MilestoneAnimatedAura: View {
+    let tier: MilestoneMedalTier
+    let size: CGFloat
+    let isAnimated: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
 
-    func path(in rect: CGRect) -> Path {
-        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.16, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - rect.height * 0.2))
-        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.16, y: rect.maxY))
-        path.closeSubpath()
-        return path
+    var body: some View {
+        aura(expanded: expanded)
+            .onAppear(perform: updateAnimation)
+            .onChange(of: reduceMotion) { updateAnimation() }
+            .onChange(of: isAnimated) { updateAnimation() }
+            .onDisappear(perform: stopAnimation)
     }
 
-    func inset(by amount: CGFloat) -> Self {
-        var copy = self
-        copy.insetAmount += amount
-        return copy
+    private func updateAnimation() {
+        guard isAnimated, !reduceMotion else {
+            stopAnimation()
+            return
+        }
+        guard !expanded else { return }
+        withAnimation(.easeInOut(duration: 5.6).repeatForever(autoreverses: true)) {
+            expanded = true
+        }
+    }
+
+    private func stopAnimation() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            expanded = false
+        }
+    }
+
+    private func aura(expanded: Bool) -> some View {
+        ZStack {
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: tier.auraColors,
+                        center: .center,
+                        angle: .degrees(expanded ? 52 : -32)
+                    )
+                )
+                .rotationEffect(.degrees(expanded ? 34 : -28))
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.22), tier.glassTint.opacity(0.32), .clear],
+                        center: expanded ? .topTrailing : .bottomLeading,
+                        startRadius: 0,
+                        endRadius: size * 0.46
+                    )
+                )
+                .scaleEffect(expanded ? 0.94 : 0.58)
+                .offset(
+                    x: expanded ? -size * 0.16 : size * 0.16,
+                    y: expanded ? size * 0.12 : -size * 0.12
+                )
+        }
+        .blur(radius: size * 0.035)
+        .scaleEffect(expanded ? 1.05 : 0.88)
+    }
+}
+
+private enum MilestonePreview {
+    static var previewsUnlocked: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-PlayCountMedalPreviewUnlocked")
+        #else
+        false
+        #endif
     }
 }
 
@@ -2968,96 +2985,28 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         }
     }
 
-    var edgeGradient: LinearGradient {
-        LinearGradient(colors: edgeColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-
-    var faceGradient: RadialGradient {
-        RadialGradient(colors: faceColors, center: .topLeading, startRadius: 0, endRadius: 58)
-    }
-
-    var ribbonGradient: LinearGradient {
-        LinearGradient(colors: ribbonColors, startPoint: .leading, endPoint: .trailing)
-    }
-
-    var ribbonStripe: LinearGradient {
-        LinearGradient(colors: stripeColors, startPoint: .top, endPoint: .bottom)
-    }
-
-    var edgeColors: [Color] {
+    var glassTint: Color {
         switch self {
-        case .bronze: [.init(red: 0.48, green: 0.23, blue: 0.11), .init(red: 0.93, green: 0.57, blue: 0.28), .init(red: 0.38, green: 0.16, blue: 0.08)]
-        case .silver: [.init(white: 0.42), .init(white: 0.94), .init(white: 0.38)]
-        case .gold: [.init(red: 0.55, green: 0.31, blue: 0.02), .init(red: 1, green: 0.83, blue: 0.26), .init(red: 0.62, green: 0.35, blue: 0.02)]
-        case .roseGold: [.init(red: 0.51, green: 0.24, blue: 0.22), .init(red: 0.96, green: 0.68, blue: 0.61), .init(red: 0.48, green: 0.19, blue: 0.19)]
-        case .platinum: [.init(red: 0.3, green: 0.42, blue: 0.5), .init(red: 0.83, green: 0.94, blue: 0.98), .init(red: 0.28, green: 0.35, blue: 0.47)]
-        case .legend: [.init(red: 0.1, green: 0.09, blue: 0.18), .init(red: 0.53, green: 0.4, blue: 0.84), .init(red: 0.06, green: 0.05, blue: 0.12)]
+        case .bronze: .orange
+        case .silver: .cyan
+        case .gold: .yellow
+        case .roseGold: .pink
+        case .platinum: .mint
+        case .legend: .purple
         }
     }
 
-    var faceColors: [Color] {
+    var auraColors: [Color] {
         switch self {
-        case .bronze: [.init(red: 0.94, green: 0.64, blue: 0.36), .init(red: 0.59, green: 0.3, blue: 0.15)]
-        case .silver: [.white, .init(white: 0.61)]
-        case .gold: [.init(red: 1, green: 0.88, blue: 0.38), .init(red: 0.84, green: 0.52, blue: 0.04)]
-        case .roseGold: [.init(red: 1, green: 0.78, blue: 0.72), .init(red: 0.72, green: 0.36, blue: 0.34)]
-        case .platinum: [.init(red: 0.92, green: 0.98, blue: 1), .init(red: 0.5, green: 0.65, blue: 0.73)]
-        case .legend: [.init(red: 0.31, green: 0.25, blue: 0.52), .init(red: 0.08, green: 0.07, blue: 0.16)]
+        case .bronze: [.red, .orange, .pink, .red]
+        case .silver: [.blue, .cyan, .white, .blue]
+        case .gold: [.orange, .yellow, .pink, .orange]
+        case .roseGold: [.purple, .pink, .orange, .purple]
+        case .platinum: [.indigo, .cyan, .mint, .indigo]
+        case .legend: [.purple, .blue, .pink, .purple]
         }
     }
 
-    var ribbonColors: [Color] {
-        switch self {
-        case .bronze: [.init(red: 0.28, green: 0.08, blue: 0.1), .init(red: 0.66, green: 0.2, blue: 0.2), .init(red: 0.28, green: 0.08, blue: 0.1)]
-        case .silver: [.init(red: 0.16, green: 0.24, blue: 0.35), .init(red: 0.45, green: 0.63, blue: 0.76), .init(red: 0.16, green: 0.24, blue: 0.35)]
-        case .gold: [.init(red: 0.4, green: 0.06, blue: 0.14), .init(red: 0.78, green: 0.18, blue: 0.28), .init(red: 0.4, green: 0.06, blue: 0.14)]
-        case .roseGold: [.init(red: 0.27, green: 0.12, blue: 0.28), .init(red: 0.67, green: 0.29, blue: 0.52), .init(red: 0.27, green: 0.12, blue: 0.28)]
-        case .platinum: [.init(red: 0.05, green: 0.21, blue: 0.28), .init(red: 0.2, green: 0.64, blue: 0.74), .init(red: 0.05, green: 0.21, blue: 0.28)]
-        case .legend: [.init(red: 0.07, green: 0.05, blue: 0.13), .init(red: 0.35, green: 0.2, blue: 0.58), .init(red: 0.07, green: 0.05, blue: 0.13)]
-        }
-    }
-
-    var stripeColors: [Color] {
-        switch self {
-        case .bronze: [.orange.opacity(0.9), .red.opacity(0.8)]
-        case .silver: [.white.opacity(0.9), .cyan.opacity(0.6)]
-        case .gold: [.yellow, .orange]
-        case .roseGold: [.pink.opacity(0.9), .orange.opacity(0.7)]
-        case .platinum: [.cyan.opacity(0.9), .white.opacity(0.85)]
-        case .legend: [.purple, .cyan]
-        }
-    }
-
-    var ribbonStripeWidths: [CGFloat] {
-        switch self {
-        case .bronze: []
-        case .silver: [0.07]
-        case .gold: [0.16]
-        case .roseGold: [0.055, 0.055]
-        case .platinum: [0.045, 0.1, 0.045]
-        case .legend: [0.07, 0.07, 0.07]
-        }
-    }
-
-    var foregroundColor: Color {
-        self == .legend ? .white : .black.opacity(0.78)
-    }
-
-    var engravingColor: Color {
-        self == .legend ? .white : .black
-    }
-
-    var rimColor: Color {
-        self == .legend ? .white.opacity(0.75) : .black.opacity(0.38)
-    }
-
-    var textShadow: Color {
-        self == .legend ? .black.opacity(0.6) : .white.opacity(0.28)
-    }
-
-    var highlightOpacity: Double {
-        self == .legend ? 0.22 : 0.48
-    }
 }
 
 struct MilestoneShelf<Content: View>: View {

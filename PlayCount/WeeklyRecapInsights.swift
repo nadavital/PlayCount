@@ -90,6 +90,10 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
         return min(max(currentValue / targetValue, 0), 1)
     }
 
+    var isEarned: Bool {
+        earnedTarget != nil
+    }
+
     var valueLabel: String {
         let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
         return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
@@ -101,7 +105,7 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
 
     var compactValueLabel: String {
         let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
-        return "\(formatted(currentValue)) / \(formatted(targetValue)) \(displayedUnit)"
+        return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
     }
 
     var statusLabel: String {
@@ -162,7 +166,7 @@ enum MediaMilestoneEngine {
             detail: "With \(name)",
             playThresholds: [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
             timeThresholds: [5, 10, 25, 50, 100, 250, 500, 1_000],
-            playImage: "star.circle.fill",
+            playImage: "star.fill",
             playTitle: artistPlayTitle,
             timeTitle: artistTimeTitle
         )
@@ -200,7 +204,7 @@ enum MediaMilestoneEngine {
                 kind: timeKind,
                 title: timeTitle(timeProgress.target),
                 detail: detail,
-                systemImage: "clock.fill",
+                systemImage: "clock",
                 currentValue: listeningHours,
                 targetValue: timeProgress.target,
                 unit: "hours",
@@ -212,69 +216,20 @@ enum MediaMilestoneEngine {
 
     private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?, stage: Int) {
         let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
+        let earnedIndex = thresholds.lastIndex { value >= $0 }
         return (
             thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1),
             thresholds.last { value >= $0 },
-            targetIndex
+            earnedIndex ?? 0
         )
     }
 
-    private static func songPlayTitle(for target: Double) -> String {
-        switch target {
-        case ...10: "First Loop"
-        case ...50: "On Repeat"
-        case ...250: "Heavy Rotation"
-        case ...1_000: "Personal Classic"
-        default: "Forever Track"
-        }
-    }
-
-    private static func songTimeTitle(for target: Double) -> String {
-        switch target {
-        case ...3: "Extended Listen"
-        case ...12: "Soundtrack Moment"
-        case ...24: "All-Day Anthem"
-        case ...100: "Permanent Favorite"
-        default: "A Life With One Song"
-        }
-    }
-
-    private static func albumPlayTitle(for target: Double) -> String {
-        switch target {
-        case ...25: "First Spins"
-        case ...100: "Front to Back"
-        case ...500: "Album Resident"
-        case ...2_500: "Permanent Rotation"
-        default: "Desert Island Record"
-        }
-    }
-
-    private static func albumTimeTitle(for target: Double) -> String {
-        switch target {
-        case ...5: "Liner Notes Level"
-        case ...24: "A Day in This Album"
-        case ...100: "Deep Album Era"
-        default: "Second Home"
-        }
-    }
-
-    private static func artistPlayTitle(for target: Double) -> String {
-        switch target {
-        case ...100: "Fan in the Making"
-        case ...500: "Inner Circle"
-        case ...2_500: "Full Artist Era"
-        default: "Forever Fan"
-        }
-    }
-
-    private static func artistTimeTitle(for target: Double) -> String {
-        switch target {
-        case ...10: "Getting Acquainted"
-        case ...50: "Discography Dweller"
-        case ...250: "Superfan Hours"
-        default: "Lifetime Artist"
-        }
-    }
+    private static func songPlayTitle(for _: Double) -> String { "Song Plays" }
+    private static func songTimeTitle(for _: Double) -> String { "Time With Song" }
+    private static func albumPlayTitle(for _: Double) -> String { "Album Plays" }
+    private static func albumTimeTitle(for _: Double) -> String { "Time With Album" }
+    private static func artistPlayTitle(for _: Double) -> String { "Artist Plays" }
+    private static func artistTimeTitle(for _: Double) -> String { "Time With Artist" }
 }
 
 enum RecapMilestoneEngine {
@@ -290,7 +245,7 @@ enum RecapMilestoneEngine {
             RecapMilestone(
                 kind: .artistDiscovery,
                 title: artistDiscoveryTitle(for: artistProgress.target),
-                detail: "Artists heard in \(periodName)",
+                detail: "Artists listened to in \(periodName)",
                 systemImage: "person.2.wave.2.fill",
                 currentValue: Double(artistCount),
                 targetValue: artistProgress.target,
@@ -308,7 +263,7 @@ enum RecapMilestoneEngine {
             RecapMilestone(
                 kind: .songDiscovery,
                 title: songDiscoveryTitle(for: songProgress.target),
-                detail: "Different songs in \(periodName)",
+                detail: "Songs listened to in \(periodName)",
                 systemImage: "music.note.list",
                 currentValue: Double(recap.playedSongCount),
                 targetValue: songProgress.target,
@@ -327,7 +282,7 @@ enum RecapMilestoneEngine {
             RecapMilestone(
                 kind: .listeningTime,
                 title: listeningTitle(for: listeningProgress.target),
-                detail: "Your soundtrack for \(periodName)",
+                detail: "Total listening time in \(periodName)",
                 systemImage: "headphones",
                 currentValue: listeningHours,
                 targetValue: listeningProgress.target,
@@ -344,7 +299,7 @@ enum RecapMilestoneEngine {
                 RecapMilestone(
                     kind: .songBond,
                     title: songBondTitle(for: songProgress.target),
-                    detail: "With \(song.title) by \(song.artist)",
+                    detail: "Listening time for \(song.title) by \(song.artist)",
                     systemImage: "repeat",
                     currentValue: hours,
                     targetValue: songProgress.target,
@@ -362,7 +317,7 @@ enum RecapMilestoneEngine {
                 RecapMilestone(
                     kind: .albumHome,
                     title: albumHomeTitle(for: albumProgress.target),
-                    detail: "Inside \(album.title) by \(album.subtitle)",
+                    detail: "Listening time for \(album.title) by \(album.subtitle)",
                     systemImage: "rectangle.stack.fill",
                     currentValue: hours,
                     targetValue: albumProgress.target,
@@ -380,8 +335,8 @@ enum RecapMilestoneEngine {
                 RecapMilestone(
                     kind: .artistEra,
                     title: artistEraTitle(for: artistProgress.target),
-                    detail: "In your \(artist.title) era",
-                    systemImage: "star.circle.fill",
+                    detail: "Listening time for \(artist.title)",
+                    systemImage: "star.fill",
                     currentValue: hours,
                     targetValue: artistProgress.target,
                     unit: "hours",
@@ -398,75 +353,16 @@ enum RecapMilestoneEngine {
         let earned = thresholds.last { value >= $0 }
         let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
         let target = thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1)
-        return (target, earned, targetIndex)
+        let earnedIndex = thresholds.lastIndex { value >= $0 }
+        return (target, earned, earnedIndex ?? 0)
     }
 
-    private static func artistDiscoveryTitle(for target: Double) -> String {
-        switch target {
-        case ...10: "Open Ears"
-        case ...25: "Sound Scout"
-        case ...50: "Scene Hopper"
-        case ...100: "Musical Atlas"
-        case ...250: "Genre Voyager"
-        case ...500: "World Tour"
-        default: "Human Festival"
-        }
-    }
-
-    private static func songDiscoveryTitle(for target: Double) -> String {
-        switch target {
-        case ...25: "Starter Mixtape"
-        case ...50: "Mixtape Maker"
-        case ...100: "The Songbook"
-        case ...250: "Deep Catalog"
-        case ...500: "Living Library"
-        case ...1_000: "Human Jukebox"
-        default: "Endless Queue"
-        }
-    }
-
-    private static func listeningTitle(for target: Double) -> String {
-        switch target {
-        case ...5: "Long Play"
-        case ...10: "Soundtrack Mode"
-        case ...25: "Around the Clock"
-        case ...50: "Audio Orbit"
-        case ...100: "Permanent Headphones"
-        default: "A Life in Sound"
-        }
-    }
-
-    private static func songBondTitle(for target: Double) -> String {
-        switch target {
-        case ...1: "On Repeat"
-        case ...3: "Extended Cut"
-        case ...6: "All-Day Loop"
-        case ...12: "Half-Day Anthem"
-        case ...24: "A Day With One Song"
-        case ...48: "Two-Day Obsession"
-        default: "Forever Track"
-        }
-    }
-
-    private static func albumHomeTitle(for target: Double) -> String {
-        switch target {
-        case ...2: "Front to Back"
-        case ...5: "Liner Notes Level"
-        case ...10: "Album Resident"
-        case ...24: "A Day Inside an Album"
-        default: "Permanent Rotation"
-        }
-    }
-
-    private static func artistEraTitle(for target: Double) -> String {
-        switch target {
-        case ...5: "Fan in the Making"
-        case ...10: "Inner Circle"
-        case ...25: "Full Artist Era"
-        case ...50: "Discography Dweller"
-        default: "Forever Fan"
-        }
-    }
+    private static func artistDiscoveryTitle(for _: Double) -> String { "Artists Listened To" }
+    private static func songDiscoveryTitle(for _: Double) -> String { "Songs Listened To" }
+    private static func listeningTitle(for _: Double) -> String { "Listening Time" }
+    private static func songBondTitle(for _: Double) -> String { "Top Song Listening Time" }
+    private static func albumHomeTitle(for _: Double) -> String { "Top Album Listening Time" }
+    private static func artistEraTitle(for _: Double) -> String { "Top Artist Listening Time" }
 }
 
 final class WeeklyRecapInsightStore: @unchecked Sendable {
