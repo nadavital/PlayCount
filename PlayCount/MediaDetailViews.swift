@@ -1253,7 +1253,7 @@ private struct MediaDetailMilestonesSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            MilestoneGlassContainer {
+            MilestoneShelf {
                 HStack(alignment: .top, spacing: 18) {
                     ForEach(milestones) { milestone in
                         MilestoneBadgeTile(milestone: milestone, badgeSize: 78)

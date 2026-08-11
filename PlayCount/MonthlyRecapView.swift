@@ -2761,7 +2761,7 @@ private struct RecapMilestonesSection: View {
                     .font(.title3.weight(.semibold))
             }
 
-            MilestoneGlassContainer {
+            MilestoneShelf {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(featuredMilestones) { milestone in
                         MilestoneBadgeTile(milestone: milestone, badgeSize: 76)
@@ -2807,14 +2807,6 @@ struct MilestoneBadge: View {
     let milestone: RecapMilestone
     let size: CGFloat
 
-    private var progress: CGFloat {
-        CGFloat(milestone.progress)
-    }
-
-    private var gradient: AngularGradient {
-        AngularGradient(colors: colors + [colors[0]], center: .center)
-    }
-
     private var colors: [Color] {
         switch milestone.kind {
         case .artistDiscovery, .artistPlays: [.pink, .purple, .orange]
@@ -2828,84 +2820,132 @@ struct MilestoneBadge: View {
     }
 
     var body: some View {
+        MilestoneVinylSeal(
+            milestone: milestone,
+            size: size,
+            colors: colors
+        )
+    }
+}
+
+private struct MilestoneVinylSeal: View {
+    let milestone: RecapMilestone
+    let size: CGFloat
+    let colors: [Color]
+
+    private var progress: CGFloat {
+        CGFloat(milestone.progress)
+    }
+
+    var body: some View {
         ZStack {
             Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [.white.opacity(0.13), .white.opacity(0.025)],
-                        center: .topLeading,
-                        startRadius: 1,
-                        endRadius: size * 0.68
-                    )
-                )
-
-            Circle()
-                .stroke(gradient.opacity(0.65), lineWidth: 1.5)
+                .stroke(.white.opacity(0.14), lineWidth: size * 0.028)
+                .frame(width: size * 0.93, height: size * 0.93)
 
             Circle()
                 .trim(from: 0, to: progress)
-                .stroke(gradient, style: StrokeStyle(lineWidth: 4.5, lineCap: .round))
+                .stroke(
+                    AngularGradient(colors: colors + [colors[0]], center: .center),
+                    style: StrokeStyle(lineWidth: size * 0.036, lineCap: .round)
+                )
                 .rotationEffect(.degrees(-90))
-                .padding(4)
+                .frame(width: size * 0.93, height: size * 0.93)
 
             Circle()
-                .stroke(.white.opacity(0.18), lineWidth: 0.8)
-                .padding(11)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.2, green: 0.21, blue: 0.25),
+                            Color(red: 0.035, green: 0.04, blue: 0.055)
+                        ],
+                        center: .topLeading,
+                        startRadius: 0,
+                        endRadius: size * 0.48
+                    )
+                )
+                .frame(width: size * 0.74, height: size * 0.74)
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.8)
+                }
 
-            Capsule()
-                .fill(.white.opacity(0.24))
-                .frame(width: size * 0.31, height: 2)
-                .blur(radius: 0.4)
-                .offset(y: -size * 0.31)
-
-            VStack(spacing: 1) {
-                Text(milestone.targetLabel)
-                    .font(.system(size: size * 0.25, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .minimumScaleFactor(0.62)
-                    .lineLimit(1)
-                Image(systemName: milestone.systemImage)
-                    .font(.system(size: size * 0.14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            ForEach(0..<4, id: \.self) { groove in
+                Circle()
+                    .stroke(.white.opacity(0.13), lineWidth: 0.65)
+                    .frame(
+                        width: size * (0.68 - CGFloat(groove) * 0.09),
+                        height: size * (0.68 - CGFloat(groove) * 0.09)
+                    )
             }
-            .padding(size * 0.2)
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [colors[0], colors[1].opacity(0.88)],
+                        center: .topLeading,
+                        startRadius: 0,
+                        endRadius: size * 0.28
+                    )
+                )
+                .frame(width: size * 0.43, height: size * 0.43)
+                .overlay {
+                    Circle()
+                        .strokeBorder(
+                            AngularGradient(
+                                colors: [
+                                    Color(red: 0.76, green: 0.16, blue: 0.32),
+                                    Color(red: 0.38, green: 0.77, blue: 0.98),
+                                    Color(red: 0.76, green: 0.16, blue: 0.32)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 2
+                        )
+                }
+
+            VStack(spacing: 0) {
+                Image(systemName: "music.note")
+                    .font(.system(size: size * 0.105, weight: .bold))
+
+                Text(milestone.targetLabel)
+                    .font(.system(size: size * 0.18, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.58)
+                    .lineLimit(1)
+
+                Image(systemName: milestone.systemImage)
+                    .font(.system(size: size * 0.07, weight: .bold))
+                    .symbolRenderingMode(.monochrome)
+                    .opacity(0.82)
+            }
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.42), radius: 1, y: 1)
+            .padding(size * 0.3)
         }
         .frame(width: size, height: size)
-        .modifier(MilestoneGlassBadgeSurface(tint: colors[0]))
-        .shadow(color: colors[0].opacity(0.22), radius: 10, y: 5)
         .accessibilityHidden(true)
     }
 }
 
-struct MilestoneGlassContainer<Content: View>: View {
+struct MilestoneShelf<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
-                content
-            }
-        } else {
-            content
-        }
-    }
-}
-
-private struct MilestoneGlassBadgeSurface: ViewModifier {
-    let tint: Color
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular.tint(tint.opacity(0.13)), in: .circle)
-        } else {
-            content
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay {
-                    Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.8)
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background {
+                if #available(iOS 26.0, *) {
+                    Color.clear
+                        .glassEffect(
+                            .regular.tint(.white.opacity(0.025)),
+                            in: .rect(cornerRadius: 24)
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(.ultraThinMaterial)
                 }
-        }
+            }
     }
 }
 
@@ -2921,28 +2961,26 @@ private struct RecapMilestonesGallery: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                MilestoneGlassContainer {
-                    LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
-                        ForEach(milestones) { milestone in
-                            VStack(spacing: 9) {
-                                MilestoneBadge(milestone: milestone, size: 92)
+                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
+                    ForEach(milestones) { milestone in
+                        VStack(spacing: 9) {
+                            MilestoneBadge(milestone: milestone, size: 92)
 
-                                Text(milestone.title)
-                                    .font(.caption.weight(.bold))
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
+                            Text(milestone.title)
+                                .font(.caption.weight(.bold))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
 
-                                Text(milestone.compactValueLabel)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .top)
-                            .accessibilityElement(children: .combine)
-                            .accessibilityLabel("\(milestone.title), \(milestone.valueLabel). \(milestone.statusLabel)")
+                            Text(milestone.compactValueLabel)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
                         }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(milestone.title), \(milestone.valueLabel). \(milestone.statusLabel)")
                     }
                 }
                 .padding(.horizontal, 18)
