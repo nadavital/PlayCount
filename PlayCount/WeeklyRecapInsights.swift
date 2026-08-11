@@ -81,6 +81,7 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
     let targetValue: Double
     let unit: String
     let earnedTarget: Double?
+    let stage: Int
 
     var id: String { kind.rawValue }
 
@@ -192,7 +193,8 @@ enum MediaMilestoneEngine {
                 currentValue: Double(playCount),
                 targetValue: playProgress.target,
                 unit: "plays",
-                earnedTarget: playProgress.earned
+                earnedTarget: playProgress.earned,
+                stage: playProgress.stage
             ),
             RecapMilestone(
                 kind: timeKind,
@@ -202,15 +204,18 @@ enum MediaMilestoneEngine {
                 currentValue: listeningHours,
                 targetValue: timeProgress.target,
                 unit: "hours",
-                earnedTarget: timeProgress.earned
+                earnedTarget: timeProgress.earned,
+                stage: timeProgress.stage
             )
         ]
     }
 
-    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?) {
-        (
-            thresholds.first { value < $0 } ?? thresholds.last ?? max(value, 1),
-            thresholds.last { value >= $0 }
+    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?, stage: Int) {
+        let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
+        return (
+            thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1),
+            thresholds.last { value >= $0 },
+            targetIndex
         )
     }
 
@@ -290,7 +295,8 @@ enum RecapMilestoneEngine {
                 currentValue: Double(artistCount),
                 targetValue: artistProgress.target,
                 unit: "artists",
-                earnedTarget: artistProgress.earned
+                earnedTarget: artistProgress.earned,
+                stage: artistProgress.stage
             )
         )
 
@@ -307,7 +313,8 @@ enum RecapMilestoneEngine {
                 currentValue: Double(recap.playedSongCount),
                 targetValue: songProgress.target,
                 unit: "songs",
-                earnedTarget: songProgress.earned
+                earnedTarget: songProgress.earned,
+                stage: songProgress.stage
             )
         )
 
@@ -325,7 +332,8 @@ enum RecapMilestoneEngine {
                 currentValue: listeningHours,
                 targetValue: listeningProgress.target,
                 unit: "hours",
-                earnedTarget: listeningProgress.earned
+                earnedTarget: listeningProgress.earned,
+                stage: listeningProgress.stage
             )
         )
 
@@ -341,7 +349,8 @@ enum RecapMilestoneEngine {
                     currentValue: hours,
                     targetValue: songProgress.target,
                     unit: "hours",
-                    earnedTarget: songProgress.earned
+                    earnedTarget: songProgress.earned,
+                    stage: songProgress.stage
                 )
             )
         }
@@ -358,7 +367,8 @@ enum RecapMilestoneEngine {
                     currentValue: hours,
                     targetValue: albumProgress.target,
                     unit: "hours",
-                    earnedTarget: albumProgress.earned
+                    earnedTarget: albumProgress.earned,
+                    stage: albumProgress.stage
                 )
             )
         }
@@ -375,7 +385,8 @@ enum RecapMilestoneEngine {
                     currentValue: hours,
                     targetValue: artistProgress.target,
                     unit: "hours",
-                    earnedTarget: artistProgress.earned
+                    earnedTarget: artistProgress.earned,
+                    stage: artistProgress.stage
                 )
             )
         }
@@ -383,10 +394,11 @@ enum RecapMilestoneEngine {
         return milestones
     }
 
-    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?) {
+    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?, stage: Int) {
         let earned = thresholds.last { value >= $0 }
-        let target = thresholds.first { value < $0 } ?? thresholds.last ?? max(value, 1)
-        return (target, earned)
+        let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
+        let target = thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1)
+        return (target, earned, targetIndex)
     }
 
     private static func artistDiscoveryTitle(for target: Double) -> String {

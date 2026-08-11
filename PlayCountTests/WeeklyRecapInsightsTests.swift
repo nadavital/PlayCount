@@ -137,6 +137,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(milestones[0].title, "World Tour")
         XCTAssertEqual(milestones[0].valueLabel, "263 of 500 artists")
         XCTAssertEqual(milestones[0].earnedTarget, 250)
+        XCTAssertEqual(milestones[0].stage, 5)
         XCTAssertEqual(milestones[1].title, "Deep Catalog")
         XCTAssertEqual(milestones[1].targetValue, 250)
         XCTAssertEqual(milestones[2].title, "Permanent Headphones")
@@ -155,8 +156,10 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(song.map(\.kind), [.songPlays, .songListeningTime])
         XCTAssertEqual(song[0].title, "Heavy Rotation")
         XCTAssertEqual(song[0].compactValueLabel, "63 / 100 plays")
+        XCTAssertEqual(song[0].stage, 3)
         XCTAssertEqual(song[1].title, "Permanent Favorite")
         XCTAssertEqual(song[1].compactValueLabel, "24 / 48 hours")
+        XCTAssertEqual(song[1].stage, 5)
 
         let album = MediaMilestoneEngine.album(
             playCount: 520,
@@ -174,6 +177,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         )
         XCTAssertEqual(artist.map(\.kind), [.artistPlays, .artistListeningTime])
         XCTAssertEqual(artist[0].targetValue, 5_000)
+        XCTAssertEqual(artist[0].stage, 6)
         XCTAssertEqual(artist[1].targetValue, 500)
     }
 
