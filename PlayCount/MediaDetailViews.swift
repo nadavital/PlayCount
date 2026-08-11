@@ -1253,13 +1253,15 @@ private struct MediaDetailMilestonesSection: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(alignment: .top, spacing: 18) {
-                ForEach(milestones) { milestone in
-                    MilestoneBadgeTile(milestone: milestone, badgeSize: 88)
-                        .frame(width: 148)
+            MilestoneGlassContainer {
+                HStack(alignment: .top, spacing: 18) {
+                    ForEach(milestones) { milestone in
+                        MilestoneBadgeTile(milestone: milestone, badgeSize: 78)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
             .frame(maxWidth: 440)
             .frame(maxWidth: .infinity, alignment: .center)
         }
