@@ -2827,7 +2827,7 @@ private struct GlassMilestoneMedal: View {
 
     var body: some View {
         ZStack {
-            badgeFace
+            medal
                 .saturation(isLocked ? 0 : 1)
                 .opacity(isLocked ? 0.46 : 1)
                 .blur(radius: isLocked ? 0.8 : 0)
@@ -2845,34 +2845,44 @@ private struct GlassMilestoneMedal: View {
                     .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: size, height: size * 1.25, alignment: .bottom)
         .accessibilityHidden(true)
     }
 
-    private var badgeFace: some View {
-        ZStack {
-            MilestoneAnimatedAura(tier: tier, size: size, isAnimated: !isLocked)
-                .frame(width: size * 0.62, height: size * 0.62)
-                .opacity(0.84)
+    private var medal: some View {
+        ZStack(alignment: .bottom) {
+            MilestoneBands(tier: tier, size: size)
+                .offset(y: -size * 0.5)
 
-            glassLens
+            ZStack {
+                if !isLocked {
+                    MilestoneAnimatedAura(tier: tier, size: size)
+                        .frame(width: size * 0.62, height: size * 0.62)
+                        .opacity(0.84)
+                }
 
-            Image(systemName: systemImage)
-                .font(.system(size: size * 0.3, weight: .semibold))
-                .symbolRenderingMode(.monochrome)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                glassLens(hasAnimatedBackground: !isLocked)
+
+                Image(systemName: systemImage)
+                    .font(.system(size: size * 0.3, weight: .semibold))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+            }
+            .frame(width: size, height: size)
         }
         .shadow(color: tier.glassTint.opacity(0.18), radius: size * 0.1, y: size * 0.04)
     }
 
     @ViewBuilder
-    private var glassLens: some View {
+    private func glassLens(hasAnimatedBackground: Bool) -> some View {
         if #available(iOS 26.0, *) {
             Color.clear
                 .frame(width: size, height: size)
                 .glassEffect(
-                    .regular.tint(tier.glassTint.opacity(0.12)),
+                    hasAnimatedBackground
+                        ? .regular
+                        : .regular.tint(tier.glassTint.opacity(0.18)),
                     in: .circle
                 )
         } else {
@@ -2886,10 +2896,93 @@ private struct GlassMilestoneMedal: View {
     }
 }
 
+private struct MilestoneBands: View {
+    let tier: MilestoneMedalTier
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            MedalBandShape(edge: .leading)
+                .fill(tier.bandBaseColor)
+
+            MedalBandShape(edge: .trailing)
+                .fill(tier.bandBaseColor)
+
+            ForEach(Array(tier.bandStripeRanges.enumerated()), id: \.offset) { _, stripeRange in
+                MedalBandStripeShape(edge: .leading, stripeRange: stripeRange)
+                    .fill(tier.bandStripeColor)
+
+                MedalBandStripeShape(edge: .trailing, stripeRange: stripeRange)
+                    .fill(tier.bandStripeColor)
+            }
+        }
+        .frame(width: size * 1.06, height: size * 0.75)
+    }
+}
+
+private struct MedalBandShape: Shape {
+    enum Edge {
+        case leading
+        case trailing
+    }
+
+    let edge: Edge
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let leadingPoints = [
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.minX + rect.width * 0.38, y: rect.minY),
+            CGPoint(x: rect.minX + rect.width * 0.66, y: rect.maxY),
+            CGPoint(x: rect.minX + rect.width * 0.34, y: rect.maxY),
+        ]
+        let points = edge == .leading
+            ? leadingPoints
+            : leadingPoints.map { CGPoint(x: rect.maxX - ($0.x - rect.minX), y: $0.y) }
+
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct MedalBandStripeShape: Shape {
+    let edge: MedalBandShape.Edge
+    let stripeRange: ClosedRange<CGFloat>
+
+    func path(in rect: CGRect) -> Path {
+        let topLeading = rect.minX + rect.width * (0.38 * stripeRange.lowerBound)
+        let topTrailing = rect.minX + rect.width * (0.38 * stripeRange.upperBound)
+        let bottomLeading = rect.minX + rect.width * (0.34 + 0.32 * stripeRange.lowerBound)
+        let bottomTrailing = rect.minX + rect.width * (0.34 + 0.32 * stripeRange.upperBound)
+        let leadingPoints = [
+            CGPoint(x: topLeading, y: rect.minY),
+            CGPoint(x: topTrailing, y: rect.minY),
+            CGPoint(x: bottomTrailing, y: rect.maxY),
+            CGPoint(x: bottomLeading, y: rect.maxY),
+        ]
+        let points = edge == .leading
+            ? leadingPoints
+            : leadingPoints.map { CGPoint(x: rect.maxX - ($0.x - rect.minX), y: $0.y) }
+
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct MilestoneAnimatedAura: View {
     let tier: MilestoneMedalTier
     let size: CGFloat
-    let isAnimated: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
@@ -2897,12 +2990,11 @@ private struct MilestoneAnimatedAura: View {
         aura(expanded: expanded)
             .onAppear(perform: updateAnimation)
             .onChange(of: reduceMotion) { updateAnimation() }
-            .onChange(of: isAnimated) { updateAnimation() }
             .onDisappear(perform: stopAnimation)
     }
 
     private func updateAnimation() {
-        guard isAnimated, !reduceMotion else {
+        guard !reduceMotion else {
             stopAnimation()
             return
         }
@@ -3004,6 +3096,39 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         case .roseGold: [.purple, .pink, .orange, .purple]
         case .platinum: [.indigo, .cyan, .mint, .indigo]
         case .legend: [.purple, .blue, .pink, .purple]
+        }
+    }
+
+    var bandBaseColor: Color {
+        switch self {
+        case .bronze: .brown
+        case .silver: .indigo
+        case .gold: .red
+        case .roseGold: .purple
+        case .platinum: .indigo
+        case .legend: .purple
+        }
+    }
+
+    var bandStripeColor: Color {
+        switch self {
+        case .bronze: .orange
+        case .silver: .cyan
+        case .gold: .yellow
+        case .roseGold: .pink
+        case .platinum: .mint
+        case .legend: .cyan
+        }
+    }
+
+    var bandStripeRanges: [ClosedRange<CGFloat>] {
+        switch self {
+        case .bronze: [0.42...0.58]
+        case .silver: [0.2...0.32, 0.68...0.8]
+        case .gold: [0.34...0.66]
+        case .roseGold: [0.18...0.3, 0.44...0.56, 0.7...0.82]
+        case .platinum: [0.16...0.28, 0.36...0.64, 0.72...0.84]
+        case .legend: [0.06...0.16, 0.3...0.4, 0.6...0.7, 0.84...0.94]
         }
     }
 
