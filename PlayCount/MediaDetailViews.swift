@@ -199,6 +199,14 @@ struct SongInfoView: View {
                 SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
 
+                MediaDetailMilestonesSection(
+                    milestones: MediaMilestoneEngine.song(
+                        playCount: song.playCount,
+                        listeningDuration: song.totalPlayDuration,
+                        title: song.title
+                    )
+                )
+
                 if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
                     MonthlyDetailSongSection(
                         title: resolvedRecapContext?.songSectionTitle ?? "This Month",
@@ -317,6 +325,14 @@ struct AlbumInfoView: View {
             LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                 AlbumDetailHeader(album: resolvedAlbum, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
+
+                MediaDetailMilestonesSection(
+                    milestones: MediaMilestoneEngine.album(
+                        playCount: resolvedAlbum.playCount,
+                        listeningDuration: resolvedAlbum.totalPlayDuration,
+                        title: resolvedAlbum.title
+                    )
+                )
 
                 if let resolvedRecapContext, !monthlySongs.isEmpty {
                     MonthlyDetailSongsSection(
@@ -458,6 +474,14 @@ struct ArtistInfoView: View {
                 LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                     ArtistDetailHeader(artist: resolvedArtist, manager: manager)
                         .frame(maxWidth: .infinity)
+
+                    MediaDetailMilestonesSection(
+                        milestones: MediaMilestoneEngine.artist(
+                            playCount: resolvedArtist.playCount,
+                            listeningDuration: resolvedArtist.totalPlayDuration,
+                            name: resolvedArtist.name
+                        )
+                    )
 
                     if let resolvedRecapContext, !monthlySongs.isEmpty {
                         MonthlyDetailSongsSection(
@@ -1212,6 +1236,36 @@ private struct MediaDetailListeningMetrics: View {
             value: duration.formattedListenTime,
             subtitle: listenTimeRank.map { "Ranked #\($0)" }
         )
+    }
+}
+
+private struct MediaDetailMilestonesSection: View {
+    let milestones: [RecapMilestone]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Milestones")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Text("All Time")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            MilestoneGlassContainer {
+                HStack(alignment: .top, spacing: 18) {
+                    ForEach(milestones) { milestone in
+                        MilestoneBadgeTile(milestone: milestone, badgeSize: 78)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxWidth: 440)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 

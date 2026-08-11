@@ -146,6 +146,37 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(milestones[5].kind, .artistEra)
     }
 
+    func testDetailMilestonesUseAllTimePlaysAndListeningDuration() {
+        let song = MediaMilestoneEngine.song(
+            playCount: 63,
+            listeningDuration: 24 * 3_600,
+            title: "Glass Rain"
+        )
+        XCTAssertEqual(song.map(\.kind), [.songPlays, .songListeningTime])
+        XCTAssertEqual(song[0].title, "Heavy Rotation")
+        XCTAssertEqual(song[0].compactValueLabel, "63 / 100 plays")
+        XCTAssertEqual(song[1].title, "Permanent Favorite")
+        XCTAssertEqual(song[1].compactValueLabel, "24 / 48 hours")
+
+        let album = MediaMilestoneEngine.album(
+            playCount: 520,
+            listeningDuration: 50 * 3_600,
+            title: "Afterimages"
+        )
+        XCTAssertEqual(album.map(\.kind), [.albumPlays, .albumListeningTime])
+        XCTAssertEqual(album[0].targetValue, 1_000)
+        XCTAssertEqual(album[1].targetValue, 100)
+
+        let artist = MediaMilestoneEngine.artist(
+            playCount: 2_600,
+            listeningDuration: 251 * 3_600,
+            name: "Nova Lane"
+        )
+        XCTAssertEqual(artist.map(\.kind), [.artistPlays, .artistListeningTime])
+        XCTAssertEqual(artist[0].targetValue, 5_000)
+        XCTAssertEqual(artist[1].targetValue, 500)
+    }
+
     private func recap(
         year: Int = 2026,
         month: Int,

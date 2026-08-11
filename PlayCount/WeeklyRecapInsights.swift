@@ -65,6 +65,12 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
         case songBond
         case albumHome
         case artistEra
+        case songPlays
+        case songListeningTime
+        case albumPlays
+        case albumListeningTime
+        case artistPlays
+        case artistListeningTime
     }
 
     let kind: Kind
@@ -93,7 +99,8 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
     }
 
     var compactValueLabel: String {
-        "\(formatted(currentValue)) / \(formatted(targetValue)) \(unit)"
+        let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
+        return "\(formatted(currentValue)) / \(formatted(targetValue)) \(displayedUnit)"
     }
 
     var statusLabel: String {
@@ -111,6 +118,157 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
             return Int(value).formatted()
         }
         return value.formatted(.number.precision(.fractionLength(1)))
+    }
+}
+
+enum MediaMilestoneEngine {
+    static func song(playCount: Int, listeningDuration: TimeInterval, title: String) -> [RecapMilestone] {
+        milestones(
+            playKind: .songPlays,
+            timeKind: .songListeningTime,
+            playCount: playCount,
+            listeningDuration: listeningDuration,
+            detail: "With \(title)",
+            playThresholds: [10, 25, 50, 100, 250, 500, 1_000, 2_500],
+            timeThresholds: [1, 3, 6, 12, 24, 48, 100, 250],
+            playImage: "repeat",
+            playTitle: songPlayTitle,
+            timeTitle: songTimeTitle
+        )
+    }
+
+    static func album(playCount: Int, listeningDuration: TimeInterval, title: String) -> [RecapMilestone] {
+        milestones(
+            playKind: .albumPlays,
+            timeKind: .albumListeningTime,
+            playCount: playCount,
+            listeningDuration: listeningDuration,
+            detail: "Inside \(title)",
+            playThresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000],
+            timeThresholds: [2, 5, 10, 24, 50, 100, 250, 500],
+            playImage: "rectangle.stack.fill",
+            playTitle: albumPlayTitle,
+            timeTitle: albumTimeTitle
+        )
+    }
+
+    static func artist(playCount: Int, listeningDuration: TimeInterval, name: String) -> [RecapMilestone] {
+        milestones(
+            playKind: .artistPlays,
+            timeKind: .artistListeningTime,
+            playCount: playCount,
+            listeningDuration: listeningDuration,
+            detail: "With \(name)",
+            playThresholds: [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
+            timeThresholds: [5, 10, 25, 50, 100, 250, 500, 1_000],
+            playImage: "star.circle.fill",
+            playTitle: artistPlayTitle,
+            timeTitle: artistTimeTitle
+        )
+    }
+
+    private static func milestones(
+        playKind: RecapMilestone.Kind,
+        timeKind: RecapMilestone.Kind,
+        playCount: Int,
+        listeningDuration: TimeInterval,
+        detail: String,
+        playThresholds: [Double],
+        timeThresholds: [Double],
+        playImage: String,
+        playTitle: (Double) -> String,
+        timeTitle: (Double) -> String
+    ) -> [RecapMilestone] {
+        let playProgress = progress(value: Double(playCount), thresholds: playThresholds)
+        let listeningHours = listeningDuration / 3_600
+        let timeProgress = progress(value: listeningHours, thresholds: timeThresholds)
+
+        return [
+            RecapMilestone(
+                kind: playKind,
+                title: playTitle(playProgress.target),
+                detail: detail,
+                systemImage: playImage,
+                currentValue: Double(playCount),
+                targetValue: playProgress.target,
+                unit: "plays",
+                earnedTarget: playProgress.earned
+            ),
+            RecapMilestone(
+                kind: timeKind,
+                title: timeTitle(timeProgress.target),
+                detail: detail,
+                systemImage: "clock.fill",
+                currentValue: listeningHours,
+                targetValue: timeProgress.target,
+                unit: "hours",
+                earnedTarget: timeProgress.earned
+            )
+        ]
+    }
+
+    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?) {
+        (
+            thresholds.first { value < $0 } ?? thresholds.last ?? max(value, 1),
+            thresholds.last { value >= $0 }
+        )
+    }
+
+    private static func songPlayTitle(for target: Double) -> String {
+        switch target {
+        case ...10: "First Loop"
+        case ...50: "On Repeat"
+        case ...250: "Heavy Rotation"
+        case ...1_000: "Personal Classic"
+        default: "Forever Track"
+        }
+    }
+
+    private static func songTimeTitle(for target: Double) -> String {
+        switch target {
+        case ...3: "Extended Listen"
+        case ...12: "Soundtrack Moment"
+        case ...24: "All-Day Anthem"
+        case ...100: "Permanent Favorite"
+        default: "A Life With One Song"
+        }
+    }
+
+    private static func albumPlayTitle(for target: Double) -> String {
+        switch target {
+        case ...25: "First Spins"
+        case ...100: "Front to Back"
+        case ...500: "Album Resident"
+        case ...2_500: "Permanent Rotation"
+        default: "Desert Island Record"
+        }
+    }
+
+    private static func albumTimeTitle(for target: Double) -> String {
+        switch target {
+        case ...5: "Liner Notes Level"
+        case ...24: "A Day in This Album"
+        case ...100: "Deep Album Era"
+        default: "Second Home"
+        }
+    }
+
+    private static func artistPlayTitle(for target: Double) -> String {
+        switch target {
+        case ...100: "Fan in the Making"
+        case ...500: "Inner Circle"
+        case ...2_500: "Full Artist Era"
+        default: "Forever Fan"
+        }
+    }
+
+    private static func artistTimeTitle(for target: Double) -> String {
+        switch target {
+        case ...10: "Getting Acquainted"
+        case ...50: "Discography Dweller"
+        case ...250: "Superfan Hours"
+        default: "Lifetime Artist"
+        }
     }
 }
 

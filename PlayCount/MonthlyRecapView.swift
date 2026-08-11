@@ -2761,13 +2761,14 @@ private struct RecapMilestonesSection: View {
                     .font(.title3.weight(.semibold))
             }
 
-            RecapSurface {
+            MilestoneGlassContainer {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(featuredMilestones) { milestone in
-                        RecapMilestoneBadgeTile(milestone: milestone, badgeSize: 72)
+                        MilestoneBadgeTile(milestone: milestone, badgeSize: 76)
                             .frame(maxWidth: .infinity)
                     }
                 }
+                .padding(.vertical, 4)
             }
         }
         .sheet(isPresented: $isShowingAllMilestones) {
@@ -2776,13 +2777,13 @@ private struct RecapMilestonesSection: View {
     }
 }
 
-private struct RecapMilestoneBadgeTile: View {
+struct MilestoneBadgeTile: View {
     let milestone: RecapMilestone
     let badgeSize: CGFloat
 
     var body: some View {
         VStack(spacing: 7) {
-            RecapMilestoneBadge(milestone: milestone, size: badgeSize)
+            MilestoneBadge(milestone: milestone, size: badgeSize)
 
             Text(milestone.title)
                 .font(.caption.weight(.bold))
@@ -2802,7 +2803,7 @@ private struct RecapMilestoneBadgeTile: View {
     }
 }
 
-private struct RecapMilestoneBadge: View {
+struct MilestoneBadge: View {
     let milestone: RecapMilestone
     let size: CGFloat
 
@@ -2816,31 +2817,46 @@ private struct RecapMilestoneBadge: View {
 
     private var colors: [Color] {
         switch milestone.kind {
-        case .artistDiscovery: [.pink, .purple, .orange]
-        case .songDiscovery: [.cyan, .indigo, .purple]
+        case .artistDiscovery, .artistPlays: [.pink, .purple, .orange]
+        case .songDiscovery, .songPlays: [.cyan, .indigo, .purple]
         case .listeningTime: [.orange, .pink, .red]
-        case .songBond: [.mint, .teal, .cyan]
-        case .albumHome: [.purple, .pink, .orange]
-        case .artistEra: [.yellow, .orange, .pink]
+        case .songBond, .songListeningTime: [.mint, .teal, .cyan]
+        case .albumHome, .albumPlays: [.purple, .pink, .orange]
+        case .artistEra, .artistListeningTime: [.yellow, .orange, .pink]
+        case .albumListeningTime: [.indigo, .purple, .pink]
         }
     }
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(.thinMaterial)
+                .fill(
+                    RadialGradient(
+                        colors: [.white.opacity(0.13), .white.opacity(0.025)],
+                        center: .topLeading,
+                        startRadius: 1,
+                        endRadius: size * 0.68
+                    )
+                )
 
             Circle()
-                .stroke(.primary.opacity(0.09), lineWidth: 5)
+                .stroke(gradient.opacity(0.65), lineWidth: 1.5)
 
             Circle()
                 .trim(from: 0, to: progress)
-                .stroke(gradient, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .stroke(gradient, style: StrokeStyle(lineWidth: 4.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
+                .padding(4)
 
             Circle()
-                .stroke(.white.opacity(0.12), lineWidth: 1)
-                .padding(8)
+                .stroke(.white.opacity(0.18), lineWidth: 0.8)
+                .padding(11)
+
+            Capsule()
+                .fill(.white.opacity(0.24))
+                .frame(width: size * 0.31, height: 2)
+                .blur(radius: 0.4)
+                .offset(y: -size * 0.31)
 
             VStack(spacing: 1) {
                 Text(milestone.targetLabel)
@@ -2855,8 +2871,41 @@ private struct RecapMilestoneBadge: View {
             .padding(size * 0.2)
         }
         .frame(width: size, height: size)
-        .shadow(color: colors[0].opacity(0.2), radius: 8, y: 4)
+        .modifier(MilestoneGlassBadgeSurface(tint: colors[0]))
+        .shadow(color: colors[0].opacity(0.22), radius: 10, y: 5)
         .accessibilityHidden(true)
+    }
+}
+
+struct MilestoneGlassContainer<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct MilestoneGlassBadgeSurface: ViewModifier {
+    let tint: Color
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular.tint(tint.opacity(0.13)), in: .circle)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay {
+                    Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.8)
+                }
+        }
     }
 }
 
@@ -2872,26 +2921,28 @@ private struct RecapMilestonesGallery: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
-                    ForEach(milestones) { milestone in
-                        VStack(spacing: 9) {
-                            RecapMilestoneBadge(milestone: milestone, size: 88)
+                MilestoneGlassContainer {
+                    LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
+                        ForEach(milestones) { milestone in
+                            VStack(spacing: 9) {
+                                MilestoneBadge(milestone: milestone, size: 92)
 
-                            Text(milestone.title)
-                                .font(.caption.weight(.bold))
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
+                                Text(milestone.title)
+                                    .font(.caption.weight(.bold))
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
 
-                            Text(milestone.compactValueLabel)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
+                                Text(milestone.compactValueLabel)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .top)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("\(milestone.title), \(milestone.valueLabel). \(milestone.statusLabel)")
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("\(milestone.title), \(milestone.valueLabel). \(milestone.statusLabel)")
                     }
                 }
                 .padding(.horizontal, 18)
