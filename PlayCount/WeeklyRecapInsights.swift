@@ -219,7 +219,16 @@ private enum MilestoneSeriesBuilder {
 
     private static func stage(index: Int, count: Int) -> Int {
         guard count > 1 else { return 0 }
-        return Int((Double(index) * 5 / Double(count - 1)).rounded())
+
+        // Every threshold in a collection must be visually distinct. Reserve
+        // the final three stages for the increasingly elaborate Rose Gold,
+        // Platinum, and Legend medals, regardless of collection length.
+        let specialStageCount = min(3, count)
+        let firstSpecialIndex = count - specialStageCount
+        if index >= firstSpecialIndex {
+            return 9 - specialStageCount + (index - firstSpecialIndex)
+        }
+        return index
     }
 }
 

@@ -3198,9 +3198,12 @@ private enum MilestonePreview {
 }
 
 private enum MilestoneMedalTier: Int, CaseIterable {
+    case copper
     case bronze
     case silver
     case gold
+    case emerald
+    case sapphire
     case roseGold
     case platinum
     case legend
@@ -3211,9 +3214,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var name: String {
         switch self {
+        case .copper: "Copper"
         case .bronze: "Bronze"
         case .silver: "Silver"
         case .gold: "Gold"
+        case .emerald: "Emerald"
+        case .sapphire: "Sapphire"
         case .roseGold: "Rose Gold"
         case .platinum: "Platinum"
         case .legend: "Legend"
@@ -3222,9 +3228,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var glassTint: Color {
         switch self {
+        case .copper: .red
         case .bronze: .orange
         case .silver: .cyan
         case .gold: .yellow
+        case .emerald: .green
+        case .sapphire: .blue
         case .roseGold: .pink
         case .platinum: .mint
         case .legend: .purple
@@ -3233,9 +3242,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var auraColors: [Color] {
         switch self {
+        case .copper: [.brown, .red, .orange, .brown]
         case .bronze: [.red, .orange, .pink, .red]
         case .silver: [.blue, .cyan, .white, .blue]
         case .gold: [.orange, .yellow, .pink, .orange]
+        case .emerald: [.green, .mint, .cyan, .green]
+        case .sapphire: [.indigo, .blue, .cyan, .indigo]
         case .roseGold: [.purple, .pink, .orange, .purple]
         case .platinum: [.indigo, .cyan, .mint, .indigo]
         case .legend: [.purple, .blue, .pink, .purple]
@@ -3244,14 +3256,14 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var usesAnimatedBackground: Bool {
         switch self {
-        case .bronze, .silver: false
-        case .gold, .roseGold, .platinum, .legend: true
+        case .copper, .bronze, .silver, .gold, .emerald, .sapphire: false
+        case .roseGold, .platinum, .legend: true
         }
     }
 
     var depthLayerCount: Int {
         switch self {
-        case .bronze, .silver, .gold: 0
+        case .copper, .bronze, .silver, .gold, .emerald, .sapphire: 0
         case .roseGold: 1
         case .platinum: 1
         case .legend: 2
@@ -3260,9 +3272,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var bandBaseColor: Color {
         switch self {
+        case .copper: .brown
         case .bronze: .brown
         case .silver: .indigo
         case .gold: .red
+        case .emerald: .green
+        case .sapphire: .blue
         case .roseGold: .purple
         case .platinum: .indigo
         case .legend: .purple
@@ -3271,9 +3286,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var bandStripeColor: Color {
         switch self {
+        case .copper: .red
         case .bronze: .orange
         case .silver: .cyan
         case .gold: .yellow
+        case .emerald: .mint
+        case .sapphire: .cyan
         case .roseGold: .pink
         case .platinum: .mint
         case .legend: .cyan
@@ -3282,9 +3300,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
 
     var bandStripeRanges: [ClosedRange<CGFloat>] {
         switch self {
+        case .copper: [0.46...0.54]
         case .bronze: [0.42...0.58]
         case .silver: [0.2...0.32, 0.68...0.8]
         case .gold: [0.34...0.66]
+        case .emerald: [0.16...0.26, 0.46...0.54, 0.74...0.84]
+        case .sapphire: [0.1...0.2, 0.32...0.42, 0.58...0.68, 0.8...0.9]
         case .roseGold: [0.18...0.3, 0.44...0.56, 0.7...0.82]
         case .platinum: [0.16...0.28, 0.36...0.64, 0.72...0.84]
         case .legend: [0.06...0.16, 0.3...0.4, 0.6...0.7, 0.84...0.94]

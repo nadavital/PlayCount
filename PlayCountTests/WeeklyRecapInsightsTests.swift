@@ -143,6 +143,8 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             "250 Artists", "500 Artists", "1,000 Artists"
         ])
         XCTAssertEqual(artistMilestones.filter(\.isEarned).map(\.targetValue), [10, 25, 50, 100, 250])
+        XCTAssertEqual(Set(artistMilestones.map(\.stage)).count, artistMilestones.count)
+        XCTAssertEqual(artistMilestones.suffix(3).map(\.stage), [6, 7, 8])
         XCTAssertFalse(artistMilestones[5].isEarned)
         XCTAssertEqual(artistMilestones[5].compactValueLabel, "263 of 500 artists")
         XCTAssertEqual(visibleMilestones.filter { $0.kind == .artistDiscovery }.count, 6)
@@ -158,6 +160,8 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         let songGroups = MilestoneCollectionPresentation.groups(from: song)
         XCTAssertEqual(songGroups.count, 2)
         XCTAssertEqual(song.count, 16)
+        XCTAssertEqual(Set(songGroups[0].map(\.stage)).count, songGroups[0].count)
+        XCTAssertEqual(songGroups[0].suffix(3).map(\.stage), [6, 7, 8])
         XCTAssertEqual(songGroups[0].filter(\.isEarned).map(\.title), ["10 Plays", "25 Plays", "50 Plays"])
         XCTAssertEqual(songGroups[0].first { !$0.isEarned }?.title, "100 Plays")
         XCTAssertEqual(songGroups[1].filter(\.isEarned).last?.title, "24 Hours")
@@ -204,6 +208,32 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(plays100?.compactValueLabel, "50 of 100 plays")
         XCTAssertTrue(hours3?.isEarned == true)
         XCTAssertFalse(hours6?.isEarned == true)
+    }
+
+    func testEveryMilestonePathUsesUniqueVisualTiersAndEndsWithSpecialThree() {
+        let recap = recap(
+            month: 8,
+            plays: 1,
+            songPlays: 1,
+            playedSongCount: 1,
+            artistCount: 1,
+            songHours: 1,
+            albumHours: 1,
+            artistHours: 1
+        )
+        let recapGroups = MilestoneCollectionPresentation.groups(
+            from: RecapMilestoneEngine.milestones(for: recap, periodName: "2026")
+        )
+        let detailGroups = [
+            MediaMilestoneEngine.song(playCount: 1, listeningDuration: 0, title: "Song"),
+            MediaMilestoneEngine.album(playCount: 1, listeningDuration: 0, title: "Album"),
+            MediaMilestoneEngine.artist(playCount: 1, listeningDuration: 0, name: "Artist")
+        ].flatMap { MilestoneCollectionPresentation.groups(from: $0) }
+
+        for group in recapGroups + detailGroups {
+            XCTAssertEqual(Set(group.map(\.stage)).count, group.count)
+            XCTAssertEqual(group.suffix(3).map(\.stage), [6, 7, 8])
+        }
     }
 
     private func recap(
