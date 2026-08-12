@@ -322,8 +322,7 @@ private struct PhoneLibraryView: View {
         if #available(iOS 27.0, *) {
             picker
                 .pickerStyle(.tabs)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
         } else {
             picker
                 .pickerStyle(.segmented)
