@@ -285,14 +285,9 @@ private struct PhoneLibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Library category", selection: $selection) {
-                ForEach(Category.allCases) { category in
-                    Text(category.rawValue).tag(category)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            categoryPicker
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
 
             Group {
                 switch selection {
@@ -318,6 +313,28 @@ private struct PhoneLibraryView: View {
                         manager: manager
                     )
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var categoryPicker: some View {
+        if #available(iOS 27.0, *) {
+            picker
+                .pickerStyle(.tabs)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            picker
+                .pickerStyle(.segmented)
+                .padding(.vertical, 6)
+        }
+    }
+
+    private var picker: some View {
+        Picker("Library category", selection: $selection) {
+            ForEach(Category.allCases) { category in
+                Text(category.rawValue).tag(category)
             }
         }
     }

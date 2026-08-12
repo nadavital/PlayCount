@@ -63,6 +63,7 @@ struct TopArtistsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .top)
         .refreshable {
             manager.refreshTopItems()
         }
