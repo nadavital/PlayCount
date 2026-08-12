@@ -3230,12 +3230,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         switch self {
         case .copper: .red
         case .bronze: .orange
-        case .silver: .cyan
+        case .silver: Color(red: 0.72, green: 0.74, blue: 0.78)
         case .gold: .yellow
         case .emerald: .green
-        case .sapphire: .blue
-        case .roseGold: .pink
-        case .platinum: .mint
+        case .sapphire: Color(red: 0.08, green: 0.27, blue: 0.78)
+        case .roseGold: Color(red: 0.86, green: 0.42, blue: 0.35)
+        case .platinum: Color(red: 0.82, green: 0.94, blue: 0.91)
         case .legend: .purple
         }
     }
@@ -3244,12 +3244,32 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         switch self {
         case .copper: [.brown, .red, .orange, .brown]
         case .bronze: [.red, .orange, .pink, .red]
-        case .silver: [.blue, .cyan, .white, .blue]
+        case .silver: [
+            Color(red: 0.42, green: 0.44, blue: 0.49),
+            Color(red: 0.88, green: 0.9, blue: 0.94),
+            .white,
+            Color(red: 0.42, green: 0.44, blue: 0.49)
+        ]
         case .gold: [.orange, .yellow, .pink, .orange]
         case .emerald: [.green, .mint, .cyan, .green]
-        case .sapphire: [.indigo, .blue, .cyan, .indigo]
-        case .roseGold: [.purple, .pink, .orange, .purple]
-        case .platinum: [.indigo, .cyan, .mint, .indigo]
+        case .sapphire: [
+            Color(red: 0.03, green: 0.08, blue: 0.34),
+            Color(red: 0.06, green: 0.25, blue: 0.86),
+            Color(red: 0.3, green: 0.55, blue: 1),
+            Color(red: 0.03, green: 0.08, blue: 0.34)
+        ]
+        case .roseGold: [
+            Color(red: 0.48, green: 0.16, blue: 0.13),
+            Color(red: 0.9, green: 0.45, blue: 0.37),
+            Color(red: 1, green: 0.72, blue: 0.57),
+            Color(red: 0.48, green: 0.16, blue: 0.13)
+        ]
+        case .platinum: [
+            Color(red: 0.42, green: 0.5, blue: 0.55),
+            Color(red: 0.86, green: 0.96, blue: 0.94),
+            .white,
+            Color(red: 0.42, green: 0.5, blue: 0.55)
+        ]
         case .legend: [.purple, .blue, .pink, .purple]
         }
     }
@@ -3274,12 +3294,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         switch self {
         case .copper: .brown
         case .bronze: .brown
-        case .silver: .indigo
+        case .silver: Color(red: 0.3, green: 0.31, blue: 0.35)
         case .gold: .red
         case .emerald: .green
-        case .sapphire: .blue
-        case .roseGold: .purple
-        case .platinum: .indigo
+        case .sapphire: Color(red: 0.02, green: 0.09, blue: 0.38)
+        case .roseGold: Color(red: 0.45, green: 0.14, blue: 0.12)
+        case .platinum: Color(red: 0.48, green: 0.54, blue: 0.58)
         case .legend: .purple
         }
     }
@@ -3288,12 +3308,12 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         switch self {
         case .copper: .red
         case .bronze: .orange
-        case .silver: .cyan
+        case .silver: Color(red: 0.9, green: 0.92, blue: 0.96)
         case .gold: .yellow
         case .emerald: .mint
-        case .sapphire: .cyan
-        case .roseGold: .pink
-        case .platinum: .mint
+        case .sapphire: Color(red: 0.28, green: 0.56, blue: 1)
+        case .roseGold: Color(red: 1, green: 0.62, blue: 0.48)
+        case .platinum: Color(red: 0.86, green: 0.97, blue: 0.94)
         case .legend: .cyan
         }
     }
