@@ -317,6 +317,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private lazy var musicPlayer = MPMusicPlayerController.systemMusicPlayer
     private let snapshotStore: MonthlyRecapSnapshotStore
     private let weeklyInsightStore: WeeklyRecapInsightStore
+    private let milestoneLedger: MediaMilestoneLedger
     private let presentationCache: LibraryPresentationCache
     private let recapCloudSyncService: RecapCloudSyncService?
     private var notificationObservers: [NSObjectProtocol] = []
@@ -362,6 +363,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private var albumListenTimeRanks: [UInt64: Int] = [:]
     private var artistPlayCountRanks: [UInt64: Int] = [:]
     private var artistListenTimeRanks: [UInt64: Int] = [:]
+    private var albumMilestoneAliasCounts: [String: Int] = [:]
+    private var artistMilestoneAliasCounts: [String: Int] = [:]
     private var activeDetailPresentationOwners: Set<UUID> = []
     private var deferredLibraryPresentation: DeferredLibraryPresentation?
     private var deferredSnapshotFlushGeneration = 0
@@ -370,6 +373,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         fetchLimit: Int = 0,
         snapshotStore: MonthlyRecapSnapshotStore = MonthlyRecapSnapshotStore(),
         weeklyInsightStore: WeeklyRecapInsightStore = WeeklyRecapInsightStore(),
+        milestoneLedger: MediaMilestoneLedger = MediaMilestoneLedger(),
         presentationCache: LibraryPresentationCache = .shared,
         recapCloudSyncService: RecapCloudSyncService? = MediaLibraryManager.defaultRecapCloudSyncService(),
         startsAutomatically: Bool = true
@@ -377,6 +381,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         self.fetchLimit = fetchLimit
         self.snapshotStore = snapshotStore
         self.weeklyInsightStore = weeklyInsightStore
+        self.milestoneLedger = milestoneLedger
         self.presentationCache = presentationCache
         self.recapCloudSyncService = recapCloudSyncService
 
@@ -585,10 +590,22 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let initialSortMetric = sortMetric
         let initialFetchLimit = fetchLimit
 
-        DispatchQueue.global(qos: .utility).async { [weak self, presentationCache, snapshotStore] in
+        DispatchQueue.global(qos: .utility).async { [weak self, presentationCache, snapshotStore, milestoneLedger] in
             guard let self else { return }
             let cached = presentationCache.load(maximumAge: self.maximumPresentationCacheAge)
             let cachedSnapshot = cached.map { Self.librarySnapshot(from: $0.songs) }
+            if let cachedSnapshot {
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    milestoneLedger.hydrateCache(
+                        songs: cachedSnapshot.songs,
+                        albums: cachedSnapshot.albums,
+                        artists: cachedSnapshot.artists
+                    )
+                    DispatchQueue.main.async {
+                        self?.detailPresentationUpdates.notify()
+                    }
+                }
+            }
             let preparedCachedSnapshot = cachedSnapshot.map {
                 Self.prepareLibrarySnapshot($0, sortMetric: initialSortMetric, fetchLimit: initialFetchLimit)
             }
@@ -690,7 +707,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let generation = operation.generation
         let token = operation.token
 
-        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore] in
+        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore, milestoneLedger] in
             let snapshot = Self.fetchLibrarySnapshot()
             let preparedSnapshot = Self.prepareLibrarySnapshot(
                 snapshot,
@@ -702,6 +719,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.snapshotMutationGeneration == generation
             }) else { return nil }
             let capturedAt = Date()
+            milestoneLedger.observe(
+                songs: snapshot.songs,
+                albums: snapshot.albums,
+                artists: snapshot.artists,
+                at: capturedAt,
+                shouldCommit: {
+                    token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                }
+            )
             let recap = snapshotStore.record(
                 songs: snapshot.songs,
                 albums: snapshot.albums,
@@ -1304,6 +1330,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             guard let self else { return }
 
             let snapshot = Self.fetchLibrarySnapshot()
+            if MPMediaLibrary.authorizationStatus() == .authorized {
+                self.milestoneLedger.observe(
+                    songs: snapshot.songs,
+                    albums: snapshot.albums,
+                    artists: snapshot.artists,
+                    shouldCommit: {
+                        token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
+                    }
+                )
+            }
             let preparedSnapshot = Self.prepareLibrarySnapshot(
                 snapshot,
                 sortMetric: refreshSortMetric,
@@ -1547,6 +1583,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         librarySongs = snapshot.songs
         libraryAlbums = snapshot.albums
         libraryArtists = snapshot.artists
+        albumMilestoneAliasCounts = snapshot.albums.reduce(into: [:]) {
+            $0[MediaMilestoneLedger.albumMetadataIdentity($1), default: 0] += 1
+        }
+        artistMilestoneAliasCounts = snapshot.artists.reduce(into: [:]) {
+            $0[MediaMilestoneLedger.artistMetadataIdentity($1), default: 0] += 1
+        }
         librarySummary = prepared.summary
         monthlyRecap = recap
         topSongs = prepared.topSongs
@@ -1575,6 +1617,85 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    func milestones(for song: TopSong) -> [RecapMilestone] {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return MediaMilestoneEngine.song(
+                playCount: song.playCount,
+                listeningDuration: song.totalPlayDuration,
+                title: song.title
+            )
+        }
+        #endif
+        let values = milestoneLedger.highestObserved(
+            scope: .song,
+            identities: MediaMilestoneLedger.songIdentities(song),
+            currentPlayCount: song.playCount,
+            currentListeningDuration: song.totalPlayDuration
+        )
+        return MediaMilestoneEngine.song(
+            playCount: values.playCount,
+            listeningDuration: values.listeningDuration,
+            title: song.title
+        )
+    }
+
+    func milestones(for album: TopAlbum) -> [RecapMilestone] {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return MediaMilestoneEngine.album(
+                playCount: album.playCount,
+                listeningDuration: album.totalPlayDuration,
+                title: album.title
+            )
+        }
+        #endif
+        let values = milestoneLedger.highestObserved(
+            scope: .album,
+            identities: MediaMilestoneLedger.albumIdentities(
+                album,
+                includesMetadataAlias: albumMilestoneAliasCounts[
+                    MediaMilestoneLedger.albumMetadataIdentity(album)
+                ] == 1
+            ),
+            currentPlayCount: album.playCount,
+            currentListeningDuration: album.totalPlayDuration
+        )
+        return MediaMilestoneEngine.album(
+            playCount: values.playCount,
+            listeningDuration: values.listeningDuration,
+            title: album.title
+        )
+    }
+
+    func milestones(for artist: TopArtist) -> [RecapMilestone] {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            return MediaMilestoneEngine.artist(
+                playCount: artist.playCount,
+                listeningDuration: artist.totalPlayDuration,
+                name: artist.name
+            )
+        }
+        #endif
+        let values = milestoneLedger.highestObserved(
+            scope: .artist,
+            identities: MediaMilestoneLedger.artistIdentities(
+                artist,
+                includesMetadataAlias: artistMilestoneAliasCounts[
+                    MediaMilestoneLedger.artistMetadataIdentity(artist)
+                ] == 1
+            ),
+            currentPlayCount: artist.playCount,
+            currentListeningDuration: artist.totalPlayDuration
+        )
+        return MediaMilestoneEngine.artist(
+            playCount: values.playCount,
+            listeningDuration: values.listeningDuration,
+            name: artist.name
+        )
     }
 
     private func applyOrDeferPreparedLibrarySnapshot(

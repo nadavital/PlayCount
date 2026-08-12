@@ -236,6 +236,288 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         }
     }
 
+    func testMonthlyPresentationShowsOnlyThresholdsNewlyEarnedSincePreviousMonth() {
+        let previous = MediaMilestoneEngine.artist(
+            playCount: 90,
+            listeningDuration: 9 * 3_600,
+            name: "Nova Lane"
+        )
+        let current = MediaMilestoneEngine.artist(
+            playCount: 275,
+            listeningDuration: 26 * 3_600,
+            name: "Nova Lane"
+        )
+
+        let unlocked = MilestoneCollectionPresentation.newlyEarned(
+            current: current,
+            previous: previous
+        )
+
+        XCTAssertEqual(unlocked.filter { $0.kind == .artistPlays }.map(\.title), ["100 Plays", "250 Plays"])
+        XCTAssertEqual(unlocked.filter { $0.kind == .artistListeningTime }.map(\.title), ["10 Hours", "25 Hours"])
+        XCTAssertTrue(unlocked.allSatisfy(\.isEarned))
+    }
+
+    func testDetailProgressSummariesUseHighestEarnedMedalAndNextThreshold() {
+        let milestones = MediaMilestoneEngine.song(
+            playCount: 63,
+            listeningDuration: 24 * 3_600,
+            title: "Glass Rain"
+        )
+        let summaries = MilestoneCollectionPresentation.progressSummary(from: milestones)
+
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(summaries[0].highestEarned?.title, "50 Plays")
+        XCTAssertEqual(summaries[0].featured.title, "50 Plays")
+        XCTAssertEqual(summaries[0].next?.title, "100 Plays")
+        XCTAssertEqual(summaries[1].highestEarned?.title, "24 Hours")
+        XCTAssertEqual(summaries[1].next?.title, "48 Hours")
+    }
+
+    func testMediaMilestoneLedgerPreservesHighestValuesAcrossCountRegression() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("milestones.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let ledger = MediaMilestoneLedger(fileURL: fileURL)
+        ledger.observe(
+            scope: .song,
+            identity: "store:123",
+            playCount: 320,
+            listeningDuration: 86_400,
+            at: Date(timeIntervalSince1970: 10)
+        )
+        ledger.observe(
+            scope: .song,
+            identity: "store:123",
+            playCount: 12,
+            listeningDuration: 3_600,
+            at: Date(timeIntervalSince1970: 20)
+        )
+
+        let values = ledger.highestObserved(
+            scope: .song,
+            identity: "store:123",
+            currentPlayCount: 18,
+            currentListeningDuration: 7_200
+        )
+        XCTAssertEqual(values.playCount, 320)
+        XCTAssertEqual(values.listeningDuration, 86_400)
+
+        let restoredLedger = MediaMilestoneLedger(fileURL: fileURL)
+        restoredLedger.hydrateCache()
+        let restoredValues = restoredLedger.highestObserved(
+            scope: .song,
+            identity: "store:123",
+            currentPlayCount: 18,
+            currentListeningDuration: 7_200
+        )
+        XCTAssertEqual(restoredValues.playCount, 320)
+        XCTAssertEqual(restoredValues.listeningDuration, 86_400)
+    }
+
+    func testSongMilestoneIdentitySeparatesRecordingsButSurvivesLibraryReaddition() {
+        func song(id: UInt64, album: String, storeID: String = "") -> TopSong {
+            TopSong(
+                id: id,
+                title: "Echoes",
+                artist: "Nova Lane",
+                albumTitle: album,
+                albumArtist: "Nova Lane",
+                playCount: 1,
+                skipCount: 0,
+                totalPlayDuration: 180,
+                playbackDuration: 180,
+                lastPlayedDate: nil,
+                dateAdded: nil,
+                artwork: nil,
+                albumPersistentID: 0,
+                artistPersistentID: 0,
+                trackNumber: 1,
+                playbackStoreID: storeID
+            )
+        }
+
+        let studio = song(id: 1, album: "Echoes")
+        let live = song(id: 2, album: "Echoes Live")
+        XCTAssertNotEqual(MediaMilestoneLedger.songIdentity(studio), MediaMilestoneLedger.songIdentity(live))
+
+        let beforeDeletion = song(id: 3, album: "Echoes", storeID: "12345")
+        let afterReaddition = song(id: 99, album: "Echoes (Deluxe)", storeID: "12345")
+        XCTAssertEqual(
+            MediaMilestoneLedger.songIdentity(beforeDeletion),
+            MediaMilestoneLedger.songIdentity(afterReaddition)
+        )
+
+        let firstAlbum = TopAlbum(
+            id: 10,
+            title: "Greatest Hits",
+            artist: "Nova Lane",
+            playCount: 1,
+            totalPlayDuration: 180,
+            artwork: nil,
+            artistPersistentID: 20
+        )
+        let secondAlbum = TopAlbum(
+            id: 11,
+            title: "Greatest Hits",
+            artist: "Nova Lane",
+            playCount: 1,
+            totalPlayDuration: 180,
+            artwork: nil,
+            artistPersistentID: 20
+        )
+        XCTAssertNotEqual(
+            MediaMilestoneLedger.albumIdentity(firstAlbum),
+            MediaMilestoneLedger.albumIdentity(secondAlbum)
+        )
+        XCTAssertTrue(
+            Set(MediaMilestoneLedger.albumIdentities(firstAlbum, includesMetadataAlias: false))
+                .isDisjoint(with: MediaMilestoneLedger.albumIdentities(secondAlbum, includesMetadataAlias: false))
+        )
+
+        let firstArtist = TopArtist(
+            id: 20,
+            name: "Nova",
+            playCount: 1,
+            totalPlayDuration: 180,
+            artwork: nil
+        )
+        let secondArtist = TopArtist(
+            id: 21,
+            name: "Nova",
+            playCount: 1,
+            totalPlayDuration: 180,
+            artwork: nil
+        )
+        XCTAssertNotEqual(
+            MediaMilestoneLedger.artistIdentity(firstArtist),
+            MediaMilestoneLedger.artistIdentity(secondArtist)
+        )
+        XCTAssertTrue(
+            Set(MediaMilestoneLedger.artistIdentities(firstArtist, includesMetadataAlias: false))
+                .isDisjoint(with: MediaMilestoneLedger.artistIdentities(secondArtist, includesMetadataAlias: false))
+        )
+    }
+
+    func testAmbiguousAlbumAliasesDoNotShareMilestoneValues() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("milestones.sqlite")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = TopAlbum(
+            id: 10, title: "Greatest Hits", artist: "Nova Lane", playCount: 500,
+            totalPlayDuration: 50_000, artwork: nil, artistPersistentID: 20
+        )
+        let second = TopAlbum(
+            id: 11, title: "Greatest Hits", artist: "Nova Lane", playCount: 12,
+            totalPlayDuration: 1_000, artwork: nil, artistPersistentID: 20
+        )
+        let ledger = MediaMilestoneLedger(fileURL: fileURL)
+        ledger.observe(songs: [], albums: [first, second], artists: [])
+
+        let secondValues = ledger.highestObserved(
+            scope: .album,
+            identities: MediaMilestoneLedger.albumIdentities(second, includesMetadataAlias: false),
+            currentPlayCount: second.playCount,
+            currentListeningDuration: second.totalPlayDuration
+        )
+        XCTAssertEqual(secondValues.playCount, 12)
+        XCTAssertEqual(secondValues.listeningDuration, 1_000)
+    }
+
+    func testReaddedAlbumMigratesAliasMaximumBeforeAliasBecomesAmbiguous() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("milestones.sqlite")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func album(id: UInt64, plays: Int) -> TopAlbum {
+            TopAlbum(
+                id: id, title: "Greatest Hits", artist: "Nova Lane", playCount: plays,
+                totalPlayDuration: TimeInterval(plays * 180), artwork: nil, artistPersistentID: 20
+            )
+        }
+        let ledger = MediaMilestoneLedger(fileURL: fileURL)
+        let original = album(id: 10, plays: 500)
+        ledger.observe(songs: [], albums: [original], artists: [])
+        let aliasOnly = ledger.highestObserved(
+            scope: .album,
+            identities: [MediaMilestoneLedger.albumMetadataIdentity(original)],
+            currentPlayCount: 0,
+            currentListeningDuration: 0
+        )
+        XCTAssertEqual(aliasOnly.playCount, 500)
+
+        let readded = album(id: 11, plays: 12)
+        ledger.observe(songs: [], albums: [readded], artists: [])
+        let bridgedValues = ledger.highestObserved(
+            scope: .album,
+            identities: MediaMilestoneLedger.albumIdentities(readded),
+            currentPlayCount: readded.playCount,
+            currentListeningDuration: readded.totalPlayDuration
+        )
+        XCTAssertEqual(bridgedValues.playCount, 500)
+
+        let sibling = album(id: 12, plays: 4)
+        ledger.observe(songs: [], albums: [readded, sibling], artists: [])
+        let readdedValues = ledger.highestObserved(
+            scope: .album,
+            identities: MediaMilestoneLedger.albumIdentities(readded, includesMetadataAlias: false),
+            currentPlayCount: readded.playCount,
+            currentListeningDuration: readded.totalPlayDuration
+        )
+        let siblingValues = ledger.highestObserved(
+            scope: .album,
+            identities: MediaMilestoneLedger.albumIdentities(sibling, includesMetadataAlias: false),
+            currentPlayCount: sibling.playCount,
+            currentListeningDuration: sibling.totalPlayDuration
+        )
+        XCTAssertEqual(readdedValues.playCount, 500)
+        XCTAssertEqual(siblingValues.playCount, 4)
+    }
+
+    func testMilestoneLedgerRollsBackWhenCommitBecomesInvalid() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent("milestones.sqlite")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ledger = MediaMilestoneLedger(fileURL: fileURL)
+        let song = TopSong(
+            id: 1,
+            title: "Echoes",
+            artist: "Nova Lane",
+            albumTitle: "Echoes",
+            albumArtist: "Nova Lane",
+            playCount: 320,
+            skipCount: 0,
+            totalPlayDuration: 86_400,
+            playbackDuration: 180,
+            lastPlayedDate: nil,
+            dateAdded: nil,
+            artwork: nil,
+            albumPersistentID: 10,
+            artistPersistentID: 20,
+            trackNumber: 1,
+            playbackStoreID: "12345"
+        )
+        let predicateCalls = LockedTestCounter()
+        ledger.observe(songs: [song], albums: [], artists: []) {
+            predicateCalls.increment() == 1
+        }
+
+        let restored = MediaMilestoneLedger(fileURL: fileURL)
+        restored.hydrateCache()
+        let values = restored.highestObserved(
+            scope: .song,
+            identity: MediaMilestoneLedger.songIdentity(song),
+            currentPlayCount: 0,
+            currentListeningDuration: 0
+        )
+        XCTAssertEqual(values.playCount, 0)
+        XCTAssertEqual(values.listeningDuration, 0)
+    }
+
     private func recap(
         year: Int = 2026,
         month: Int,
@@ -313,5 +595,17 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+}
+
+private final class LockedTestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() -> Int {
+        lock.withLock {
+            value += 1
+            return value
+        }
     }
 }

@@ -566,10 +566,12 @@ struct MonthlyRecapView: View {
                             )
                         }
 
-                        if !recapMilestones.isEmpty {
+                        if !displayedRecapMilestones.isEmpty {
                             RecapMilestonesSection(
-                                milestones: recapMilestones,
-                                periodLabel: milestonePeriodLabel
+                                displayedMilestones: displayedRecapMilestones,
+                                allMilestones: recapMilestones,
+                                periodLabel: milestonePeriodLabel,
+                                showsFullCollection: isShowingYearAggregate
                             )
                         }
 
@@ -1097,6 +1099,30 @@ struct MonthlyRecapView: View {
         )
     }
 
+    private var displayedRecapMilestones: [RecapMilestone] {
+        guard !isShowingYearAggregate else { return recapMilestones }
+        return MilestoneCollectionPresentation.newlyEarned(
+            current: recapMilestones,
+            previous: previousMonthMilestones
+        )
+    }
+
+    private var previousMonthMilestones: [RecapMilestone] {
+        let calendar = Calendar.current
+        guard let previousMonth = calendar.date(
+            byAdding: .month,
+            value: -1,
+            to: selectedMonthStartOrCurrent
+        ), calendar.component(.year, from: previousMonth) == selectedRecapYear else {
+            return []
+        }
+        let previousRecap = manager.yearToDateRecap(through: previousMonth)
+        return RecapMilestoneEngine.milestones(
+            for: previousRecap,
+            periodName: String(selectedRecapYear) + " through " + previousMonth.formatted(.dateTime.month(.wide))
+        )
+    }
+
     private var milestoneRecap: MonthlyRecap {
         if isShowingYearAggregate {
             return recap
@@ -1116,8 +1142,7 @@ struct MonthlyRecapView: View {
         if isShowingYearAggregate {
             return String(selectedRecapYear)
         }
-        let month = selectedMonthStartOrCurrent.formatted(.dateTime.month(.abbreviated))
-        return String(selectedRecapYear) + " through " + month
+        return "Unlocked in " + selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
     }
 
     private var weeklyTopSongArtwork: MPMediaItemArtwork? {
@@ -2759,16 +2784,22 @@ private struct RecapWeeklyHistoryChart: View {
 }
 
 private struct RecapMilestonesSection: View {
-    let milestones: [RecapMilestone]
+    let displayedMilestones: [RecapMilestone]
+    let allMilestones: [RecapMilestone]
     let periodLabel: String
+    let showsFullCollection: Bool
     @State private var isShowingAllMilestones = false
 
     private var visibleMilestones: [RecapMilestone] {
-        MilestoneCollectionPresentation.visibleMilestones(from: milestones)
+        showsFullCollection
+            ? MilestoneCollectionPresentation.visibleMilestones(from: displayedMilestones)
+            : displayedMilestones
     }
 
     private var featuredMilestones: [RecapMilestone] {
-        MilestoneCollectionPresentation.featuredMilestones(from: milestones, limit: 3)
+        showsFullCollection
+            ? MilestoneCollectionPresentation.featuredMilestones(from: displayedMilestones, limit: 3)
+            : displayedMilestones
     }
 
     var body: some View {
@@ -2784,7 +2815,7 @@ private struct RecapMilestonesSection: View {
                 }
                 Spacer()
 
-                if visibleMilestones.count > featuredMilestones.count {
+                if showsFullCollection && visibleMilestones.count > featuredMilestones.count {
                     Button {
                         isShowingAllMilestones = true
                     } label: {
@@ -2801,21 +2832,25 @@ private struct RecapMilestonesSection: View {
             }
 
             MilestoneShelf {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(featuredMilestones) { milestone in
-                        MilestoneBadgeTile(
-                            milestone: milestone,
-                            badgeSize: 76,
-                            series: milestones.filter { $0.kind == milestone.kind }
-                        )
-                            .frame(maxWidth: .infinity)
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(featuredMilestones) { milestone in
+                            MilestoneBadgeTile(
+                                milestone: milestone,
+                                badgeSize: 76,
+                                series: allMilestones.filter { $0.kind == milestone.kind }
+                            )
+                            .frame(width: 108)
+                        }
                     }
+                    .padding(.horizontal, 4)
                 }
+                .scrollIndicators(.hidden)
                 .padding(.vertical, 4)
             }
         }
         .sheet(isPresented: $isShowingAllMilestones) {
-            RecapMilestonesGallery(milestones: milestones)
+            RecapMilestonesGallery(milestones: allMilestones)
         }
     }
 }
@@ -3356,7 +3391,7 @@ struct MilestoneShelf<Content: View>: View {
     }
 }
 
-private struct MilestonePathSheet: View {
+struct MilestonePathSheet: View {
     let selected: RecapMilestone
     let milestones: [RecapMilestone]
     @Environment(\.dismiss) private var dismiss

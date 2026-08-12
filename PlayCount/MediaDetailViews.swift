@@ -200,11 +200,7 @@ struct SongInfoView: View {
                     .frame(maxWidth: .infinity)
 
                 MediaDetailMilestonesSection(
-                    milestones: MediaMilestoneEngine.song(
-                        playCount: song.playCount,
-                        listeningDuration: song.totalPlayDuration,
-                        title: song.title
-                    )
+                    milestones: manager.milestones(for: song)
                 )
 
                 if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
@@ -327,11 +323,7 @@ struct AlbumInfoView: View {
                     .frame(maxWidth: .infinity)
 
                 MediaDetailMilestonesSection(
-                    milestones: MediaMilestoneEngine.album(
-                        playCount: resolvedAlbum.playCount,
-                        listeningDuration: resolvedAlbum.totalPlayDuration,
-                        title: resolvedAlbum.title
-                    )
+                    milestones: manager.milestones(for: resolvedAlbum)
                 )
 
                 if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -476,11 +468,7 @@ struct ArtistInfoView: View {
                         .frame(maxWidth: .infinity)
 
                     MediaDetailMilestonesSection(
-                        milestones: MediaMilestoneEngine.artist(
-                            playCount: resolvedArtist.playCount,
-                            listeningDuration: resolvedArtist.totalPlayDuration,
-                            name: resolvedArtist.name
-                        )
+                        milestones: manager.milestones(for: resolvedArtist)
                     )
 
                     if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -1242,8 +1230,8 @@ private struct MediaDetailListeningMetrics: View {
 private struct MediaDetailMilestonesSection: View {
     let milestones: [RecapMilestone]
 
-    private var visibleMilestones: [RecapMilestone] {
-        MilestoneCollectionPresentation.visibleMilestones(from: milestones)
+    private var summaries: [MilestoneProgressSummary] {
+        MilestoneCollectionPresentation.progressSummary(from: milestones)
     }
 
     var body: some View {
@@ -1258,26 +1246,74 @@ private struct MediaDetailMilestonesSection: View {
             }
 
             MilestoneShelf {
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 18) {
-                        ForEach(visibleMilestones) { milestone in
-                            MilestoneBadgeTile(
-                                milestone: milestone,
-                                badgeSize: 78,
-                                series: milestones.filter { $0.kind == milestone.kind }
-                            )
-                            .frame(width: 112)
-                        }
+                VStack(spacing: 10) {
+                    ForEach(summaries) { summary in
+                        MediaMilestoneProgressCard(summary: summary)
                     }
-                    .padding(.horizontal, 4)
                 }
-                .scrollIndicators(.hidden)
                 .padding(.vertical, 4)
             }
             .frame(maxWidth: 440)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct MediaMilestoneProgressCard: View {
+    let summary: MilestoneProgressSummary
+    @State private var isShowingPath = false
+
+    var body: some View {
+        Button {
+            isShowingPath = true
+        } label: {
+            HStack(spacing: 14) {
+                MilestoneBadge(milestone: summary.featured, size: 62)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(summary.kind.collectionTitle)
+                        .font(.headline)
+                    Text(summary.featured.currentValueLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+
+                    if let next = summary.next {
+                        ProgressView(
+                            value: min(next.currentValue, next.targetValue),
+                            total: next.targetValue
+                        )
+                        Text("Next: \(next.title)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("Collection complete", systemImage: "checkmark.seal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Shows every milestone in this path")
+        .sheet(isPresented: $isShowingPath) {
+            MilestonePathSheet(selected: summary.featured, milestones: summary.series)
+        }
+    }
+
+    private var accessibilityLabel: String {
+        let earned = summary.highestEarned.map { "Highest earned: \($0.title)." } ?? "No milestone earned yet."
+        let next = summary.next.map { "Next: \($0.title), \($0.compactValueLabel)." } ?? "Collection complete."
+        return "\(summary.kind.collectionTitle). \(earned) \(next)"
     }
 }
 
