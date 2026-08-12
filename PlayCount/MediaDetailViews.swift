@@ -1242,6 +1242,10 @@ private struct MediaDetailListeningMetrics: View {
 private struct MediaDetailMilestonesSection: View {
     let milestones: [RecapMilestone]
 
+    private var visibleMilestones: [RecapMilestone] {
+        MilestoneCollectionPresentation.visibleMilestones(from: milestones)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -1254,12 +1258,20 @@ private struct MediaDetailMilestonesSection: View {
             }
 
             MilestoneShelf {
-                HStack(alignment: .top, spacing: 18) {
-                    ForEach(milestones) { milestone in
-                        MilestoneBadgeTile(milestone: milestone, badgeSize: 78)
-                            .frame(maxWidth: .infinity)
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 18) {
+                        ForEach(visibleMilestones) { milestone in
+                            MilestoneBadgeTile(
+                                milestone: milestone,
+                                badgeSize: 78,
+                                series: milestones.filter { $0.kind == milestone.kind }
+                            )
+                            .frame(width: 112)
+                        }
                     }
+                    .padding(.horizontal, 4)
                 }
+                .scrollIndicators(.hidden)
                 .padding(.vertical, 4)
             }
             .frame(maxWidth: 440)

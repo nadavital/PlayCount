@@ -2763,8 +2763,12 @@ private struct RecapMilestonesSection: View {
     let periodLabel: String
     @State private var isShowingAllMilestones = false
 
-    private var featuredMilestones: ArraySlice<RecapMilestone> {
-        milestones.prefix(3)
+    private var visibleMilestones: [RecapMilestone] {
+        MilestoneCollectionPresentation.visibleMilestones(from: milestones)
+    }
+
+    private var featuredMilestones: [RecapMilestone] {
+        MilestoneCollectionPresentation.featuredMilestones(from: milestones, limit: 3)
     }
 
     var body: some View {
@@ -2780,7 +2784,7 @@ private struct RecapMilestonesSection: View {
                 }
                 Spacer()
 
-                if milestones.count > featuredMilestones.count {
+                if visibleMilestones.count > featuredMilestones.count {
                     Button {
                         isShowingAllMilestones = true
                     } label: {
@@ -2799,7 +2803,11 @@ private struct RecapMilestonesSection: View {
             MilestoneShelf {
                 HStack(alignment: .top, spacing: 10) {
                     ForEach(featuredMilestones) { milestone in
-                        MilestoneBadgeTile(milestone: milestone, badgeSize: 76)
+                        MilestoneBadgeTile(
+                            milestone: milestone,
+                            badgeSize: 76,
+                            series: milestones.filter { $0.kind == milestone.kind }
+                        )
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -2815,28 +2823,51 @@ private struct RecapMilestonesSection: View {
 struct MilestoneBadgeTile: View {
     let milestone: RecapMilestone
     let badgeSize: CGFloat
+    let series: [RecapMilestone]
+    @State private var isShowingPath = false
+
+    init(milestone: RecapMilestone, badgeSize: CGFloat, series: [RecapMilestone]? = nil) {
+        self.milestone = milestone
+        self.badgeSize = badgeSize
+        self.series = series ?? [milestone]
+    }
 
     var body: some View {
-        VStack(spacing: 5) {
-            MilestoneBadge(milestone: milestone, size: badgeSize)
+        Button {
+            isShowingPath = true
+        } label: {
+            VStack(spacing: 5) {
+                MilestoneBadge(milestone: milestone, size: badgeSize)
 
-            Text(milestone.title)
-                .font(.caption.weight(.bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                Text(milestone.title)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
 
-            Text(milestone.compactValueLabel)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                Text(milestone.compactValueLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(milestone.title), \(MilestoneMedalTier(stage: milestone.stage).name) medal, \(milestone.valueLabel). \(milestone.statusLabel)"
         )
+        .accessibilityHint("Shows this milestone path")
+        .sheet(isPresented: $isShowingPath) {
+            MilestonePathSheet(selected: milestone, milestones: series)
+        }
+        .onAppear {
+            if MilestonePreview.pathID == milestone.id {
+                isShowingPath = true
+            }
+        }
     }
 }
 
@@ -2933,9 +2964,11 @@ private struct GlassMilestoneMedal: View {
             Color.clear
                 .frame(width: size, height: size)
                 .glassEffect(
-                    hasAnimatedBackground
-                        ? .regular
-                        : .regular.tint(tier.glassTint.opacity(0.28)),
+                    isLocked
+                        ? .clear.tint(.gray.opacity(0.1))
+                        : hasAnimatedBackground
+                            ? .clear
+                            : .clear.tint(tier.glassTint.opacity(0.34)),
                     in: .circle
                 )
         } else {
@@ -3149,6 +3182,19 @@ private enum MilestonePreview {
         return nil
         #endif
     }
+
+    static var pathID: String? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "-PlayCountMilestonePreviewPath"),
+              arguments.indices.contains(flagIndex + 1) else {
+            return nil
+        }
+        return arguments[flagIndex + 1]
+        #else
+        return nil
+        #endif
+    }
 }
 
 private enum MilestoneMedalTier: Int, CaseIterable {
@@ -3269,6 +3315,118 @@ struct MilestoneShelf<Content: View>: View {
     }
 }
 
+private struct MilestonePathSheet: View {
+    let selected: RecapMilestone
+    let milestones: [RecapMilestone]
+    @Environment(\.dismiss) private var dismiss
+
+    private var orderedMilestones: [RecapMilestone] {
+        milestones.sorted { $0.targetValue < $1.targetValue }
+    }
+
+    private var nextMilestone: RecapMilestone? {
+        orderedMilestones.first { !$0.isEarned }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(selected.kind.collectionTitle)
+                            .font(.title2.bold())
+                        Text(selected.detail)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        if let nextMilestone {
+                            ProgressView(
+                                value: min(nextMilestone.currentValue, nextMilestone.targetValue),
+                                total: nextMilestone.targetValue
+                            )
+                            .tint(MilestoneMedalTier(stage: nextMilestone.stage).glassTint)
+                            Text("Next: \(nextMilestone.title) · \(nextMilestone.compactValueLabel)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        } else {
+                            Label("Collection complete", systemImage: "checkmark.seal.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.bottom, 4)
+
+                    ForEach(orderedMilestones) { milestone in
+                        MilestonePathRow(
+                            milestone: milestone,
+                            isNext: milestone.id == nextMilestone?.id
+                        )
+                    }
+                }
+                .padding(20)
+            }
+            .navigationTitle("Milestone Path")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+private struct MilestonePathRow: View {
+    let milestone: RecapMilestone
+    let isNext: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            MilestoneBadge(milestone: milestone, size: 58)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(milestone.title)
+                        .font(.headline)
+                    Spacer()
+                    if milestone.isEarned {
+                        Label("Earned", systemImage: "checkmark.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                            .foregroundStyle(.secondary)
+                    } else if isNext {
+                        Text("Next")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                if milestone.isEarned {
+                    Text("Unlocked")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView(
+                        value: min(milestone.currentValue, milestone.targetValue),
+                        total: milestone.targetValue
+                    )
+                    .tint(isNext ? MilestoneMedalTier(stage: milestone.stage).glassTint : .gray)
+                    Text(milestone.compactValueLabel)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct RecapMilestonesGallery: View {
     let milestones: [RecapMilestone]
     @Environment(\.dismiss) private var dismiss
@@ -3278,31 +3436,31 @@ private struct RecapMilestonesGallery: View {
         count: 3
     )
 
+    private var milestoneGroups: [[RecapMilestone]] {
+        MilestoneCollectionPresentation.groups(from: milestones)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
-                    ForEach(milestones) { milestone in
-                        VStack(spacing: 9) {
-                            MilestoneBadge(milestone: milestone, size: 92)
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    ForEach(Array(milestoneGroups.enumerated()), id: \.offset) { _, group in
+                        if let first = group.first {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(first.kind.collectionTitle)
+                                    .font(.title3.weight(.semibold))
 
-                            Text(milestone.title)
-                                .font(.caption.weight(.bold))
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-
-                            Text(milestone.compactValueLabel)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
+                                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
+                                    ForEach(MilestoneCollectionPresentation.visibleMilestones(from: group)) { milestone in
+                                        MilestoneBadgeTile(
+                                            milestone: milestone,
+                                            badgeSize: 92,
+                                            series: group
+                                        )
+                                    }
+                                }
+                            }
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel(
-                            "\(milestone.title), \(MilestoneMedalTier(stage: milestone.stage).name) medal, \(milestone.valueLabel). \(milestone.statusLabel)"
-                        )
                     }
                 }
                 .padding(.horizontal, 18)

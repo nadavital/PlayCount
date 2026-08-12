@@ -71,6 +71,23 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
         case albumListeningTime
         case artistPlays
         case artistListeningTime
+
+        var collectionTitle: String {
+            switch self {
+            case .artistDiscovery: "Artists"
+            case .songDiscovery: "Songs"
+            case .listeningTime: "Listening Time"
+            case .songBond: "Top Song"
+            case .albumHome: "Top Album"
+            case .artistEra: "Top Artist"
+            case .songPlays: "Song Plays"
+            case .songListeningTime: "Time With Song"
+            case .albumPlays: "Album Plays"
+            case .albumListeningTime: "Time With Album"
+            case .artistPlays: "Artist Plays"
+            case .artistListeningTime: "Time With Artist"
+            }
+        }
     }
 
     let kind: Kind
@@ -83,7 +100,7 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
     let earnedTarget: Double?
     let stage: Int
 
-    var id: String { kind.rawValue }
+    var id: String { "\(kind.rawValue)-\(targetValue)" }
 
     var progress: Double {
         guard targetValue > 0 else { return 0 }
@@ -96,6 +113,9 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
 
     var valueLabel: String {
         let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
+        if isEarned {
+            return "\(formatted(targetValue)) \(displayedUnit) earned"
+        }
         return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
     }
 
@@ -104,18 +124,15 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
     }
 
     var compactValueLabel: String {
+        if isEarned {
+            return "Earned"
+        }
         let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
         return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
     }
 
     var statusLabel: String {
-        if progress >= 1 {
-            return "Milestone unlocked"
-        }
-        if let earnedTarget {
-            return "\(formatted(earnedTarget)) reached · next \(formatted(targetValue))"
-        }
-        return "Next at \(formatted(targetValue))"
+        isEarned ? "Milestone unlocked" : "Milestone locked"
     }
 
     private func formatted(_ value: Double) -> String {
@@ -123,6 +140,86 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
             return Int(value).formatted()
         }
         return value.formatted(.number.precision(.fractionLength(1)))
+    }
+}
+
+enum MilestoneCollectionPresentation {
+    static func groups(from milestones: [RecapMilestone]) -> [[RecapMilestone]] {
+        var order: [RecapMilestone.Kind] = []
+        var grouped: [RecapMilestone.Kind: [RecapMilestone]] = [:]
+        for milestone in milestones {
+            if grouped[milestone.kind] == nil {
+                order.append(milestone.kind)
+            }
+            grouped[milestone.kind, default: []].append(milestone)
+        }
+        return order.compactMap { kind in
+            grouped[kind]?.sorted { $0.targetValue < $1.targetValue }
+        }
+    }
+
+    static func visibleMilestones(from milestones: [RecapMilestone]) -> [RecapMilestone] {
+        groups(from: milestones).flatMap { group in
+            let earned = group.filter(\.isEarned)
+            if let next = group.first(where: { !$0.isEarned }) {
+                return earned + [next]
+            }
+            return earned
+        }
+    }
+
+    static func featuredMilestones(from milestones: [RecapMilestone], limit: Int) -> [RecapMilestone] {
+        Array(
+            groups(from: milestones)
+                .compactMap { group in
+                    group.last(where: \.isEarned) ?? group.first
+                }
+                .prefix(limit)
+        )
+    }
+}
+
+private enum MilestoneSeriesBuilder {
+    static func milestones(
+        kind: RecapMilestone.Kind,
+        currentValue: Double,
+        thresholds: [Double],
+        unit: String,
+        detail: String,
+        systemImage: String
+    ) -> [RecapMilestone] {
+        thresholds.enumerated().map { index, target in
+            let earned = currentValue >= target
+            return RecapMilestone(
+                kind: kind,
+                title: thresholdTitle(target: target, unit: unit),
+                detail: detail,
+                systemImage: systemImage,
+                currentValue: currentValue,
+                targetValue: target,
+                unit: unit,
+                earnedTarget: earned ? target : nil,
+                stage: stage(index: index, count: thresholds.count)
+            )
+        }
+    }
+
+    private static func thresholdTitle(target: Double, unit: String) -> String {
+        let number = target.rounded() == target
+            ? Int(target).formatted()
+            : target.formatted(.number.precision(.fractionLength(1)))
+        let label: String
+        if target == 1, unit.hasSuffix("s") {
+            label = String(unit.dropLast()).capitalized
+        } else {
+            label = unit.capitalized
+        }
+        return "\(number) \(label)"
+    }
+
+    private static func stage(index: Int, count: Int) -> Int {
+        guard count > 1 else { return 0 }
+        return Int((Double(index) * 5 / Double(count - 1)).rounded())
     }
 }
 
@@ -136,9 +233,7 @@ enum MediaMilestoneEngine {
             detail: "With \(title)",
             playThresholds: [10, 25, 50, 100, 250, 500, 1_000, 2_500],
             timeThresholds: [1, 3, 6, 12, 24, 48, 100, 250],
-            playImage: "repeat",
-            playTitle: songPlayTitle,
-            timeTitle: songTimeTitle
+            playImage: "repeat"
         )
     }
 
@@ -151,9 +246,7 @@ enum MediaMilestoneEngine {
             detail: "Inside \(title)",
             playThresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000],
             timeThresholds: [2, 5, 10, 24, 50, 100, 250, 500],
-            playImage: "rectangle.stack.fill",
-            playTitle: albumPlayTitle,
-            timeTitle: albumTimeTitle
+            playImage: "rectangle.stack.fill"
         )
     }
 
@@ -166,9 +259,7 @@ enum MediaMilestoneEngine {
             detail: "With \(name)",
             playThresholds: [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
             timeThresholds: [5, 10, 25, 50, 100, 250, 500, 1_000],
-            playImage: "star.fill",
-            playTitle: artistPlayTitle,
-            timeTitle: artistTimeTitle
+            playImage: "star.fill"
         )
     }
 
@@ -180,56 +271,25 @@ enum MediaMilestoneEngine {
         detail: String,
         playThresholds: [Double],
         timeThresholds: [Double],
-        playImage: String,
-        playTitle: (Double) -> String,
-        timeTitle: (Double) -> String
+        playImage: String
     ) -> [RecapMilestone] {
-        let playProgress = progress(value: Double(playCount), thresholds: playThresholds)
         let listeningHours = listeningDuration / 3_600
-        let timeProgress = progress(value: listeningHours, thresholds: timeThresholds)
-
-        return [
-            RecapMilestone(
-                kind: playKind,
-                title: playTitle(playProgress.target),
-                detail: detail,
-                systemImage: playImage,
-                currentValue: Double(playCount),
-                targetValue: playProgress.target,
-                unit: "plays",
-                earnedTarget: playProgress.earned,
-                stage: playProgress.stage
-            ),
-            RecapMilestone(
-                kind: timeKind,
-                title: timeTitle(timeProgress.target),
-                detail: detail,
-                systemImage: "clock",
-                currentValue: listeningHours,
-                targetValue: timeProgress.target,
-                unit: "hours",
-                earnedTarget: timeProgress.earned,
-                stage: timeProgress.stage
-            )
-        ]
-    }
-
-    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?, stage: Int) {
-        let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
-        let earnedIndex = thresholds.lastIndex { value >= $0 }
-        return (
-            thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1),
-            thresholds.last { value >= $0 },
-            earnedIndex ?? 0
+        return MilestoneSeriesBuilder.milestones(
+            kind: playKind,
+            currentValue: Double(playCount),
+            thresholds: playThresholds,
+            unit: "plays",
+            detail: detail,
+            systemImage: playImage
+        ) + MilestoneSeriesBuilder.milestones(
+            kind: timeKind,
+            currentValue: listeningHours,
+            thresholds: timeThresholds,
+            unit: "hours",
+            detail: detail,
+            systemImage: "clock"
         )
     }
-
-    private static func songPlayTitle(for _: Double) -> String { "Song on Repeat" }
-    private static func songTimeTitle(for _: Double) -> String { "Song Devotion" }
-    private static func albumPlayTitle(for _: Double) -> String { "Album in Rotation" }
-    private static func albumTimeTitle(for _: Double) -> String { "Album Immersion" }
-    private static func artistPlayTitle(for _: Double) -> String { "Artist Favorite" }
-    private static func artistTimeTitle(for _: Double) -> String { "Artist Era" }
 }
 
 enum RecapMilestoneEngine {
@@ -237,132 +297,72 @@ enum RecapMilestoneEngine {
         var milestones: [RecapMilestone] = []
 
         let artistCount = recap.listenedArtistCount
-        let artistProgress = progress(
-            value: Double(artistCount),
-            thresholds: [10, 25, 50, 100, 250, 500, 1_000]
-        )
-        milestones.append(
-            RecapMilestone(
-                kind: .artistDiscovery,
-                title: artistDiscoveryTitle(for: artistProgress.target),
-                detail: "Artists listened to in \(periodName)",
-                systemImage: "person.2.wave.2.fill",
-                currentValue: Double(artistCount),
-                targetValue: artistProgress.target,
-                unit: "artists",
-                earnedTarget: artistProgress.earned,
-                stage: artistProgress.stage
-            )
+        milestones += MilestoneSeriesBuilder.milestones(
+            kind: .artistDiscovery,
+            currentValue: Double(artistCount),
+            thresholds: [10, 25, 50, 100, 250, 500, 1_000],
+            unit: "artists",
+            detail: "Artists listened to in \(periodName)",
+            systemImage: "person.2.wave.2.fill"
         )
 
-        let songProgress = progress(
-            value: Double(recap.playedSongCount),
-            thresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000]
-        )
-        milestones.append(
-            RecapMilestone(
-                kind: .songDiscovery,
-                title: songDiscoveryTitle(for: songProgress.target),
-                detail: "Songs listened to in \(periodName)",
-                systemImage: "music.note.list",
-                currentValue: Double(recap.playedSongCount),
-                targetValue: songProgress.target,
-                unit: "songs",
-                earnedTarget: songProgress.earned,
-                stage: songProgress.stage
-            )
+        milestones += MilestoneSeriesBuilder.milestones(
+            kind: .songDiscovery,
+            currentValue: Double(recap.playedSongCount),
+            thresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
+            unit: "songs",
+            detail: "Songs listened to in \(periodName)",
+            systemImage: "music.note.list"
         )
 
         let listeningHours = recap.totalListeningDuration / 3_600
-        let listeningProgress = progress(
-            value: listeningHours,
-            thresholds: [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500]
-        )
-        milestones.append(
-            RecapMilestone(
-                kind: .listeningTime,
-                title: listeningTitle(for: listeningProgress.target),
-                detail: "Total listening time in \(periodName)",
-                systemImage: "headphones",
-                currentValue: listeningHours,
-                targetValue: listeningProgress.target,
-                unit: "hours",
-                earnedTarget: listeningProgress.earned,
-                stage: listeningProgress.stage
-            )
+        milestones += MilestoneSeriesBuilder.milestones(
+            kind: .listeningTime,
+            currentValue: listeningHours,
+            thresholds: [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500],
+            unit: "hours",
+            detail: "Total listening time in \(periodName)",
+            systemImage: "headphones"
         )
 
         if let song = recap.topSongs.first {
             let hours = song.listeningDuration / 3_600
-            let songProgress = progress(value: hours, thresholds: [1, 3, 6, 12, 24, 48, 100, 250])
-            milestones.append(
-                RecapMilestone(
-                    kind: .songBond,
-                    title: songBondTitle(for: songProgress.target),
-                    detail: "Listening time for \(song.title) by \(song.artist)",
-                    systemImage: "repeat",
-                    currentValue: hours,
-                    targetValue: songProgress.target,
-                    unit: "hours",
-                    earnedTarget: songProgress.earned,
-                    stage: songProgress.stage
-                )
+            milestones += MilestoneSeriesBuilder.milestones(
+                kind: .songBond,
+                currentValue: hours,
+                thresholds: [1, 3, 6, 12, 24, 48, 100, 250],
+                unit: "hours",
+                detail: "Listening time for \(song.title) by \(song.artist)",
+                systemImage: "repeat"
             )
         }
 
         if let album = recap.topAlbums.first {
             let hours = album.listeningDuration / 3_600
-            let albumProgress = progress(value: hours, thresholds: [2, 5, 10, 24, 50, 100, 250])
-            milestones.append(
-                RecapMilestone(
-                    kind: .albumHome,
-                    title: albumHomeTitle(for: albumProgress.target),
-                    detail: "Listening time for \(album.title) by \(album.subtitle)",
-                    systemImage: "rectangle.stack.fill",
-                    currentValue: hours,
-                    targetValue: albumProgress.target,
-                    unit: "hours",
-                    earnedTarget: albumProgress.earned,
-                    stage: albumProgress.stage
-                )
+            milestones += MilestoneSeriesBuilder.milestones(
+                kind: .albumHome,
+                currentValue: hours,
+                thresholds: [2, 5, 10, 24, 50, 100, 250],
+                unit: "hours",
+                detail: "Listening time for \(album.title) by \(album.subtitle)",
+                systemImage: "rectangle.stack.fill"
             )
         }
 
         if let artist = recap.topArtists.first {
             let hours = artist.listeningDuration / 3_600
-            let artistProgress = progress(value: hours, thresholds: [5, 10, 25, 50, 100, 250, 500])
-            milestones.append(
-                RecapMilestone(
-                    kind: .artistEra,
-                    title: artistEraTitle(for: artistProgress.target),
-                    detail: "Listening time for \(artist.title)",
-                    systemImage: "star.fill",
-                    currentValue: hours,
-                    targetValue: artistProgress.target,
-                    unit: "hours",
-                    earnedTarget: artistProgress.earned,
-                    stage: artistProgress.stage
-                )
+            milestones += MilestoneSeriesBuilder.milestones(
+                kind: .artistEra,
+                currentValue: hours,
+                thresholds: [5, 10, 25, 50, 100, 250, 500],
+                unit: "hours",
+                detail: "Listening time for \(artist.title)",
+                systemImage: "star.fill"
             )
         }
 
         return milestones
     }
-
-    private static func progress(value: Double, thresholds: [Double]) -> (target: Double, earned: Double?, stage: Int) {
-        let earned = thresholds.last { value >= $0 }
-        let targetIndex = thresholds.firstIndex { value < $0 } ?? max(thresholds.count - 1, 0)
-        let target = thresholds.indices.contains(targetIndex) ? thresholds[targetIndex] : max(value, 1)
-        let earnedIndex = thresholds.lastIndex { value >= $0 }
-        return (target, earned, earnedIndex ?? 0)
-    }
-
-    private static func artistDiscoveryTitle(for _: Double) -> String { "Artist Explorer" }
-    private static func songDiscoveryTitle(for _: Double) -> String { "Song Explorer" }
-    private static func listeningTitle(for _: Double) -> String { "Music Marathon" }
-    private static func songBondTitle(for _: Double) -> String { "Song Devotion" }
-    private static func albumHomeTitle(for _: Double) -> String { "Album Immersion" }
-    private static func artistEraTitle(for _: Double) -> String { "Artist Era" }
 }
 
 final class WeeklyRecapInsightStore: @unchecked Sendable {

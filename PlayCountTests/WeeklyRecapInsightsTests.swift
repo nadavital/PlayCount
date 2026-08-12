@@ -132,19 +132,21 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             artistHours: 30
         )
         let milestones = RecapMilestoneEngine.milestones(for: recap, periodName: "August 2026")
+        let groups = MilestoneCollectionPresentation.groups(from: milestones)
+        let artistMilestones = groups[0]
+        let visibleMilestones = MilestoneCollectionPresentation.visibleMilestones(from: milestones)
 
-        XCTAssertEqual(milestones.count, 6)
-        XCTAssertEqual(milestones[0].title, "Artist Explorer")
-        XCTAssertEqual(milestones[0].valueLabel, "263 of 500 artists")
-        XCTAssertEqual(milestones[0].earnedTarget, 250)
-        XCTAssertEqual(milestones[0].stage, 4)
-        XCTAssertEqual(milestones[1].title, "Song Explorer")
-        XCTAssertEqual(milestones[1].targetValue, 250)
-        XCTAssertEqual(milestones[2].title, "Music Marathon")
-        XCTAssertEqual(milestones[3].title, "Song Devotion")
-        XCTAssertEqual(milestones[3].earnedTarget, 24)
-        XCTAssertEqual(milestones[4].kind, .albumHome)
-        XCTAssertEqual(milestones[5].kind, .artistEra)
+        XCTAssertEqual(groups.count, 6)
+        XCTAssertEqual(milestones.count, 47)
+        XCTAssertEqual(artistMilestones.map(\.title), [
+            "10 Artists", "25 Artists", "50 Artists", "100 Artists",
+            "250 Artists", "500 Artists", "1,000 Artists"
+        ])
+        XCTAssertEqual(artistMilestones.filter(\.isEarned).map(\.targetValue), [10, 25, 50, 100, 250])
+        XCTAssertFalse(artistMilestones[5].isEarned)
+        XCTAssertEqual(artistMilestones[5].compactValueLabel, "263 of 500 artists")
+        XCTAssertEqual(visibleMilestones.filter { $0.kind == .artistDiscovery }.count, 6)
+        XCTAssertEqual(Set(milestones.map(\.id)).count, milestones.count)
     }
 
     func testDetailMilestonesUseAllTimePlaysAndListeningDuration() {
@@ -153,34 +155,33 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             listeningDuration: 24 * 3_600,
             title: "Glass Rain"
         )
-        XCTAssertEqual(song.map(\.kind), [.songPlays, .songListeningTime])
-        XCTAssertEqual(song[0].title, "Song on Repeat")
-        XCTAssertEqual(song[0].compactValueLabel, "63 of 100 plays")
-        XCTAssertEqual(song[0].stage, 2)
-        XCTAssertEqual(song[1].title, "Song Devotion")
-        XCTAssertEqual(song[1].compactValueLabel, "24 of 48 hours")
-        XCTAssertEqual(song[1].stage, 4)
+        let songGroups = MilestoneCollectionPresentation.groups(from: song)
+        XCTAssertEqual(songGroups.count, 2)
+        XCTAssertEqual(song.count, 16)
+        XCTAssertEqual(songGroups[0].filter(\.isEarned).map(\.title), ["10 Plays", "25 Plays", "50 Plays"])
+        XCTAssertEqual(songGroups[0].first { !$0.isEarned }?.title, "100 Plays")
+        XCTAssertEqual(songGroups[1].filter(\.isEarned).last?.title, "24 Hours")
+        XCTAssertEqual(songGroups[1].first { !$0.isEarned }?.compactValueLabel, "24 of 48 hours")
 
         let album = MediaMilestoneEngine.album(
             playCount: 520,
             listeningDuration: 50 * 3_600,
             title: "Afterimages"
         )
-        XCTAssertEqual(album.map(\.kind), [.albumPlays, .albumListeningTime])
-        XCTAssertEqual(album.map(\.title), ["Album in Rotation", "Album Immersion"])
-        XCTAssertEqual(album[0].targetValue, 1_000)
-        XCTAssertEqual(album[1].targetValue, 100)
+        let albumGroups = MilestoneCollectionPresentation.groups(from: album)
+        XCTAssertEqual(albumGroups.count, 2)
+        XCTAssertEqual(albumGroups[0].first { !$0.isEarned }?.targetValue, 1_000)
+        XCTAssertEqual(albumGroups[1].first { !$0.isEarned }?.targetValue, 100)
 
         let artist = MediaMilestoneEngine.artist(
             playCount: 2_600,
             listeningDuration: 251 * 3_600,
             name: "Nova Lane"
         )
-        XCTAssertEqual(artist.map(\.kind), [.artistPlays, .artistListeningTime])
-        XCTAssertEqual(artist.map(\.title), ["Artist Favorite", "Artist Era"])
-        XCTAssertEqual(artist[0].targetValue, 5_000)
-        XCTAssertEqual(artist[0].stage, 5)
-        XCTAssertEqual(artist[1].targetValue, 500)
+        let artistGroups = MilestoneCollectionPresentation.groups(from: artist)
+        XCTAssertEqual(artistGroups.count, 2)
+        XCTAssertEqual(artistGroups[0].first { !$0.isEarned }?.targetValue, 5_000)
+        XCTAssertEqual(artistGroups[1].first { !$0.isEarned }?.targetValue, 500)
     }
 
     func testExactThresholdEarnsCurrentStageAndAdvancesDisplayedTarget() {
@@ -190,16 +191,19 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             title: "Glass Rain"
         )
 
-        XCTAssertTrue(milestones[0].isEarned)
-        XCTAssertEqual(milestones[0].earnedTarget, 50)
-        XCTAssertEqual(milestones[0].targetValue, 100)
-        XCTAssertEqual(milestones[0].stage, 2)
-        XCTAssertEqual(milestones[0].statusLabel, "50 reached · next 100")
+        let groups = MilestoneCollectionPresentation.groups(from: milestones)
+        let plays50 = try? XCTUnwrap(groups[0].first { $0.targetValue == 50 })
+        let plays100 = try? XCTUnwrap(groups[0].first { $0.targetValue == 100 })
+        let hours3 = try? XCTUnwrap(groups[1].first { $0.targetValue == 3 })
+        let hours6 = try? XCTUnwrap(groups[1].first { $0.targetValue == 6 })
 
-        XCTAssertTrue(milestones[1].isEarned)
-        XCTAssertEqual(milestones[1].earnedTarget, 3)
-        XCTAssertEqual(milestones[1].targetValue, 6)
-        XCTAssertEqual(milestones[1].stage, 1)
+        XCTAssertTrue(plays50?.isEarned == true)
+        XCTAssertEqual(plays50?.valueLabel, "50 plays earned")
+        XCTAssertFalse(plays100?.isEarned == true)
+        XCTAssertEqual(plays100?.statusLabel, "Milestone locked")
+        XCTAssertEqual(plays100?.compactValueLabel, "50 of 100 plays")
+        XCTAssertTrue(hours3?.isEarned == true)
+        XCTAssertFalse(hours6?.isEarned == true)
     }
 
     private func recap(
