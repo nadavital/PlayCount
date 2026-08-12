@@ -134,14 +134,14 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         let milestones = RecapMilestoneEngine.milestones(for: recap, periodName: "August 2026")
 
         XCTAssertEqual(milestones.count, 6)
-        XCTAssertEqual(milestones[0].title, "Artists Listened To")
+        XCTAssertEqual(milestones[0].title, "Artist Explorer")
         XCTAssertEqual(milestones[0].valueLabel, "263 of 500 artists")
         XCTAssertEqual(milestones[0].earnedTarget, 250)
         XCTAssertEqual(milestones[0].stage, 4)
-        XCTAssertEqual(milestones[1].title, "Songs Listened To")
+        XCTAssertEqual(milestones[1].title, "Song Explorer")
         XCTAssertEqual(milestones[1].targetValue, 250)
-        XCTAssertEqual(milestones[2].title, "Listening Time")
-        XCTAssertEqual(milestones[3].title, "Top Song Listening Time")
+        XCTAssertEqual(milestones[2].title, "Music Marathon")
+        XCTAssertEqual(milestones[3].title, "Song Devotion")
         XCTAssertEqual(milestones[3].earnedTarget, 24)
         XCTAssertEqual(milestones[4].kind, .albumHome)
         XCTAssertEqual(milestones[5].kind, .artistEra)
@@ -154,10 +154,10 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             title: "Glass Rain"
         )
         XCTAssertEqual(song.map(\.kind), [.songPlays, .songListeningTime])
-        XCTAssertEqual(song[0].title, "Song Plays")
+        XCTAssertEqual(song[0].title, "Song on Repeat")
         XCTAssertEqual(song[0].compactValueLabel, "63 of 100 plays")
         XCTAssertEqual(song[0].stage, 2)
-        XCTAssertEqual(song[1].title, "Time With Song")
+        XCTAssertEqual(song[1].title, "Song Devotion")
         XCTAssertEqual(song[1].compactValueLabel, "24 of 48 hours")
         XCTAssertEqual(song[1].stage, 4)
 
@@ -167,7 +167,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             title: "Afterimages"
         )
         XCTAssertEqual(album.map(\.kind), [.albumPlays, .albumListeningTime])
-        XCTAssertEqual(album.map(\.title), ["Album Plays", "Time With Album"])
+        XCTAssertEqual(album.map(\.title), ["Album in Rotation", "Album Immersion"])
         XCTAssertEqual(album[0].targetValue, 1_000)
         XCTAssertEqual(album[1].targetValue, 100)
 
@@ -177,7 +177,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             name: "Nova Lane"
         )
         XCTAssertEqual(artist.map(\.kind), [.artistPlays, .artistListeningTime])
-        XCTAssertEqual(artist.map(\.title), ["Artist Plays", "Time With Artist"])
+        XCTAssertEqual(artist.map(\.title), ["Artist Favorite", "Artist Era"])
         XCTAssertEqual(artist[0].targetValue, 5_000)
         XCTAssertEqual(artist[0].stage, 5)
         XCTAssertEqual(artist[1].targetValue, 500)

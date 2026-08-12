@@ -224,12 +224,12 @@ enum MediaMilestoneEngine {
         )
     }
 
-    private static func songPlayTitle(for _: Double) -> String { "Song Plays" }
-    private static func songTimeTitle(for _: Double) -> String { "Time With Song" }
-    private static func albumPlayTitle(for _: Double) -> String { "Album Plays" }
-    private static func albumTimeTitle(for _: Double) -> String { "Time With Album" }
-    private static func artistPlayTitle(for _: Double) -> String { "Artist Plays" }
-    private static func artistTimeTitle(for _: Double) -> String { "Time With Artist" }
+    private static func songPlayTitle(for _: Double) -> String { "Song on Repeat" }
+    private static func songTimeTitle(for _: Double) -> String { "Song Devotion" }
+    private static func albumPlayTitle(for _: Double) -> String { "Album in Rotation" }
+    private static func albumTimeTitle(for _: Double) -> String { "Album Immersion" }
+    private static func artistPlayTitle(for _: Double) -> String { "Artist Favorite" }
+    private static func artistTimeTitle(for _: Double) -> String { "Artist Era" }
 }
 
 enum RecapMilestoneEngine {
@@ -357,12 +357,12 @@ enum RecapMilestoneEngine {
         return (target, earned, earnedIndex ?? 0)
     }
 
-    private static func artistDiscoveryTitle(for _: Double) -> String { "Artists Listened To" }
-    private static func songDiscoveryTitle(for _: Double) -> String { "Songs Listened To" }
-    private static func listeningTitle(for _: Double) -> String { "Listening Time" }
-    private static func songBondTitle(for _: Double) -> String { "Top Song Listening Time" }
-    private static func albumHomeTitle(for _: Double) -> String { "Top Album Listening Time" }
-    private static func artistEraTitle(for _: Double) -> String { "Top Artist Listening Time" }
+    private static func artistDiscoveryTitle(for _: Double) -> String { "Artist Explorer" }
+    private static func songDiscoveryTitle(for _: Double) -> String { "Song Explorer" }
+    private static func listeningTitle(for _: Double) -> String { "Music Marathon" }
+    private static func songBondTitle(for _: Double) -> String { "Song Devotion" }
+    private static func albumHomeTitle(for _: Double) -> String { "Album Immersion" }
+    private static func artistEraTitle(for _: Double) -> String { "Artist Era" }
 }
 
 final class WeeklyRecapInsightStore: @unchecked Sendable {

@@ -562,6 +562,12 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(manager.recap(forMonthContaining: june), .empty(for: june))
         XCTAssertEqual(manager.recap(forMonthContaining: julyEnd), cachedJuly)
         XCTAssertEqual(manager.yearlyRecap(for: 2026), cachedYear)
+        XCTAssertEqual(manager.yearToDateRecap(through: mayEnd).totalPlayDelta, 6)
+        XCTAssertEqual(manager.yearToDateRecap(through: julyEnd).totalPlayDelta, 13)
+        XCTAssertEqual(
+            manager.yearToDateRecap(through: julyEnd).topSongs.map(\.title),
+            ["July Song", "May Song"]
+        )
         XCTAssertFalse(coldStore.debugHasLoadedFullSnapshotStore)
     }
 

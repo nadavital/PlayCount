@@ -334,6 +334,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private let maximumPresentationCacheAge: TimeInterval = 7 * 24 * 60 * 60
     private var recapCache: [Date: MonthlyRecap] = [:]
     private var yearlyRecapCache: [Int: MonthlyRecap] = [:]
+    private var yearToDateRecapCache: [Date: MonthlyRecap] = [:]
     private var yearlyMonthlyHighlightsCache: [Int: [YearlyRecapMonthlyHighlight]] = [:]
     private var isRecapCloudSyncInFlight = false
     private var pendingRecapCloudSync = false
@@ -874,6 +875,61 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         return recap
     }
 
+    func yearToDateRecap(through month: Date) -> MonthlyRecap {
+        let calendar = Calendar.current
+        let monthStart = calendar.startOfMonth(containing: month)
+
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            let year = calendar.component(.year, from: monthStart)
+            let includedMonths = Self.screenshotRecapMonths(endingAt: monthStart)
+                .filter {
+                    calendar.component(.year, from: $0) == year && $0 <= monthStart
+                }
+            let recaps = includedMonths.map {
+                Self.screenshotRecap(from: Self.screenshotSongs, monthStart: $0)
+            }
+            let fallbackRecap = Self.screenshotRecap(
+                from: Self.screenshotSongs,
+                monthStart: monthStart
+            )
+            return MonthlyRecap.yearly(
+                for: year,
+                months: includedMonths,
+                monthlyRecaps: recaps,
+                fallbackMonth: monthStart,
+                fallbackRecap: fallbackRecap
+            )
+        }
+        #endif
+
+        if let cached = yearToDateRecapCache[monthStart] {
+            return cached
+        }
+
+        let year = calendar.component(.year, from: monthStart)
+        let cachedMonths = recapCache.keys.filter {
+            calendar.component(.year, from: $0) == year
+        }
+        let includedMonths = Array(Set(months(in: year) + cachedMonths))
+            .filter { $0 <= monthStart }
+            .sorted()
+        let fallbackRecap = recap(forMonthContaining: monthStart)
+        guard !includedMonths.isEmpty else {
+            return fallbackRecap
+        }
+
+        let recap = MonthlyRecap.yearly(
+            for: year,
+            months: includedMonths,
+            monthlyRecaps: recaps(forMonthsContaining: includedMonths),
+            fallbackMonth: monthStart,
+            fallbackRecap: fallbackRecap
+        )
+        yearToDateRecapCache[monthStart] = recap
+        return recap
+    }
+
     func yearlyMonthlyHighlights(for year: Int) -> [YearlyRecapMonthlyHighlight] {
         #if DEBUG
         if Self.isScreenshotModeEnabled {
@@ -910,6 +966,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private func invalidateRecapCaches() {
         recapCache.removeAll()
         yearlyRecapCache.removeAll()
+        yearToDateRecapCache.removeAll()
         yearlyMonthlyHighlightsCache.removeAll()
     }
 
@@ -930,6 +987,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             recapCache[Calendar.current.startOfMonth(containing: currentRecap.monthStart)] = currentRecap
         }
         yearlyRecapCache = presentation.yearlyRecaps
+        yearToDateRecapCache.removeAll()
         yearlyMonthlyHighlightsCache.removeAll()
     }
 

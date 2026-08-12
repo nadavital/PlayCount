@@ -567,7 +567,10 @@ struct MonthlyRecapView: View {
                         }
 
                         if !recapMilestones.isEmpty {
-                            RecapMilestonesSection(milestones: recapMilestones)
+                            RecapMilestonesSection(
+                                milestones: recapMilestones,
+                                periodLabel: milestonePeriodLabel
+                            )
                         }
 
                         if recap.hasActivity {
@@ -1088,7 +1091,33 @@ struct MonthlyRecapView: View {
     }
 
     private var recapMilestones: [RecapMilestone] {
-        RecapMilestoneEngine.milestones(for: recap, periodName: monthTitle)
+        RecapMilestoneEngine.milestones(
+            for: milestoneRecap,
+            periodName: milestonePeriodDescription
+        )
+    }
+
+    private var milestoneRecap: MonthlyRecap {
+        if isShowingYearAggregate {
+            return recap
+        }
+        return manager.yearToDateRecap(through: selectedMonthStartOrCurrent)
+    }
+
+    private var milestonePeriodDescription: String {
+        if isShowingYearAggregate {
+            return String(selectedRecapYear)
+        }
+        let month = selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
+        return String(selectedRecapYear) + " through " + month
+    }
+
+    private var milestonePeriodLabel: String {
+        if isShowingYearAggregate {
+            return String(selectedRecapYear)
+        }
+        let month = selectedMonthStartOrCurrent.formatted(.dateTime.month(.abbreviated))
+        return String(selectedRecapYear) + " through " + month
     }
 
     private var weeklyTopSongArtwork: MPMediaItemArtwork? {
@@ -2731,6 +2760,7 @@ private struct RecapWeeklyHistoryChart: View {
 
 private struct RecapMilestonesSection: View {
     let milestones: [RecapMilestone]
+    let periodLabel: String
     @State private var isShowingAllMilestones = false
 
     private var featuredMilestones: ArraySlice<RecapMilestone> {
@@ -2739,26 +2769,31 @@ private struct RecapMilestonesSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if milestones.count > featuredMilestones.count {
-                Button {
-                    isShowingAllMilestones = true
-                } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("Milestones")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Text("View All")
-                            .font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
-                    }
-                    .contentShape(.rect)
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Milestones")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(periodLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-            } else {
-                Text("Milestones")
-                    .font(.title3.weight(.semibold))
+                Spacer()
+
+                if milestones.count > featuredMilestones.count {
+                    Button {
+                        isShowingAllMilestones = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("View All")
+                                .font(.subheadline.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                        }
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             MilestoneShelf {
@@ -2811,7 +2846,7 @@ struct MilestoneBadge: View {
 
     var body: some View {
         GlassMilestoneMedal(
-            tier: MilestoneMedalTier(stage: milestone.stage),
+            tier: MilestonePreview.tierOverride ?? MilestoneMedalTier(stage: milestone.stage),
             systemImage: milestone.systemImage,
             isLocked: !milestone.isEarned && !MilestonePreview.previewsUnlocked,
             size: size
@@ -2855,13 +2890,16 @@ private struct GlassMilestoneMedal: View {
                 .offset(y: -size * 0.5)
 
             ZStack {
-                if !isLocked {
+                if !isLocked, tier.usesAnimatedBackground {
                     MilestoneAnimatedAura(tier: tier, size: size)
-                        .frame(width: size * 0.62, height: size * 0.62)
-                        .opacity(0.84)
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                        .opacity(0.94)
                 }
 
-                glassLens(hasAnimatedBackground: !isLocked)
+                glassLens(hasAnimatedBackground: !isLocked && tier.usesAnimatedBackground)
+
+                milestoneDepthLayers
 
                 Image(systemName: systemImage)
                     .font(.system(size: size * 0.3, weight: .semibold))
@@ -2875,6 +2913,21 @@ private struct GlassMilestoneMedal: View {
     }
 
     @ViewBuilder
+    private var milestoneDepthLayers: some View {
+        if #available(iOS 26.0, *), !isLocked, tier.depthLayerCount > 0 {
+            ForEach(0..<tier.depthLayerCount, id: \.self) { layer in
+                Color.clear
+                    .frame(
+                        width: size * (0.82 - CGFloat(layer) * 0.16),
+                        height: size * (0.82 - CGFloat(layer) * 0.16)
+                    )
+                    .glassEffect(.clear, in: .circle)
+                    .opacity(0.52 - Double(layer) * 0.12)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func glassLens(hasAnimatedBackground: Bool) -> some View {
         if #available(iOS 26.0, *) {
             Color.clear
@@ -2882,7 +2935,7 @@ private struct GlassMilestoneMedal: View {
                 .glassEffect(
                     hasAnimatedBackground
                         ? .regular
-                        : .regular.tint(tier.glassTint.opacity(0.18)),
+                        : .regular.tint(tier.glassTint.opacity(0.28)),
                     in: .circle
                 )
         } else {
@@ -2915,8 +2968,38 @@ private struct MilestoneBands: View {
                 MedalBandStripeShape(edge: .trailing, stripeRange: stripeRange)
                     .fill(tier.bandStripeColor)
             }
+
+            MedalRibbonTexture()
+                .mask {
+                    ZStack {
+                        MedalBandShape(edge: .leading)
+                        MedalBandShape(edge: .trailing)
+                    }
+                }
         }
         .frame(width: size * 1.06, height: size * 0.75)
+    }
+}
+
+private struct MedalRibbonTexture: View {
+    var body: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 3.5
+            var offset = -size.height
+            while offset < size.width + size.height {
+                var highlight = Path()
+                highlight.move(to: CGPoint(x: offset, y: 0))
+                highlight.addLine(to: CGPoint(x: offset + size.height, y: size.height))
+                context.stroke(highlight, with: .color(.white.opacity(0.12)), lineWidth: 0.45)
+
+                var shadow = Path()
+                shadow.move(to: CGPoint(x: offset + spacing * 0.5, y: 0))
+                shadow.addLine(to: CGPoint(x: offset + spacing * 0.5 + size.height, y: size.height))
+                context.stroke(shadow, with: .color(.black.opacity(0.08)), lineWidth: 0.35)
+                offset += spacing
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -3040,7 +3123,7 @@ private struct MilestoneAnimatedAura: View {
                 )
         }
         .blur(radius: size * 0.035)
-        .scaleEffect(expanded ? 1.05 : 0.88)
+        .scaleEffect(expanded ? 1.18 : 1.06)
     }
 }
 
@@ -3050,6 +3133,20 @@ private enum MilestonePreview {
         ProcessInfo.processInfo.arguments.contains("-PlayCountMedalPreviewUnlocked")
         #else
         false
+        #endif
+    }
+
+    static var tierOverride: MilestoneMedalTier? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "-PlayCountMedalPreviewTier"),
+              arguments.indices.contains(flagIndex + 1),
+              let stage = Int(arguments[flagIndex + 1]) else {
+            return nil
+        }
+        return MilestoneMedalTier(stage: stage)
+        #else
+        return nil
         #endif
     }
 }
@@ -3096,6 +3193,22 @@ private enum MilestoneMedalTier: Int, CaseIterable {
         case .roseGold: [.purple, .pink, .orange, .purple]
         case .platinum: [.indigo, .cyan, .mint, .indigo]
         case .legend: [.purple, .blue, .pink, .purple]
+        }
+    }
+
+    var usesAnimatedBackground: Bool {
+        switch self {
+        case .bronze, .silver: false
+        case .gold, .roseGold, .platinum, .legend: true
+        }
+    }
+
+    var depthLayerCount: Int {
+        switch self {
+        case .bronze, .silver, .gold: 0
+        case .roseGold: 1
+        case .platinum: 1
+        case .legend: 2
         }
     }
 
