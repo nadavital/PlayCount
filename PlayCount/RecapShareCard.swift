@@ -30,6 +30,22 @@ struct RecapShareTrendPoint: Identifiable, Equatable, Sendable {
     let month: Date
     let plays: Int
     let listeningMinutes: Double
+    let uniqueSongs: Int
+    let uniqueArtists: Int
+
+    init(
+        month: Date,
+        plays: Int,
+        listeningMinutes: Double,
+        uniqueSongs: Int = 0,
+        uniqueArtists: Int = 0
+    ) {
+        self.month = month
+        self.plays = plays
+        self.listeningMinutes = listeningMinutes
+        self.uniqueSongs = uniqueSongs
+        self.uniqueArtists = uniqueArtists
+    }
 
     var id: Date { month }
 }

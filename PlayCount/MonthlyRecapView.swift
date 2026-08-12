@@ -43,7 +43,7 @@ private enum RecapGainerCategory: String, CaseIterable, Identifiable {
 private enum YearlyRecapSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case trends = "Trends"
-    case byMonth = "By Month"
+    case byMonth = "Months"
 
     var id: Self { self }
 
@@ -525,8 +525,7 @@ struct MonthlyRecapView: View {
                 if (!manager.hasLoadedInitialSnapshot && recap.snapshotCount == 0)
                     || (manager.isPreparingInsights && !recap.hasActivity) {
                     VStack {
-                        ProgressView()
-                            .controlSize(.large)
+                        PlayCountLoadingMark(size: 48)
                         Text("Preparing your recap…")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -935,13 +934,22 @@ struct MonthlyRecapView: View {
             RecapShareTrendPoint(
                 month: $0.month,
                 plays: $0.recap.totalPlayDelta,
-                listeningMinutes: $0.recap.totalListeningDuration / 60
+                listeningMinutes: $0.recap.totalListeningDuration / 60,
+                uniqueSongs: $0.recap.playedSongCount,
+                uniqueArtists: $0.recap.listenedArtistCount
             )
         }
     }
 
     private var yearlyMonthlyBreakdownSection: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if !yearlyMilestoneMoments.isEmpty {
+                RecapMonthlyMilestoneStrip(
+                    moments: yearlyMilestoneMoments,
+                    onSelectMonth: selectMonth
+                )
+            }
+
             RecapMonthlyBreakdownStrip(
                 title: "Top Songs by Month",
                 items: yearlyMonthlyHighlights.compactMap { highlight in
@@ -989,6 +997,28 @@ struct MonthlyRecapView: View {
                 },
                 destination: breakdownDestination(for:)
             )
+        }
+    }
+
+    private var yearlyMilestoneMoments: [RecapMonthlyMilestoneMoment] {
+        yearlyMonthlyHighlights.compactMap { highlight in
+            let current = RecapMilestoneEngine.milestones(
+                for: manager.yearToDateRecap(through: highlight.month),
+                periodName: "\(selectedRecapYear) through \(highlight.month.formatted(.dateTime.month(.wide)))"
+            )
+            let previous: [RecapMilestone]
+            if let priorMonth = Calendar.current.date(byAdding: .month, value: -1, to: highlight.month),
+               Calendar.current.component(.year, from: priorMonth) == selectedRecapYear {
+                previous = RecapMilestoneEngine.milestones(
+                    for: manager.yearToDateRecap(through: priorMonth),
+                    periodName: String(selectedRecapYear)
+                )
+            } else {
+                previous = []
+            }
+            let unlocked = MilestoneCollectionPresentation.newlyEarned(current: current, previous: previous)
+            guard !unlocked.isEmpty else { return nil }
+            return RecapMonthlyMilestoneMoment(month: highlight.month, milestones: unlocked)
         }
     }
 
@@ -1101,7 +1131,7 @@ struct MonthlyRecapView: View {
 
     private var displayedRecapMilestones: [RecapMilestone] {
         guard !isShowingYearAggregate else { return recapMilestones }
-        return MilestoneCollectionPresentation.newlyEarned(
+        return MilestoneCollectionPresentation.monthlyHighlights(
             current: recapMilestones,
             previous: previousMonthMilestones
         )
@@ -1142,7 +1172,7 @@ struct MonthlyRecapView: View {
         if isShowingYearAggregate {
             return String(selectedRecapYear)
         }
-        return "Unlocked in " + selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
+        return "Unlocked or within reach in " + selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
     }
 
     private var weeklyTopSongArtwork: MPMediaItemArtwork? {
@@ -1373,66 +1403,38 @@ struct MonthlyRecapView: View {
 
 private struct RecapYearSectionPicker: View {
     @Binding var selection: YearlyRecapSection
-    @Namespace private var selectionAnimation
 
     var body: some View {
-        HStack(spacing: 5) {
+        Picker("Yearly recap section", selection: $selection) {
             ForEach(YearlyRecapSection.allCases) { section in
-                Button {
-                    withAnimation(.snappy(duration: 0.28)) {
-                        selection = section
-                    }
-                } label: {
-                    Label(section.rawValue, systemImage: section.systemImage)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42)
-                        .background {
-                            if selection == section {
-                                Capsule(style: .continuous)
-                                    .fill(Color.accentColor.gradient)
-                                    .matchedGeometryEffect(id: "year-section", in: selectionAnimation)
-                                    .shadow(color: Color.accentColor.opacity(0.24), radius: 8, y: 4)
-                            }
-                        }
-                        .foregroundStyle(selection == section ? Color.white : Color.secondary)
-                        .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selection == section ? .isSelected : [])
+                Text(section.rawValue).tag(section)
             }
         }
-        .padding(5)
-        .background(.regularMaterial, in: .capsule)
-        .overlay {
-            Capsule(style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Yearly recap section")
+        .pickerStyle(.segmented)
     }
 }
 
 private struct RecapYearTrendSection: View {
     private enum Metric: String, CaseIterable, Identifiable {
         case plays = "Plays"
-        case listeningTime = "Listening Time"
+        case listeningTime = "Time"
+        case songs = "Songs"
+        case artists = "Artists"
 
         var id: Self { self }
     }
 
     let points: [RecapShareTrendPoint]
     @State private var selectedMetric: Metric = .plays
+    @State private var selectedMonth: Date?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Year at a Glance")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Listening Trends")
                 .font(.title3.weight(.semibold))
 
             RecapSurface {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 14) {
                     Picker("Yearly trend metric", selection: $selectedMetric) {
                         ForEach(Metric.allCases) { metric in
                             Text(metric.rawValue).tag(metric)
@@ -1440,24 +1442,17 @@ private struct RecapYearTrendSection: View {
                     }
                     .pickerStyle(.segmented)
 
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(totalValue)
-                                .font(.system(.title, design: .rounded, weight: .bold))
-                                .contentTransition(.numericText())
-                            Text(totalLabel)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(totalValue)
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .contentTransition(.numericText())
                         Spacer()
-                        if let peakPoint {
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text(peakPoint.month.formatted(.dateTime.month(.wide)))
-                                    .font(.headline)
-                                Text("Peak month · \(formattedValue(for: peakPoint))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                        if let focusedPoint {
+                            Text(focusedPoint.month.formatted(.dateTime.month(.abbreviated)))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(formattedValue(for: focusedPoint))
+                                .font(.subheadline.monospacedDigit())
                         }
                     }
 
@@ -1465,17 +1460,10 @@ private struct RecapYearTrendSection: View {
                         BarMark(
                             x: .value("Month", point.month, unit: .month),
                             y: .value(axisTitle, value(for: point)),
-                            width: .fixed(22)
+                            width: .ratio(0.58)
                         )
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [Color.accentColor.opacity(0.42), Color.accentColor],
-                                startPoint: .bottom,
-                                endPoint: .top
-                            )
-                        )
-                        .clipShape(.capsule)
-                        .shadow(color: Color.accentColor.opacity(0.18), radius: 4, y: 2)
+                        .foregroundStyle(point.id == focusedPoint?.id ? Color.accentColor : Color.accentColor.opacity(0.34))
+                        .clipShape(.rect(cornerRadius: 4))
                         .accessibilityLabel(point.month.formatted(.dateTime.month(.wide)))
                         .accessibilityValue(formattedValue(for: point))
                     }
@@ -1485,30 +1473,31 @@ private struct RecapYearTrendSection: View {
                             AxisGridLine().foregroundStyle(.clear)
                         }
                     }
-                    .chartYAxis(.hidden)
-                    .chartPlotStyle { plot in
-                        plot
-                            .background(Color.primary.opacity(0.035), in: .rect(cornerRadius: 14))
+                    .chartYAxis {
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                            AxisGridLine().foregroundStyle(.tertiary.opacity(0.35))
+                            AxisValueLabel {
+                                if let number = value.as(Double.self) {
+                                    Text(number, format: .number.notation(.compactName))
+                                }
+                            }
+                            .font(.caption2)
+                        }
                     }
-                    .frame(height: 160)
-
-                    if let comparisonText {
-                        Text(comparisonText)
-                            .font(.callout.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .contentTransition(.numericText())
-                    }
-
-                    Text("Only months with tracked listening activity are shown.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    .chartXSelection(value: $selectedMonth)
+                    .frame(height: 178)
                 }
             }
         }
     }
 
     private var axisTitle: String {
-        selectedMetric == .plays ? "Plays" : "Minutes"
+        switch selectedMetric {
+        case .plays: "Plays"
+        case .listeningTime: "Minutes"
+        case .songs: "Songs"
+        case .artists: "Artists"
+        }
     }
 
     private var totalValue: String {
@@ -1517,19 +1506,34 @@ private struct RecapYearTrendSection: View {
             points.reduce(0) { $0 + $1.plays }.formatted()
         case .listeningTime:
             (points.reduce(0) { $0 + $1.listeningMinutes } * 60).formattedListeningMinutes
+        case .songs:
+            averageValue.formatted(.number.precision(.fractionLength(0))) + " avg"
+        case .artists:
+            averageValue.formatted(.number.precision(.fractionLength(0))) + " avg"
         }
     }
 
-    private var totalLabel: String {
-        selectedMetric == .plays ? "plays in tracked months" : "listening in tracked months"
+    private var averageValue: Double {
+        guard !points.isEmpty else { return 0 }
+        return points.reduce(0) { $0 + value(for: $1) } / Double(points.count)
     }
 
-    private var peakPoint: RecapShareTrendPoint? {
-        points.max { value(for: $0) < value(for: $1) }
+    private var focusedPoint: RecapShareTrendPoint? {
+        guard let selectedMonth else {
+            return points.max { value(for: $0) < value(for: $1) }
+        }
+        return points.min {
+            abs($0.month.timeIntervalSince(selectedMonth)) < abs($1.month.timeIntervalSince(selectedMonth))
+        }
     }
 
     private func value(for point: RecapShareTrendPoint) -> Double {
-        selectedMetric == .plays ? Double(point.plays) : point.listeningMinutes
+        switch selectedMetric {
+        case .plays: Double(point.plays)
+        case .listeningTime: point.listeningMinutes
+        case .songs: Double(point.uniqueSongs)
+        case .artists: Double(point.uniqueArtists)
+        }
     }
 
     private func formattedValue(for point: RecapShareTrendPoint) -> String {
@@ -1538,29 +1542,11 @@ private struct RecapYearTrendSection: View {
             return "\(point.plays.formatted()) plays"
         case .listeningTime:
             return "\(Int(point.listeningMinutes.rounded()).formatted()) minutes"
+        case .songs:
+            return "\(point.uniqueSongs.formatted()) songs"
+        case .artists:
+            return "\(point.uniqueArtists.formatted()) artists"
         }
-    }
-
-    private var comparisonText: String? {
-        guard points.count >= 2,
-              let previous = points.dropLast().last,
-              let latest = points.last else {
-            return nil
-        }
-
-        let previousMonth = previous.month.formatted(.dateTime.month(.abbreviated))
-        let latestMonth = latest.month.formatted(.dateTime.month(.abbreviated))
-        let delta = value(for: latest) - value(for: previous)
-        let direction = delta >= 0 ? "+" : "−"
-        let magnitude = abs(delta)
-        let formattedDelta: String
-        switch selectedMetric {
-        case .plays:
-            formattedDelta = Int(magnitude.rounded()).formatted()
-        case .listeningTime:
-            formattedDelta = "\(Int(magnitude.rounded()).formatted()) min"
-        }
-        return "\(latestMonth) is \(direction)\(formattedDelta) from \(previousMonth)"
     }
 }
 
@@ -2437,6 +2423,57 @@ private enum RecapMonthlyBreakdownKind {
     }
 }
 
+private struct RecapMonthlyMilestoneMoment: Identifiable {
+    let month: Date
+    let milestones: [RecapMilestone]
+
+    var id: Date { month }
+}
+
+private struct RecapMonthlyMilestoneStrip: View {
+    let moments: [RecapMonthlyMilestoneMoment]
+    let onSelectMonth: (Date) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Milestone Moments")
+                .font(.title3.weight(.semibold))
+
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 12) {
+                    ForEach(moments) { moment in
+                        Button {
+                            onSelectMonth(moment.month)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(moment.month.formatted(.dateTime.month(.wide)))
+                                    .font(.headline)
+                                HStack(spacing: -5) {
+                                    ForEach(moment.milestones.prefix(3)) { milestone in
+                                        MilestoneBadge(milestone: milestone, size: 34)
+                                    }
+                                }
+                                Text("\(moment.milestones.count) unlocked")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(width: 132, alignment: .leading)
+                            .padding(12)
+                            .playCountCardSurface(cornerRadius: 18)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(
+                            "\(moment.month.formatted(.dateTime.month(.wide))), \(moment.milestones.count) milestones unlocked"
+                        )
+                    }
+                }
+                .padding(.horizontal, 1)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+}
+
 private struct RecapMonthlyBreakdownItem: Identifiable {
     let id: String
     let month: Date
@@ -2872,19 +2909,17 @@ struct MilestoneBadgeTile: View {
             isShowingPath = true
         } label: {
             VStack(spacing: 5) {
-                MilestoneBadge(milestone: milestone, size: badgeSize)
+                MilestoneBadge(
+                    milestone: milestone,
+                    size: badgeSize,
+                    showsProgress: milestone.id == nextMilestoneID
+                )
 
                 Text(milestone.title)
                     .font(.caption.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
 
-                Text(milestone.compactValueLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
             .contentShape(.rect)
@@ -2904,19 +2939,38 @@ struct MilestoneBadgeTile: View {
             }
         }
     }
+
+    private var nextMilestoneID: String? {
+        series.sorted { $0.targetValue < $1.targetValue }.first(where: { !$0.isEarned })?.id
+    }
 }
 
 struct MilestoneBadge: View {
     let milestone: RecapMilestone
     let size: CGFloat
+    var showsProgress = false
 
     var body: some View {
-        GlassMilestoneMedal(
-            tier: MilestonePreview.tierOverride ?? MilestoneMedalTier(stage: milestone.stage),
-            systemImage: milestone.systemImage,
-            isLocked: !milestone.isEarned && !MilestonePreview.previewsUnlocked,
-            size: size
-        )
+        ZStack {
+            GlassMilestoneMedal(
+                tier: MilestonePreview.tierOverride ?? MilestoneMedalTier(stage: milestone.stage),
+                systemImage: milestone.systemImage,
+                isLocked: !milestone.isEarned && !MilestonePreview.previewsUnlocked,
+                size: size
+            )
+
+            if showsProgress && !milestone.isEarned {
+                Circle()
+                    .trim(from: 0, to: milestone.progress)
+                    .stroke(
+                        MilestoneMedalTier(stage: milestone.stage).glassTint,
+                        style: StrokeStyle(lineWidth: max(2.5, size * 0.045), lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: size * 1.08, height: size * 1.08)
+                    .offset(y: size * 0.125)
+            }
+        }
     }
 }
 
@@ -2927,25 +2981,10 @@ private struct GlassMilestoneMedal: View {
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            medal
-                .saturation(isLocked ? 0 : 1)
-                .opacity(isLocked ? 0.46 : 1)
-                .blur(radius: isLocked ? 0.8 : 0)
-
-            if isLocked {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: size * 0.14, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .frame(width: size * 0.3, height: size * 0.3)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay {
-                        Circle().strokeBorder(.white.opacity(0.3), lineWidth: 0.7)
-                    }
-                    .offset(x: size * 0.31, y: -size * 0.31)
-                    .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
-            }
-        }
+        medal
+            .saturation(isLocked ? 0 : 1)
+            .opacity(isLocked ? 0.38 : 1)
+            .blur(radius: isLocked ? 1.1 : 0)
         .frame(width: size, height: size * 1.25, alignment: .bottom)
         .accessibilityHidden(true)
     }
@@ -3232,7 +3271,7 @@ private enum MilestonePreview {
     }
 }
 
-private enum MilestoneMedalTier: Int, CaseIterable {
+enum MilestoneMedalTier: Int, CaseIterable {
     case copper
     case bronze
     case silver
@@ -3404,45 +3443,37 @@ struct MilestonePathSheet: View {
         orderedMilestones.first { !$0.isEarned }
     }
 
+    private var focusID: String? {
+        nextMilestone?.id ?? orderedMilestones.last?.id
+    }
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(selected.kind.collectionTitle)
-                            .font(.title2.bold())
-                        Text(selected.detail)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        if let nextMilestone {
-                            ProgressView(
-                                value: min(nextMilestone.currentValue, nextMilestone.targetValue),
-                                total: nextMilestone.targetValue
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 18) {
+                        ForEach(orderedMilestones) { milestone in
+                            MilestonePathTile(
+                                milestone: milestone,
+                                isNext: milestone.id == nextMilestone?.id
                             )
-                            .tint(MilestoneMedalTier(stage: nextMilestone.stage).glassTint)
-                            Text("Next: \(nextMilestone.title) · \(nextMilestone.compactValueLabel)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        } else {
-                            Label("Collection complete", systemImage: "checkmark.seal.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                            .id(milestone.id)
+                            .containerRelativeFrame(.horizontal, count: 3, span: 2, spacing: 18)
                         }
                     }
-                    .padding(.bottom, 4)
-
-                    ForEach(orderedMilestones) { milestone in
-                        MilestonePathRow(
-                            milestone: milestone,
-                            isNext: milestone.id == nextMilestone?.id
-                        )
-                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 28)
                 }
-                .padding(20)
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.viewAligned)
+                .task(id: focusID) {
+                    guard let focusID else { return }
+                    await Task.yield()
+                    proxy.scrollTo(focusID, anchor: .center)
+                }
             }
-            .navigationTitle("Milestone Path")
+            .navigationTitle(pathTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -3452,65 +3483,58 @@ struct MilestonePathSheet: View {
         }
         .presentationDetents([.medium, .large])
     }
+
+    private var pathTitle: String {
+        switch selected.kind {
+        case .songPlays: "\(selected.detail) Plays"
+        case .albumPlays: "\(selected.detail) Track Plays"
+        case .artistPlays: "\(selected.detail) Plays"
+        case .songListeningTime, .albumListeningTime, .artistListeningTime,
+             .songBond, .albumHome, .artistEra:
+            "Time With \(selected.detail)"
+        case .artistDiscovery, .songDiscovery, .listeningTime:
+            selected.kind.collectionTitle
+        }
+    }
 }
 
-private struct MilestonePathRow: View {
+private struct MilestonePathTile: View {
     let milestone: RecapMilestone
     let isNext: Bool
 
     var body: some View {
-        HStack(spacing: 14) {
-            MilestoneBadge(milestone: milestone, size: 58)
+        VStack(spacing: 10) {
+            MilestoneBadge(milestone: milestone, size: 104, showsProgress: isNext)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(milestone.title)
-                        .font(.headline)
-                    Spacer()
-                    if milestone.isEarned {
-                        Label("Earned", systemImage: "checkmark.circle.fill")
-                            .labelStyle(.titleAndIcon)
-                            .foregroundStyle(.secondary)
-                    } else if isNext {
-                        Text("Next")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Image(systemName: "lock.fill")
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+            Text(milestone.title)
+                .font(.headline)
+                .multilineTextAlignment(.center)
 
-                if milestone.isEarned {
-                    Text("Unlocked")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ProgressView(
-                        value: min(milestone.currentValue, milestone.targetValue),
-                        total: milestone.targetValue
-                    )
-                    .tint(isNext ? MilestoneMedalTier(stage: milestone.stage).glassTint : .gray)
-                    Text(milestone.compactValueLabel)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+            if milestone.isEarned {
+                Text(milestone.achievementDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            } else if isNext {
+                Text("Next")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.45), in: .rect(cornerRadius: 18))
+        .frame(maxWidth: .infinity)
+        .frame(height: 250, alignment: .top)
+        .padding(16)
+        .background(.quaternary.opacity(0.38), in: .rect(cornerRadius: 22))
+        .clipShape(.rect(cornerRadius: 22))
         .accessibilityElement(children: .combine)
+        .accessibilityValue(isNext ? milestone.valueLabel : milestone.statusLabel)
     }
 }
 
 private struct RecapMilestonesGallery: View {
     let milestones: [RecapMilestone]
     @Environment(\.dismiss) private var dismiss
-
-    private let columns = Array(
-        repeating: GridItem(.flexible(), spacing: 14, alignment: .top),
-        count: 3
-    )
 
     private var milestoneGroups: [[RecapMilestone]] {
         MilestoneCollectionPresentation.groups(from: milestones)
@@ -3526,15 +3550,20 @@ private struct RecapMilestonesGallery: View {
                                 Text(first.kind.collectionTitle)
                                     .font(.title3.weight(.semibold))
 
-                                LazyVGrid(columns: columns, alignment: .center, spacing: 24) {
-                                    ForEach(MilestoneCollectionPresentation.visibleMilestones(from: group)) { milestone in
+                                ScrollView(.horizontal) {
+                                    LazyHStack(alignment: .top, spacing: 14) {
+                                        ForEach(MilestoneCollectionPresentation.visibleMilestones(from: group)) { milestone in
                                         MilestoneBadgeTile(
                                             milestone: milestone,
-                                            badgeSize: 92,
+                                            badgeSize: 82,
                                             series: group
                                         )
+                                        .frame(width: 112)
+                                        }
                                     }
+                                    .padding(.horizontal, 2)
                                 }
+                                .scrollIndicators(.hidden)
                             }
                         }
                     }

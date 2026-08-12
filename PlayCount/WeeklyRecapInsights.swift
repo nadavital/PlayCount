@@ -75,18 +75,18 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
 
         var collectionTitle: String {
             switch self {
-            case .artistDiscovery: "Artists"
-            case .songDiscovery: "Songs"
-            case .listeningTime: "Listening Time"
-            case .songBond: "Top Song"
-            case .albumHome: "Top Album"
-            case .artistEra: "Top Artist"
+            case .artistDiscovery: "Artists Heard This Year"
+            case .songDiscovery: "Songs Heard This Year"
+            case .listeningTime: "Listening This Year"
+            case .songBond: "Time With Your Top Song"
+            case .albumHome: "Time With Your Top Album"
+            case .artistEra: "Time With Your Top Artist"
             case .songPlays: "Song Plays"
-            case .songListeningTime: "Time With Song"
-            case .albumPlays: "Album Plays"
-            case .albumListeningTime: "Time With Album"
+            case .songListeningTime: "Time With This Song"
+            case .albumPlays: "Track Plays From This Album"
+            case .albumListeningTime: "Time With This Album"
             case .artistPlays: "Artist Plays"
-            case .artistListeningTime: "Time With Artist"
+            case .artistListeningTime: "Time With This Artist"
             }
         }
     }
@@ -125,11 +125,7 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
     }
 
     var compactValueLabel: String {
-        if isEarned {
-            return "Earned"
-        }
-        let displayedUnit = targetValue == 1 && unit == "hours" ? "hour" : unit
-        return "\(formatted(currentValue)) of \(formatted(targetValue)) \(displayedUnit)"
+        isEarned ? "" : "Next milestone"
     }
 
     var currentValueLabel: String {
@@ -139,6 +135,31 @@ struct RecapMilestone: Identifiable, Equatable, Sendable {
 
     var statusLabel: String {
         isEarned ? "Milestone unlocked" : "Milestone locked"
+    }
+
+    var achievementDescription: String {
+        let target = formatted(targetValue)
+        let hours = targetValue == 1 ? "hour" : "hours"
+        switch kind {
+        case .artistDiscovery:
+            return "You listened to \(target) artists this year."
+        case .songDiscovery:
+            return "You listened to \(target) songs this year."
+        case .listeningTime:
+            return "You listened to music for \(target) \(hours) this year."
+        case .songBond, .songListeningTime:
+            return "You've listened to \(detail) for \(target) \(hours)."
+        case .albumHome, .albumListeningTime:
+            return "You've listened to \(detail) for \(target) \(hours)."
+        case .artistEra, .artistListeningTime:
+            return "You've listened to \(detail) for \(target) \(hours)."
+        case .songPlays:
+            return "You've played \(detail) \(target) times."
+        case .albumPlays:
+            return "Tracks from \(detail) reached \(target) plays."
+        case .artistPlays:
+            return "Songs by \(detail) reached \(target) plays."
+        }
     }
 
     private func formatted(_ value: Double) -> String {
@@ -168,9 +189,9 @@ enum MilestoneCollectionPresentation {
         groups(from: milestones).flatMap { group in
             let earned = group.filter(\.isEarned)
             if let next = group.first(where: { !$0.isEarned }) {
-                return earned + [next]
+                return ([next] + earned.reversed()).map { $0 }
             }
-            return earned
+            return Array(earned.reversed())
         }
     }
 
@@ -178,7 +199,8 @@ enum MilestoneCollectionPresentation {
         Array(
             groups(from: milestones)
                 .compactMap { group in
-                    group.last(where: \.isEarned) ?? group.first
+                    let nearby = group.first { !$0.isEarned && $0.progress >= 0.7 }
+                    return nearby ?? group.last(where: \.isEarned) ?? group.first
                 }
                 .prefix(limit)
         )
@@ -190,6 +212,20 @@ enum MilestoneCollectionPresentation {
     ) -> [RecapMilestone] {
         let previouslyEarned = Set(previous.lazy.filter(\.isEarned).map(\.id))
         return current.filter { $0.isEarned && !previouslyEarned.contains($0.id) }
+    }
+
+    static func monthlyHighlights(
+        current: [RecapMilestone],
+        previous: [RecapMilestone],
+        nearbyLimit: Int = 2
+    ) -> [RecapMilestone] {
+        let unlocked = newlyEarned(current: current, previous: previous)
+        let unlockedIDs = Set(unlocked.map(\.id))
+        let nearby = groups(from: current)
+            .compactMap { $0.first(where: { !$0.isEarned && $0.progress >= 0.7 }) }
+            .filter { !unlockedIDs.contains($0.id) }
+            .sorted { $0.progress > $1.progress }
+        return unlocked + nearby.prefix(nearbyLimit)
     }
 
     static func progressSummary(from milestones: [RecapMilestone]) -> [MilestoneProgressSummary] {
@@ -713,10 +749,10 @@ enum MediaMilestoneEngine {
             timeKind: .songListeningTime,
             playCount: playCount,
             listeningDuration: listeningDuration,
-            detail: "With \(title)",
+            detail: title,
             playThresholds: [10, 25, 50, 100, 250, 500, 1_000, 2_500],
             timeThresholds: [1, 3, 6, 12, 24, 48, 100, 250],
-            playImage: "repeat"
+            playImage: "play.fill"
         )
     }
 
@@ -726,7 +762,7 @@ enum MediaMilestoneEngine {
             timeKind: .albumListeningTime,
             playCount: playCount,
             listeningDuration: listeningDuration,
-            detail: "Inside \(title)",
+            detail: title,
             playThresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000],
             timeThresholds: [2, 5, 10, 24, 50, 100, 250, 500],
             playImage: "rectangle.stack.fill"
@@ -739,10 +775,10 @@ enum MediaMilestoneEngine {
             timeKind: .artistListeningTime,
             playCount: playCount,
             listeningDuration: listeningDuration,
-            detail: "With \(name)",
+            detail: name,
             playThresholds: [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
             timeThresholds: [5, 10, 25, 50, 100, 250, 500, 1_000],
-            playImage: "star.fill"
+            playImage: "waveform"
         )
     }
 
@@ -785,8 +821,8 @@ enum RecapMilestoneEngine {
             currentValue: Double(artistCount),
             thresholds: [10, 25, 50, 100, 250, 500, 1_000],
             unit: "artists",
-            detail: "Artists listened to in \(periodName)",
-            systemImage: "person.2.wave.2.fill"
+            detail: periodName,
+            systemImage: "person.2.fill"
         )
 
         milestones += MilestoneSeriesBuilder.milestones(
@@ -794,8 +830,8 @@ enum RecapMilestoneEngine {
             currentValue: Double(recap.playedSongCount),
             thresholds: [25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000],
             unit: "songs",
-            detail: "Songs listened to in \(periodName)",
-            systemImage: "music.note.list"
+            detail: periodName,
+            systemImage: "music.note"
         )
 
         let listeningHours = recap.totalListeningDuration / 3_600
@@ -804,7 +840,7 @@ enum RecapMilestoneEngine {
             currentValue: listeningHours,
             thresholds: [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500],
             unit: "hours",
-            detail: "Total listening time in \(periodName)",
+            detail: periodName,
             systemImage: "headphones"
         )
 
@@ -815,8 +851,8 @@ enum RecapMilestoneEngine {
                 currentValue: hours,
                 thresholds: [1, 3, 6, 12, 24, 48, 100, 250],
                 unit: "hours",
-                detail: "Listening time for \(song.title) by \(song.artist)",
-                systemImage: "repeat"
+                detail: "\(song.title) by \(song.artist)",
+                systemImage: "music.note"
             )
         }
 
@@ -827,7 +863,7 @@ enum RecapMilestoneEngine {
                 currentValue: hours,
                 thresholds: [2, 5, 10, 24, 50, 100, 250],
                 unit: "hours",
-                detail: "Listening time for \(album.title) by \(album.subtitle)",
+                detail: "\(album.title) by \(album.subtitle)",
                 systemImage: "rectangle.stack.fill"
             )
         }
@@ -839,8 +875,8 @@ enum RecapMilestoneEngine {
                 currentValue: hours,
                 thresholds: [5, 10, 25, 50, 100, 250, 500],
                 unit: "hours",
-                detail: "Listening time for \(artist.title)",
-                systemImage: "star.fill"
+                detail: artist.title,
+                systemImage: "waveform"
             )
         }
 

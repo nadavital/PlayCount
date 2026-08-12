@@ -146,7 +146,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(Set(artistMilestones.map(\.stage)).count, artistMilestones.count)
         XCTAssertEqual(artistMilestones.suffix(3).map(\.stage), [6, 7, 8])
         XCTAssertFalse(artistMilestones[5].isEarned)
-        XCTAssertEqual(artistMilestones[5].compactValueLabel, "263 of 500 artists")
+        XCTAssertEqual(artistMilestones[5].compactValueLabel, "Next milestone")
         XCTAssertEqual(visibleMilestones.filter { $0.kind == .artistDiscovery }.count, 6)
         XCTAssertEqual(Set(milestones.map(\.id)).count, milestones.count)
     }
@@ -165,7 +165,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(songGroups[0].filter(\.isEarned).map(\.title), ["10 Plays", "25 Plays", "50 Plays"])
         XCTAssertEqual(songGroups[0].first { !$0.isEarned }?.title, "100 Plays")
         XCTAssertEqual(songGroups[1].filter(\.isEarned).last?.title, "24 Hours")
-        XCTAssertEqual(songGroups[1].first { !$0.isEarned }?.compactValueLabel, "24 of 48 hours")
+        XCTAssertEqual(songGroups[1].first { !$0.isEarned }?.compactValueLabel, "Next milestone")
 
         let album = MediaMilestoneEngine.album(
             playCount: 520,
@@ -205,7 +205,7 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(plays50?.valueLabel, "50 plays earned")
         XCTAssertFalse(plays100?.isEarned == true)
         XCTAssertEqual(plays100?.statusLabel, "Milestone locked")
-        XCTAssertEqual(plays100?.compactValueLabel, "50 of 100 plays")
+        XCTAssertEqual(plays100?.compactValueLabel, "Next milestone")
         XCTAssertTrue(hours3?.isEarned == true)
         XCTAssertFalse(hours6?.isEarned == true)
     }
@@ -256,6 +256,55 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(unlocked.filter { $0.kind == .artistPlays }.map(\.title), ["100 Plays", "250 Plays"])
         XCTAssertEqual(unlocked.filter { $0.kind == .artistListeningTime }.map(\.title), ["10 Hours", "25 Hours"])
         XCTAssertTrue(unlocked.allSatisfy(\.isEarned))
+    }
+
+    func testMonthlyHighlightsAddOnlyTheClosestNearbyMilestones() {
+        let previous = MediaMilestoneEngine.artist(
+            playCount: 90,
+            listeningDuration: 9 * 3_600,
+            name: "Nova Lane"
+        )
+        let current = MediaMilestoneEngine.artist(
+            playCount: 93,
+            listeningDuration: 9.5 * 3_600,
+            name: "Nova Lane"
+        )
+
+        let highlights = MilestoneCollectionPresentation.monthlyHighlights(
+            current: current,
+            previous: previous
+        )
+
+        XCTAssertEqual(highlights.map(\.title), ["10 Hours", "100 Plays"])
+        XCTAssertTrue(highlights.allSatisfy { !$0.isEarned })
+    }
+
+    func testFeaturedMilestonesPreferNearbyThresholdOverOldEarnedTier() throws {
+        let milestones = MediaMilestoneEngine.song(
+            playCount: 93,
+            listeningDuration: 2.8 * 3_600,
+            title: "Glass Rain"
+        )
+
+        let featured = MilestoneCollectionPresentation.featuredMilestones(from: milestones, limit: 2)
+
+        XCTAssertEqual(featured.count, 2)
+        XCTAssertEqual(try XCTUnwrap(featured.first { $0.kind == .songPlays }).targetValue, 100)
+        XCTAssertEqual(try XCTUnwrap(featured.first { $0.kind == .songListeningTime }).targetValue, 3)
+        XCTAssertTrue(featured.allSatisfy { !$0.isEarned })
+    }
+
+    func testMediaMilestoneCopyNamesTheMeasuredItem() throws {
+        let milestone = try XCTUnwrap(
+            MediaMilestoneEngine.album(
+                playCount: 1,
+                listeningDuration: 24 * 3_600,
+                title: "Petal"
+            ).first { $0.kind == .albumListeningTime && $0.targetValue == 24 }
+        )
+
+        XCTAssertEqual(milestone.achievementDescription, "You've listened to Petal for 24 hours.")
+        XCTAssertEqual(milestone.kind.collectionTitle, "Time With This Album")
     }
 
     func testDetailProgressSummariesUseHighestEarnedMedalAndNextThreshold() {

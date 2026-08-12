@@ -5,6 +5,7 @@ enum RecapBackgroundRefreshScheduler {
     static let identifier = "com.nadavavital.PlayCount.recap-refresh"
 
     static func schedule() {
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
         let request = BGAppRefreshTaskRequest(identifier: identifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 6 * 60 * 60)
 

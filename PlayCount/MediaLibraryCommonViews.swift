@@ -548,8 +548,7 @@ struct LoadingListSection: View {
         Group {
             Section {
                 HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
+                    PlayCountLoadingMark(size: 24)
 
                     Text(title)
                         .font(.callout.weight(.medium))
@@ -571,37 +570,62 @@ struct LoadingListSection: View {
 }
 
 private struct LoadingMediaRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
+        PhaseAnimator(reduceMotion ? [false] : [false, true]) { highlighted in
+            row
+                .opacity(highlighted ? 0.58 : 0.9)
+        } animation: { _ in
+            .easeInOut(duration: 0.9)
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(.secondary.opacity(0.14))
-                .frame(width: 34, height: 34)
-
+            Circle().fill(.secondary.opacity(0.13)).frame(width: 34, height: 34)
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.secondary.opacity(0.14))
-                .frame(width: 56, height: 56)
-
+                .fill(.secondary.opacity(0.14)).frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 7) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.14))
-                    .frame(maxWidth: 170)
-                    .frame(height: 13)
-
+                    .fill(.secondary.opacity(0.14)).frame(maxWidth: 170).frame(height: 13)
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.1))
-                    .frame(maxWidth: 118)
-                    .frame(height: 10)
+                    .fill(.secondary.opacity(0.1)).frame(maxWidth: 118).frame(height: 10)
             }
-
             Spacer(minLength: 8)
-
-            Capsule()
-                .fill(.secondary.opacity(0.12))
-                .frame(width: 44, height: 28)
+            Capsule().fill(.secondary.opacity(0.12)).frame(width: 44, height: 28)
         }
         .frame(minHeight: 64)
         .padding(.vertical, 4)
         .redacted(reason: .placeholder)
+    }
+}
+
+struct PlayCountLoadingMark: View {
+    let size: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        PhaseAnimator(reduceMotion ? [false] : [false, true]) { expanded in
+            ZStack {
+                Circle()
+                    .stroke(Color.accentColor.opacity(expanded ? 0.18 : 0.42), lineWidth: size * 0.08)
+                    .scaleEffect(expanded ? 1.18 : 0.9)
+                Circle()
+                    .fill(.thinMaterial)
+                    .overlay {
+                        Circle().strokeBorder(.white.opacity(0.22), lineWidth: 0.7)
+                    }
+                Image(systemName: "music.note")
+                    .font(.system(size: size * 0.42, weight: .bold))
+                    .foregroundStyle(Color.accentColor)
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+            }
+            .frame(width: size, height: size)
+        } animation: { _ in
+            .easeInOut(duration: 1.05)
+        }
+        .accessibilityHidden(true)
     }
 }
 

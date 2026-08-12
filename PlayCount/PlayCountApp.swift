@@ -43,7 +43,9 @@ struct PlayCountApp: App {
         }
         .backgroundTask(.appRefresh(RecapBackgroundRefreshScheduler.identifier)) {
             RecapBackgroundRefreshScheduler.schedule()
-            _ = await mediaLibraryManager.recordBackgroundRecapSnapshot()
+            if let update = await mediaLibraryManager.recordBackgroundRecapSnapshot() {
+                await RecapNotificationScheduler.shared.scheduleBackgroundUpdate(update)
+            }
         }
     }
 }

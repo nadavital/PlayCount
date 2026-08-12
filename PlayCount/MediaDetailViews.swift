@@ -200,7 +200,9 @@ struct SongInfoView: View {
                     .frame(maxWidth: .infinity)
 
                 MediaDetailMilestonesSection(
-                    milestones: manager.milestones(for: song)
+                    milestones: manager.milestones(for: song),
+                    artwork: song.artwork,
+                    artworkCornerRadius: 16
                 )
 
                 if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
@@ -323,7 +325,9 @@ struct AlbumInfoView: View {
                     .frame(maxWidth: .infinity)
 
                 MediaDetailMilestonesSection(
-                    milestones: manager.milestones(for: resolvedAlbum)
+                    milestones: manager.milestones(for: resolvedAlbum),
+                    artwork: resolvedAlbum.artwork,
+                    artworkCornerRadius: 16
                 )
 
                 if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -468,7 +472,9 @@ struct ArtistInfoView: View {
                         .frame(maxWidth: .infinity)
 
                     MediaDetailMilestonesSection(
-                        milestones: manager.milestones(for: resolvedArtist)
+                        milestones: manager.milestones(for: resolvedArtist),
+                        artwork: resolvedArtist.artwork,
+                        artworkCornerRadius: 38
                     )
 
                     if let resolvedRecapContext, !monthlySongs.isEmpty {
@@ -1229,6 +1235,8 @@ private struct MediaDetailListeningMetrics: View {
 
 private struct MediaDetailMilestonesSection: View {
     let milestones: [RecapMilestone]
+    let artwork: MPMediaItemArtwork?
+    let artworkCornerRadius: CGFloat
 
     private var summaries: [MilestoneProgressSummary] {
         MilestoneCollectionPresentation.progressSummary(from: milestones)
@@ -1248,7 +1256,11 @@ private struct MediaDetailMilestonesSection: View {
             MilestoneShelf {
                 VStack(spacing: 10) {
                     ForEach(summaries) { summary in
-                        MediaMilestoneProgressCard(summary: summary)
+                        MediaMilestoneProgressCard(
+                            summary: summary,
+                            artwork: artwork,
+                            artworkCornerRadius: artworkCornerRadius
+                        )
                     }
                 }
                 .padding(.vertical, 4)
@@ -1262,6 +1274,8 @@ private struct MediaDetailMilestonesSection: View {
 
 private struct MediaMilestoneProgressCard: View {
     let summary: MilestoneProgressSummary
+    let artwork: MPMediaItemArtwork?
+    let artworkCornerRadius: CGFloat
     @State private var isShowingPath = false
 
     var body: some View {
@@ -1269,20 +1283,31 @@ private struct MediaMilestoneProgressCard: View {
             isShowingPath = true
         } label: {
             HStack(spacing: 14) {
-                MilestoneBadge(milestone: summary.featured, size: 62)
+                ZStack(alignment: .bottomTrailing) {
+                    ArtworkView(
+                        artwork: artwork,
+                        size: CGSize(width: 72, height: 72),
+                        cornerRadius: artworkCornerRadius
+                    )
+                    MilestoneBadge(
+                        milestone: summary.featured,
+                        size: 34,
+                        showsProgress: summary.highestEarned == nil && summary.next != nil
+                    )
+                    .offset(x: 5, y: 5)
+                }
+                .padding(.trailing, 4)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(summary.kind.collectionTitle)
                         .font(.headline)
-                    Text(summary.featured.currentValueLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
 
                     if let next = summary.next {
                         ProgressView(
                             value: min(next.currentValue, next.targetValue),
                             total: next.targetValue
                         )
+                        .tint(MilestoneMedalTier(stage: next.stage).glassTint)
                         Text("Next: \(next.title)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1312,7 +1337,7 @@ private struct MediaMilestoneProgressCard: View {
 
     private var accessibilityLabel: String {
         let earned = summary.highestEarned.map { "Highest earned: \($0.title)." } ?? "No milestone earned yet."
-        let next = summary.next.map { "Next: \($0.title), \($0.compactValueLabel)." } ?? "Collection complete."
+        let next = summary.next.map { "Next: \($0.title), \($0.valueLabel)." } ?? "Collection complete."
         return "\(summary.kind.collectionTitle). \(earned) \(next)"
     }
 }

@@ -153,6 +153,11 @@ private final class MutationValidityToken: @unchecked Sendable {
     }
 }
 
+struct BackgroundRecapUpdate: Sendable {
+    let weeklyComparison: WeeklyRecapComparison
+    let newlyEarnedMilestone: RecapMilestone?
+}
+
 final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     
     static let shared = MediaLibraryManager()
@@ -680,13 +685,16 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     @discardableResult
-    func recordBackgroundRecapSnapshot(reason: RecapSnapshotReason = .backgroundRefresh) async -> Bool {
+    func recordBackgroundRecapSnapshot(reason: RecapSnapshotReason = .backgroundRefresh) async -> BackgroundRecapUpdate? {
         #if DEBUG
         if Self.isScreenshotModeEnabled {
             await MainActor.run {
                 self.loadScreenshotFixture()
             }
-            return true
+            return BackgroundRecapUpdate(
+                weeklyComparison: self.weeklyRecapComparison,
+                newlyEarnedMilestone: nil
+            )
         }
         #endif
 
@@ -703,11 +711,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             self.snapshotMutationToken = token
             return (self.snapshotMutationGeneration, token, self.sortMetric, self.fetchLimit)
         }
-        guard let operation else { return false }
+        guard let operation else { return nil }
         let generation = operation.generation
         let token = operation.token
 
-        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore, milestoneLedger] in
+        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison, RecapMilestone?)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore, milestoneLedger] in
             let snapshot = Self.fetchLibrarySnapshot()
             let preparedSnapshot = Self.prepareLibrarySnapshot(
                 snapshot,
@@ -719,6 +727,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.snapshotMutationGeneration == generation
             }) else { return nil }
             let capturedAt = Date()
+            let priorPresentation = snapshotStore.cachedRecapPresentation(
+                sourceSongs: snapshot.songs,
+                sourceAlbums: snapshot.albums,
+                sourceArtists: snapshot.artists
+            )
             milestoneLedger.observe(
                 songs: snapshot.songs,
                 albums: snapshot.albums,
@@ -746,7 +759,20 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             let weeklyComparison = token.isValid && MPMediaLibrary.authorizationStatus() == .authorized
                 ? weeklyInsightStore.record(recap: recap, at: capturedAt)
                 : weeklyInsightStore.currentComparison(at: capturedAt)
-            return (preparedSnapshot, recap, cachedPresentation, weeklyComparison)
+            let year = Calendar.current.component(.year, from: capturedAt)
+            let previousMilestones = priorPresentation.yearlyRecaps[year].map {
+                RecapMilestoneEngine.milestones(for: $0, periodName: String(year))
+            }
+            let currentMilestones = cachedPresentation.yearlyRecaps[year].map {
+                RecapMilestoneEngine.milestones(for: $0, periodName: String(year))
+            } ?? []
+            let newlyEarned = previousMilestones.flatMap {
+                MilestoneCollectionPresentation.newlyEarned(
+                    current: currentMilestones,
+                    previous: $0
+                ).last
+            }
+            return (preparedSnapshot, recap, cachedPresentation, weeklyComparison, newlyEarned)
         }.value
 
         guard let result else {
@@ -757,7 +783,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     self.handleAuthorizationLostDuringRefresh()
                 }
             }
-            return false
+            return nil
         }
 
         let didApply = await MainActor.run {
@@ -787,7 +813,11 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 }
             }.value
         }
-        return didApply
+        guard didApply else { return nil }
+        return BackgroundRecapUpdate(
+            weeklyComparison: result.3,
+            newlyEarnedMilestone: result.4
+        )
     }
 
     func recap(forMonthContaining date: Date) -> MonthlyRecap {

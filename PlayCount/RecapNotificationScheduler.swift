@@ -10,8 +10,14 @@ final class RecapNotificationScheduler: NSObject, UNUserNotificationCenterDelega
 
     private enum Identifier {
         static let weekly = "playcount.weekly-recap"
+        static let backgroundUpdate = "playcount.background-update"
         static let monthly = "playcount.monthly-recap"
         static let debug = "playcount.debug-recap"
+    }
+
+    private enum DefaultsKey {
+        static let lastBackgroundUpdateWeek = "playcount.last-background-update-week"
+        static let lastMilestoneID = "playcount.last-notified-milestone"
     }
 
     private override init() {
@@ -39,6 +45,51 @@ final class RecapNotificationScheduler: NSObject, UNUserNotificationCenterDelega
         center.removePendingNotificationRequests(withIdentifiers: [Identifier.weekly, Identifier.monthly])
         center.add(weeklyRequest())
         center.add(monthlyRequest())
+    }
+
+    func scheduleBackgroundUpdate(_ update: BackgroundRecapUpdate) async {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            return
+        }
+
+        let defaults = UserDefaults.standard
+
+        let content: UNMutableNotificationContent
+        if let milestone = update.newlyEarnedMilestone {
+            let milestoneKey = "\(Calendar.current.component(.year, from: Date()))-\(milestone.id)"
+            guard defaults.string(forKey: DefaultsKey.lastMilestoneID) != milestoneKey else { return }
+            content = recapContent(
+                title: "New PlayCount medal",
+                body: milestone.achievementDescription
+            )
+            defaults.set(milestoneKey, forKey: DefaultsKey.lastMilestoneID)
+        } else {
+            let calendar = Calendar.current
+            let weekStart = calendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? calendar.startOfDay(for: Date())
+            let weekKey = weekStart.timeIntervalSinceReferenceDate
+            guard defaults.double(forKey: DefaultsKey.lastBackgroundUpdateWeek) != weekKey else { return }
+            let insight = update.weeklyComparison.current
+            guard insight.hasActivity else { return }
+            if let song = insight.topSong {
+                content = recapContent(
+                    title: "\(song.title) led your week",
+                    body: "\(song.playDelta.formatted()) plays so far. See the rest of your weekly listening in PlayCount."
+                )
+            } else {
+                content = recapContent(
+                    title: "Your week in music is ready",
+                    body: "You listened for \(insight.totalListeningDuration.formattedListeningMinutes). See what changed in PlayCount."
+                )
+            }
+            defaults.set(weekKey, forKey: DefaultsKey.lastBackgroundUpdateWeek)
+        }
+
+        center.removePendingNotificationRequests(withIdentifiers: [Identifier.weekly, Identifier.backgroundUpdate])
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5 * 60, repeats: false)
+        try? await center.add(UNNotificationRequest(identifier: Identifier.backgroundUpdate, content: content, trigger: trigger))
+        try? await center.add(weeklyRequest())
     }
 
     #if DEBUG
@@ -81,8 +132,8 @@ final class RecapNotificationScheduler: NSObject, UNUserNotificationCenterDelega
 
         let trigger = UNCalendarNotificationTrigger(dateMatching: date, repeats: true)
         let content = recapContent(
-            title: "Your weekly PlayCount recap is ready",
-            body: "Open PlayCount to refresh your latest snapshot and see what changed."
+            title: "Your week in music is ready",
+            body: "Open PlayCount to see your latest listening highlights."
         )
         return UNNotificationRequest(identifier: Identifier.weekly, content: content, trigger: trigger)
     }
@@ -96,7 +147,7 @@ final class RecapNotificationScheduler: NSObject, UNUserNotificationCenterDelega
         let trigger = UNCalendarNotificationTrigger(dateMatching: date, repeats: true)
         let content = recapContent(
             title: "Your monthly PlayCount recap is ready",
-            body: "Open PlayCount to capture the latest counters and review your month."
+            body: "See the music, movement, and medals that shaped your month."
         )
         return UNNotificationRequest(identifier: Identifier.monthly, content: content, trigger: trigger)
     }

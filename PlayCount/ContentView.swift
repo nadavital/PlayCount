@@ -43,9 +43,7 @@ struct ContentView: View {
 
 private struct AuthorizedLibraryView: View {
     private enum LibraryTab: Hashable {
-        case songs
-        case albums
-        case artists
+        case library
         case recap
         case search
 
@@ -55,21 +53,17 @@ private struct AuthorizedLibraryView: View {
             if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
                arguments.indices.contains(index + 1) {
                 switch arguments[index + 1].lowercased() {
-                case "albums":
-                    return .albums
-                case "artists":
-                    return .artists
                 case "recap":
                     return .recap
                 case "search":
                     return .search
                 default:
-                    return .songs
+                    return .library
                 }
             }
             #endif
 
-            return .songs
+            return .library
         }
 
         static var screenshotPresentsNowPlaying: Bool {
@@ -151,35 +145,10 @@ private struct AuthorizedLibraryView: View {
 
     private var iPhoneBody: some View {
         TabView(selection: $selectedTab) {
-            Tab("Songs", systemImage: "music.note.list", value: LibraryTab.songs) {
+            Tab("Library", systemImage: "music.note.house.fill", value: LibraryTab.library) {
                 NavigationStack {
-                    TopSongsView(
-                        songs: manager.topSongs,
-                        sortMetric: manager.sortMetric,
-                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                        manager: manager
-                    )
-                        .navigationTitle("Top Songs")
-                        .playCountPrimaryTitleDisplayMode()
-                        .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
-                        .toolbar { toolbarContent }
-                }
-            }
-
-            Tab("Albums", systemImage: "rectangle.stack", value: LibraryTab.albums) {
-                NavigationStack {
-                    TopAlbumsView(albums: manager.topAlbums, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
-                        .navigationTitle("Top Albums")
-                        .playCountPrimaryTitleDisplayMode()
-                        .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
-                        .toolbar { toolbarContent }
-                }
-            }
-
-            Tab("Artists", systemImage: "person.2.fill", value: LibraryTab.artists) {
-                NavigationStack {
-                    TopArtistsView(artists: manager.topArtists, sortMetric: manager.sortMetric, hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot, manager: manager)
-                        .navigationTitle("Top Artists")
+                    PhoneLibraryView(manager: manager)
+                        .navigationTitle("Library")
                         .playCountPrimaryTitleDisplayMode()
                         .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                         .toolbar { toolbarContent }
@@ -285,6 +254,73 @@ private struct AuthorizedLibraryView: View {
         LibraryMetricPicker(selection: $manager.sortMetric)
     }
 
+}
+
+private struct PhoneLibraryView: View {
+    private enum Category: String, CaseIterable, Identifiable {
+        case songs = "Songs"
+        case albums = "Albums"
+        case artists = "Artists"
+
+        var id: Self { self }
+    }
+
+    @ObservedObject var manager: MediaLibraryManager
+    @State private var selection: Category = Self.initialCategory
+
+    private static var initialCategory: Category {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
+           arguments.indices.contains(index + 1) {
+            switch arguments[index + 1].lowercased() {
+            case "albums": return .albums
+            case "artists": return .artists
+            default: return .songs
+            }
+        }
+        #endif
+        return .songs
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Library category", selection: $selection) {
+                ForEach(Category.allCases) { category in
+                    Text(category.rawValue).tag(category)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Group {
+                switch selection {
+                case .songs:
+                    TopSongsView(
+                        songs: manager.topSongs,
+                        sortMetric: manager.sortMetric,
+                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                        manager: manager
+                    )
+                case .albums:
+                    TopAlbumsView(
+                        albums: manager.topAlbums,
+                        sortMetric: manager.sortMetric,
+                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                        manager: manager
+                    )
+                case .artists:
+                    TopArtistsView(
+                        artists: manager.topArtists,
+                        sortMetric: manager.sortMetric,
+                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                        manager: manager
+                    )
+                }
+            }
+        }
+    }
 }
 
 private struct NowPlayingAccessoryModifier: ViewModifier {
