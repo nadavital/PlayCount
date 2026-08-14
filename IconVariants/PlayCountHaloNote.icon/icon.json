@@ -8,7 +8,7 @@
         "image-name": "music-note.svg",
         "name": "music note",
         "fill-specializations": [{"value": {"solid": "display-p3:1.00000,1.00000,1.00000,1.00000"}}],
-        "position": {"scale": 0.42, "translation-in-points": [0, 8]}
+        "position": {"scale": 0.36, "translation-in-points": [0, 96]}
       }],
       "shadow": {"kind": "neutral", "opacity": 0.3},
       "translucency": {"enabled": false, "value": 0}
@@ -19,7 +19,7 @@
         "image-name": "disc.svg",
         "name": "clear lens",
         "fill-specializations": [{"value": {"solid": "display-p3:0.82353,0.94118,1.00000,0.85000"}}],
-        "position": {"scale": 0.57, "translation-in-points": [0, 0]}
+        "position": {"scale": 0.58, "translation-in-points": [0, 96]}
       }],
       "lighting": "combined",
       "specular": "inside",
@@ -28,12 +28,12 @@
       "translucency": {"enabled": true, "value": 0.44}
     },
     {
-      "name": "02_middle_halo",
+      "name": "02_medal_rim",
       "layers": [{
         "image-name": "disc.svg",
-        "name": "cyan halo",
+        "name": "cyan medal rim",
         "fill-specializations": [{"value": {"solid": "display-p3:0.09804,0.69412,0.90196,1.00000"}}],
-        "position": {"scale": 0.7, "translation-in-points": [0, 8]}
+        "position": {"scale": 0.7, "translation-in-points": [0, 96]}
       }],
       "lighting": "combined",
       "specular": "outside",
@@ -42,16 +42,24 @@
       "translucency": {"enabled": true, "value": 0.28}
     },
     {
-      "name": "01_outer_halo",
-      "layers": [{
-        "image-name": "disc.svg",
-        "name": "burgundy halo",
-        "fill-specializations": [{"value": {"solid": "display-p3:0.58431,0.10588,0.29412,1.00000"}}],
-        "position": {"scale": 0.83, "translation-in-points": [0, 16]}
-      }],
+      "name": "01_striped_ribbons",
+      "layers": [
+        {
+          "image-name": "ribbon-stripe.svg",
+          "name": "cyan ribbon stripes",
+          "fill-specializations": [{"value": {"solid": "display-p3:0.09412,0.76078,0.96863,1.00000"}}],
+          "position": {"scale": 1.0, "translation-in-points": [0, -88]}
+        },
+        {
+          "image-name": "ribbon-base.svg",
+          "name": "burgundy ribbons",
+          "fill-specializations": [{"value": {"solid": "display-p3:0.65098,0.04706,0.27843,1.00000"}}],
+          "position": {"scale": 1.0, "translation-in-points": [0, -88]}
+        }
+      ],
       "lighting": "combined",
       "specular": "inside",
-      "refractivity": {"depth": 0.08, "enabled": true, "strength": 0.12},
+      "refractivity": {"depth": 0.06, "enabled": true, "strength": 0.1},
       "shadow": {"kind": "layer-color", "opacity": 0.3},
       "translucency": {"enabled": true, "value": 0.18}
     }
