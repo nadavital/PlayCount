@@ -217,15 +217,26 @@ enum MilestoneCollectionPresentation {
     static func monthlyHighlights(
         current: [RecapMilestone],
         previous: [RecapMilestone],
-        nearbyLimit: Int = 2
+        nearbyLimit: Int = 2,
+        includesNearby: Bool = true
     ) -> [RecapMilestone] {
         let unlocked = newlyEarned(current: current, previous: previous)
+        guard includesNearby else { return unlocked }
         let unlockedIDs = Set(unlocked.map(\.id))
         let nearby = groups(from: current)
             .compactMap { $0.first(where: { !$0.isEarned && $0.progress >= 0.7 }) }
             .filter { !unlockedIDs.contains($0.id) }
             .sorted { $0.progress > $1.progress }
         return unlocked + nearby.prefix(nearbyLimit)
+    }
+
+    static func pathMilestones(
+        kind: RecapMilestone.Kind,
+        all: [RecapMilestone],
+        displayed: [RecapMilestone],
+        includesUpcoming: Bool
+    ) -> [RecapMilestone] {
+        (includesUpcoming ? all : displayed).filter { $0.kind == kind }
     }
 
     static func progressSummary(from milestones: [RecapMilestone]) -> [MilestoneProgressSummary] {
@@ -982,15 +993,28 @@ final class WeeklyRecapInsightStore: @unchecked Sendable {
             : max(0, current.totalListeningDuration)
 
         let index = stored.buckets.firstIndex { $0.weekStart == weekStart }
-        var bucket = index.map { stored.buckets[$0] } ?? Bucket(
-            weekStart: weekStart,
-            generatedAt: current.capturedAt,
-            trackingStart: previous.capturedAt,
-            snapshotCount: 1,
-            totalPlayDelta: 0,
-            totalListeningDuration: 0,
-            songs: [:]
-        )
+        // A calendar week can straddle two months, but monthly recap totals reset
+        // at the boundary. Replace that week's partial bucket before applying the
+        // new month's known totals so the chart never combines two recap periods.
+        var bucket = !sameMonth
+            ? Bucket(
+                weekStart: weekStart,
+                generatedAt: current.capturedAt,
+                trackingStart: current.monthStart,
+                snapshotCount: 1,
+                totalPlayDelta: 0,
+                totalListeningDuration: 0,
+                songs: [:]
+            )
+            : index.map { stored.buckets[$0] } ?? Bucket(
+                weekStart: weekStart,
+                generatedAt: current.capturedAt,
+                trackingStart: previous.capturedAt,
+                snapshotCount: 1,
+                totalPlayDelta: 0,
+                totalListeningDuration: 0,
+                songs: [:]
+            )
         bucket.generatedAt = current.capturedAt
         bucket.snapshotCount += 1
         bucket.totalPlayDelta += playDelta
@@ -1063,12 +1087,16 @@ final class WeeklyRecapInsightStore: @unchecked Sendable {
         let currentBucket = ordered.last { $0.weekStart == currentWeekStart }
         let previousWeekStart = calendar.date(byAdding: .weekOfYear, value: -1, to: currentWeekStart)
         let previousBucket = previousWeekStart.flatMap { expectedStart in
-            ordered.last { $0.weekStart == expectedStart }
+            ordered.last { $0.weekStart == expectedStart && $0.snapshotCount > 1 }
+        }
+        let monthInterval = calendar.dateInterval(of: .month, for: date)
+        let measuredHistory = ordered.filter { bucket in
+            bucket.snapshotCount > 1 && (monthInterval?.contains(bucket.weekStart) ?? false)
         }
         return WeeklyRecapComparison(
             current: currentBucket.map(insight(from:)) ?? .empty(for: date, calendar: calendar),
             previous: previousBucket.map(insight(from:)),
-            history: ordered.suffix(8).map(insight(from:))
+            history: measuredHistory.suffix(8).map(insight(from:))
         )
     }
 

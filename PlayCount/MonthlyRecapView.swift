@@ -570,7 +570,8 @@ struct MonthlyRecapView: View {
                                 displayedMilestones: displayedRecapMilestones,
                                 allMilestones: recapMilestones,
                                 periodLabel: milestonePeriodLabel,
-                                showsFullCollection: isShowingYearAggregate
+                                showsFullCollection: isShowingYearAggregate,
+                                showsUpcomingMilestones: isShowingYearAggregate || isCurrentCalendarMonth
                             )
                         }
 
@@ -1133,7 +1134,16 @@ struct MonthlyRecapView: View {
         guard !isShowingYearAggregate else { return recapMilestones }
         return MilestoneCollectionPresentation.monthlyHighlights(
             current: recapMilestones,
-            previous: previousMonthMilestones
+            previous: previousMonthMilestones,
+            includesNearby: isCurrentCalendarMonth
+        )
+    }
+
+    private var isCurrentCalendarMonth: Bool {
+        Calendar.current.isDate(
+            selectedMonthStartOrCurrent,
+            equalTo: Date(),
+            toGranularity: .month
         )
     }
 
@@ -1172,7 +1182,8 @@ struct MonthlyRecapView: View {
         if isShowingYearAggregate {
             return String(selectedRecapYear)
         }
-        return "Unlocked or within reach in " + selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
+        let month = selectedMonthStartOrCurrent.formatted(.dateTime.month(.wide))
+        return isCurrentCalendarMonth ? "Unlocked or within reach in \(month)" : "Unlocked in \(month)"
     }
 
     private var weeklyTopSongArtwork: MPMediaItemArtwork? {
@@ -2741,7 +2752,10 @@ private struct RecapWeeklyInsightSection: View {
             }
 
             if comparison.history.count > 1 {
-                RecapWeeklyHistoryChart(insights: comparison.history)
+                RecapWeeklyHistoryChart(
+                    insights: comparison.history,
+                    currentWeekStart: comparison.current.weekStart
+                )
             }
         }
     }
@@ -2756,24 +2770,21 @@ private struct RecapWeeklyInsightSection: View {
 
 private struct RecapWeeklyHistoryChart: View {
     let insights: [WeeklyRecapInsight]
+    let currentWeekStart: Date
 
     private var averageMinutes: Double {
         guard !insights.isEmpty else { return 0 }
         return insights.reduce(0) { $0 + $1.totalListeningDuration / 60 } / Double(insights.count)
     }
 
-    private var currentWeekStart: Date? {
-        insights.last?.weekStart
-    }
-
     var body: some View {
         RecapSurface {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Listening History")
+                    Text("Minutes by Week")
                         .font(.headline)
                     Spacer()
-                    Text("\(insights.count) tracked weeks")
+                    Text("\(insights.count) measured weeks")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2789,6 +2800,13 @@ private struct RecapWeeklyHistoryChart: View {
                             insight.weekStart == currentWeekStart
                                 ? Color.accentColor
                                 : Color.accentColor.opacity(0.36)
+                        )
+                        .accessibilityLabel(
+                            (insight.weekStart == currentWeekStart ? "Current week, " : "")
+                                + insight.weekStart.formatted(.dateTime.month(.wide).day())
+                        )
+                        .accessibilityValue(
+                            "\(Int((insight.totalListeningDuration / 60).rounded())) minutes"
                         )
                     }
                     RuleMark(y: .value("Average", averageMinutes))
@@ -2825,6 +2843,7 @@ private struct RecapMilestonesSection: View {
     let allMilestones: [RecapMilestone]
     let periodLabel: String
     let showsFullCollection: Bool
+    let showsUpcomingMilestones: Bool
     @State private var isShowingAllMilestones = false
 
     private var visibleMilestones: [RecapMilestone] {
@@ -2875,7 +2894,12 @@ private struct RecapMilestonesSection: View {
                             MilestoneBadgeTile(
                                 milestone: milestone,
                                 badgeSize: 76,
-                                series: allMilestones.filter { $0.kind == milestone.kind }
+                                series: MilestoneCollectionPresentation.pathMilestones(
+                                    kind: milestone.kind,
+                                    all: allMilestones,
+                                    displayed: displayedMilestones,
+                                    includesUpcoming: showsUpcomingMilestones
+                                )
                             )
                             .frame(width: 108)
                         }

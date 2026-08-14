@@ -3244,15 +3244,19 @@ extension MediaLibraryManager {
     private static func screenshotWeeklyRecapComparison(from songs: [TopSong]) -> WeeklyRecapComparison {
         let calendar = Calendar.current
         let now = Date()
-        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now)
-        let weeklyPlays = [38, 52, 44, 69, 57, 83, 61, 74]
+        let monthStart = calendar.dateInterval(of: .month, for: now)?.start ?? calendar.startOfDay(for: now)
+        let fixtureNow = calendar.component(.day, from: now) >= 14
+            ? now
+            : (calendar.date(byAdding: .day, value: 14, to: monthStart) ?? now)
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: fixtureNow)?.start ?? calendar.startOfDay(for: fixtureNow)
+        let weeklyPlays = [61, 74]
         let history = weeklyPlays.enumerated().map { index, plays in
             let offset = index - (weeklyPlays.count - 1)
             let start = calendar.date(byAdding: .weekOfYear, value: offset, to: weekStart) ?? weekStart
             let song = songs[index % songs.count]
             return WeeklyRecapInsight(
                 weekStart: start,
-                generatedAt: index == weeklyPlays.count - 1 ? now : start.addingTimeInterval(6 * 24 * 60 * 60),
+                generatedAt: index == weeklyPlays.count - 1 ? fixtureNow : start.addingTimeInterval(6 * 24 * 60 * 60),
                 trackingStart: start,
                 snapshotCount: 8 + index,
                 totalPlayDelta: plays,
@@ -3266,7 +3270,7 @@ extension MediaLibraryManager {
             )
         }
         return WeeklyRecapComparison(
-            current: history.last ?? .empty(for: now),
+            current: history.last ?? .empty(for: fixtureNow),
             previous: history.dropLast().last,
             history: history
         )

@@ -73,6 +73,10 @@ final class WeeklyRecapInsightsTests: XCTestCase {
             recap: recap(year: 2026, month: 1, plays: 120, songPlays: 40),
             at: date(2026, 1, 30, hour: 9)
         )
+        _ = store.record(
+            recap: recap(year: 2026, month: 1, plays: 130, songPlays: 50),
+            at: date(2026, 1, 31, hour: 9)
+        )
         let result = store.record(
             recap: recap(year: 2026, month: 2, plays: 3, songPlays: 3),
             at: date(2026, 2, 1, hour: 9)
@@ -80,6 +84,8 @@ final class WeeklyRecapInsightsTests: XCTestCase {
 
         XCTAssertEqual(result.current.totalPlayDelta, 3)
         XCTAssertEqual(result.current.topSong?.playDelta, 3)
+        XCTAssertEqual(result.current.snapshotCount, 2)
+        XCTAssertTrue(result.history.isEmpty)
     }
 
     func testMissingWeekIsNotPresentedAsLastWeek() {
@@ -100,6 +106,22 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         )
 
         XCTAssertNil(result.previous)
+    }
+
+    func testWeeklyHistoryOnlyContainsMeasuredWeeksFromCurrentMonth() {
+        let directory = temporaryDirectory()
+        let store = WeeklyRecapInsightStore(directoryURL: directory, calendar: calendar)
+
+        _ = store.record(recap: recap(month: 7, plays: 10, songPlays: 5), at: date(2026, 7, 20, hour: 9))
+        _ = store.record(recap: recap(month: 7, plays: 15, songPlays: 10), at: date(2026, 7, 21, hour: 9))
+        _ = store.record(recap: recap(month: 8, plays: 8, songPlays: 4), at: date(2026, 8, 3, hour: 9))
+        _ = store.record(recap: recap(month: 8, plays: 14, songPlays: 10), at: date(2026, 8, 4, hour: 9))
+        let current = store.record(recap: recap(month: 8, plays: 20, songPlays: 16), at: date(2026, 8, 10, hour: 9))
+
+        XCTAssertEqual(current.current.snapshotCount, 1)
+        XCTAssertEqual(current.history.count, 1)
+        XCTAssertEqual(current.history.first?.totalPlayDelta, 6)
+        XCTAssertTrue(current.history.allSatisfy { calendar.component(.month, from: $0.weekStart) == 8 })
     }
 
     func testWeeklyInsightsPersistInCompactStore() {
@@ -277,6 +299,39 @@ final class WeeklyRecapInsightsTests: XCTestCase {
 
         XCTAssertEqual(highlights.map(\.title), ["10 Hours", "100 Plays"])
         XCTAssertTrue(highlights.allSatisfy { !$0.isEarned })
+    }
+
+    func testHistoricalMonthHighlightsExcludeUnachievedMilestones() {
+        let previous = MediaMilestoneEngine.artist(
+            playCount: 45,
+            listeningDuration: 9 * 3_600,
+            name: "Nova Lane"
+        )
+        let current = MediaMilestoneEngine.artist(
+            playCount: 55,
+            listeningDuration: 9.5 * 3_600,
+            name: "Nova Lane"
+        )
+
+        let highlights = MilestoneCollectionPresentation.monthlyHighlights(
+            current: current,
+            previous: previous,
+            includesNearby: false
+        )
+
+        XCTAssertEqual(highlights.count, 1)
+        XCTAssertEqual(highlights.first?.kind, .artistPlays)
+        XCTAssertEqual(highlights.first?.targetValue, 50)
+        XCTAssertTrue(highlights.allSatisfy(\.isEarned))
+
+        let path = MilestoneCollectionPresentation.pathMilestones(
+            kind: .artistPlays,
+            all: current,
+            displayed: highlights,
+            includesUpcoming: false
+        )
+        XCTAssertEqual(path.map(\.targetValue), [50])
+        XCTAssertTrue(path.allSatisfy(\.isEarned))
     }
 
     func testFeaturedMilestonesPreferNearbyThresholdOverOldEarnedTier() throws {

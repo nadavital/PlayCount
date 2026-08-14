@@ -88,6 +88,30 @@ final class PlayCountAppIntentTests: XCTestCase {
         )
     }
 
+    func testThisMonthRecapNeverFallsBackToHistoricalActivity() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 8, day: 14)))
+        let july = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 1)))
+        let august = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 8, day: 1)))
+
+        XCTAssertNil(
+            PlayCountIntentRecaps.currentMonthUsable(
+                from: [makeRecap(monthStart: july, plays: 12)],
+                now: now,
+                calendar: calendar
+            )
+        )
+        XCTAssertEqual(
+            PlayCountIntentRecaps.currentMonthUsable(
+                from: [makeRecap(monthStart: july, plays: 12), makeRecap(monthStart: august, plays: 4)],
+                now: now,
+                calendar: calendar
+            )?.monthStart,
+            august
+        )
+    }
+
     func testSearchFingerprintChangesForIndexedMetadataAndListeningTime() {
         let original = makeSong(id: 1, title: "Original", artist: "Artist", plays: 2, duration: 60)
         let renamed = makeSong(id: 1, title: "Renamed", artist: "Artist", plays: 2, duration: 60)

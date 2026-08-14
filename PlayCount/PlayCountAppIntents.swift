@@ -559,11 +559,23 @@ enum PlayCountIntentRecaps {
             .filter(\.hasActivity)
             .max { $0.monthStart < $1.monthStart }
     }
+
+    static func currentMonthUsable(
+        from recaps: [MonthlyRecap],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> MonthlyRecap? {
+        recaps
+            .filter {
+                $0.hasActivity && calendar.isDate($0.monthStart, equalTo: now, toGranularity: .month)
+            }
+            .max { $0.generatedAt < $1.generatedAt }
+    }
 }
 
 struct TopSongsThisMonthIntent: AppIntent {
     static let title: LocalizedStringResource = "Get Top Songs This Month"
-    static let description = IntentDescription("Gets the songs with the most new plays in your latest monthly recap.", categoryName: "Recaps")
+    static let description = IntentDescription("Gets the songs with the most new plays in the current month's recap.", categoryName: "Recaps")
 
     @Parameter(title: "Number of Songs", default: 5, inclusiveRange: (1, 10))
     var limit: Int
@@ -579,7 +591,7 @@ struct TopSongsThisMonthIntent: AppIntent {
         try PlayCountIntentAuthorization.requireMediaLibraryAccess()
         let recaps = await manager.storedRecapsForIntents()
         try PlayCountIntentAuthorization.requireMediaLibraryAccess()
-        guard let recap = PlayCountIntentRecaps.latestUsable(from: recaps) else {
+        guard let recap = PlayCountIntentRecaps.currentMonthUsable(from: recaps) else {
             throw PlayCountIntentError.recapUnavailable
         }
         let songs = Array(recap.topSongs.prefix(limit))
