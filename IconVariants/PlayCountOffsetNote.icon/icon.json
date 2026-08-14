@@ -1,0 +1,27 @@
+{
+  "features": ["refractivity", "specular-location"],
+  "fill": {"automatic-gradient": "display-p3:0.07843,0.03137,0.12157,1.00000"},
+  "groups": [
+    {
+      "name": "04_note",
+      "layers": [{"image-name": "music-note.svg", "name": "music note", "fill-specializations": [{"value": {"solid": "display-p3:1.00000,1.00000,1.00000,1.00000"}}], "position": {"scale": 0.39, "translation-in-points": [0, 34]}}],
+      "shadow": {"kind": "neutral", "opacity": 0.32}, "translucency": {"enabled": false, "value": 0}
+    },
+    {
+      "name": "03_front_lens",
+      "layers": [{"image-name": "disc.svg", "name": "front glass", "fill-specializations": [{"value": {"solid": "display-p3:0.96078,0.38431,0.43137,0.92000"}}], "position": {"scale": 0.57, "translation-in-points": [0, 28]}}],
+      "lighting": "combined", "specular": "inside", "refractivity": {"depth": 0.2, "enabled": true, "strength": 0.34}, "shadow": {"kind": "neutral", "opacity": 0.2}, "translucency": {"enabled": true, "value": 0.42}
+    },
+    {
+      "name": "02_cyan_disc",
+      "layers": [{"image-name": "disc.svg", "name": "cyan disc", "fill-specializations": [{"value": {"solid": "display-p3:0.03922,0.69412,0.90196,1.00000"}}], "position": {"scale": 0.68, "translation-in-points": [80, 44]}}],
+      "lighting": "combined", "specular": "outside", "refractivity": {"depth": 0.14, "enabled": true, "strength": 0.2}, "shadow": {"kind": "layer-color", "opacity": 0.3}, "translucency": {"enabled": true, "value": 0.25}
+    },
+    {
+      "name": "01_burgundy_disc",
+      "layers": [{"image-name": "disc.svg", "name": "burgundy disc", "fill-specializations": [{"value": {"solid": "display-p3:0.67843,0.08235,0.27843,1.00000"}}], "position": {"scale": 0.72, "translation-in-points": [-78, -56]}}],
+      "lighting": "combined", "specular": "inside", "refractivity": {"depth": 0.1, "enabled": true, "strength": 0.15}, "shadow": {"kind": "layer-color", "opacity": 0.34}, "translucency": {"enabled": true, "value": 0.2}
+    }
+  ],
+  "supported-platforms": {"circles": ["watchOS"], "squares": "shared"}
+}

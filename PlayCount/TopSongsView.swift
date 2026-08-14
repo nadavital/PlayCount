@@ -5,9 +5,17 @@ struct TopSongsView: View {
     let sortMetric: MediaLibraryManager.SortMetric
     let hasLoadedInitialSnapshot: Bool
     @ObservedObject var manager: MediaLibraryManager
+    var categorySelection: Binding<LibraryCategory>? = nil
 
     var body: some View {
         List {
+            if let categorySelection {
+                LibraryCategoryPicker(selection: categorySelection)
+                    .listRowInsets(.init(top: 8, leading: 16, bottom: 4, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
             if songs.isEmpty {
                 if !hasLoadedInitialSnapshot {
                     LoadingListSection(title: manager.loadingStage.message ?? "Loading your top songs…")

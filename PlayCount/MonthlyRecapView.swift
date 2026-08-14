@@ -2772,9 +2772,17 @@ private struct RecapWeeklyHistoryChart: View {
     let insights: [WeeklyRecapInsight]
     let currentWeekStart: Date
 
+    private var displayedInsights: [WeeklyRecapInsight] {
+        WeeklyRecapComparison.measuredHistory(
+            from: insights,
+            inMonthContaining: currentWeekStart
+        )
+    }
+
     private var averageMinutes: Double {
-        guard !insights.isEmpty else { return 0 }
-        return insights.reduce(0) { $0 + $1.totalListeningDuration / 60 } / Double(insights.count)
+        guard !displayedInsights.isEmpty else { return 0 }
+        return displayedInsights.reduce(0) { $0 + $1.totalListeningDuration / 60 }
+            / Double(displayedInsights.count)
     }
 
     var body: some View {
@@ -2784,17 +2792,24 @@ private struct RecapWeeklyHistoryChart: View {
                     Text("Minutes by Week")
                         .font(.headline)
                     Spacer()
-                    Text("\(insights.count) measured weeks")
+                    Text(
+                        displayedInsights.count == 1
+                            ? "1 tracked week"
+                            : "\(displayedInsights.count) tracked weeks"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Chart {
-                    ForEach(insights, id: \.weekStart) { insight in
+                    ForEach(displayedInsights, id: \.weekStart) { insight in
                         BarMark(
-                            x: .value("Week", insight.weekStart, unit: .weekOfYear),
+                            x: .value(
+                                "Week",
+                                insight.weekStart.formatted(.dateTime.month(.abbreviated).day())
+                            ),
                             y: .value("Minutes", insight.totalListeningDuration / 60),
-                            width: .ratio(0.64)
+                            width: .ratio(0.52)
                         )
                         .foregroundStyle(
                             insight.weekStart == currentWeekStart
@@ -2814,8 +2829,8 @@ private struct RecapWeeklyHistoryChart: View {
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 }
                 .chartXAxis {
-                    AxisMarks(values: .stride(by: .weekOfYear)) { value in
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    AxisMarks { _ in
+                        AxisValueLabel()
                             .font(.caption2)
                         AxisTick().foregroundStyle(.tertiary)
                     }
@@ -2831,7 +2846,7 @@ private struct RecapWeeklyHistoryChart: View {
                         .font(.caption2)
                     }
                 }
-                .frame(height: 142)
+                .frame(height: 126)
                 .accessibilityLabel("Weekly listening history in minutes")
             }
         }

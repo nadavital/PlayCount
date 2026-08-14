@@ -257,18 +257,10 @@ private struct AuthorizedLibraryView: View {
 }
 
 private struct PhoneLibraryView: View {
-    private enum Category: String, CaseIterable, Identifiable {
-        case songs = "Songs"
-        case albums = "Albums"
-        case artists = "Artists"
-
-        var id: Self { self }
-    }
-
     @ObservedObject var manager: MediaLibraryManager
-    @State private var selection: Category = Self.initialCategory
+    @State private var selection: LibraryCategory = Self.initialCategory
 
-    private static var initialCategory: Category {
+    private static var initialCategory: LibraryCategory {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-PlayCountScreenshotTab"),
@@ -284,58 +276,56 @@ private struct PhoneLibraryView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            categoryPicker
-                .padding(.horizontal, 12)
-                .padding(.bottom, 2)
-
-            Group {
-                switch selection {
-                case .songs:
-                    TopSongsView(
-                        songs: manager.topSongs,
-                        sortMetric: manager.sortMetric,
-                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                        manager: manager
-                    )
-                case .albums:
-                    TopAlbumsView(
-                        albums: manager.topAlbums,
-                        sortMetric: manager.sortMetric,
-                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                        manager: manager
-                    )
-                case .artists:
-                    TopArtistsView(
-                        artists: manager.topArtists,
-                        sortMetric: manager.sortMetric,
-                        hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                        manager: manager
-                    )
-                }
+        Group {
+            switch selection {
+            case .songs:
+                TopSongsView(
+                    songs: manager.topSongs,
+                    sortMetric: manager.sortMetric,
+                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                    manager: manager,
+                    categorySelection: $selection
+                )
+            case .albums:
+                TopAlbumsView(
+                    albums: manager.topAlbums,
+                    sortMetric: manager.sortMetric,
+                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                    manager: manager,
+                    categorySelection: $selection
+                )
+            case .artists:
+                TopArtistsView(
+                    artists: manager.topArtists,
+                    sortMetric: manager.sortMetric,
+                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                    manager: manager,
+                    categorySelection: $selection
+                )
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var categoryPicker: some View {
-        if #available(iOS 27.0, *) {
-            picker
-                .pickerStyle(.tabs)
-                .frame(maxWidth: .infinity)
-        } else {
-            picker
-                .pickerStyle(.segmented)
-                .padding(.vertical, 6)
-        }
-    }
+enum LibraryCategory: String, CaseIterable, Identifiable {
+    case songs = "Songs"
+    case albums = "Albums"
+    case artists = "Artists"
 
-    private var picker: some View {
+    var id: Self { self }
+}
+
+struct LibraryCategoryPicker: View {
+    @Binding var selection: LibraryCategory
+
+    var body: some View {
         Picker("Library category", selection: $selection) {
-            ForEach(Category.allCases) { category in
+            ForEach(LibraryCategory.allCases) { category in
                 Text(category.rawValue).tag(category)
             }
         }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: .infinity)
     }
 }
 

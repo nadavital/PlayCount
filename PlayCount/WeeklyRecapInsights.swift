@@ -56,6 +56,17 @@ struct WeeklyRecapComparison: Equatable, Sendable {
     static func empty(at date: Date = Date(), calendar: Calendar = .current) -> WeeklyRecapComparison {
         WeeklyRecapComparison(current: .empty(for: date, calendar: calendar), previous: nil)
     }
+
+    static func measuredHistory(
+        from source: [WeeklyRecapInsight],
+        inMonthContaining date: Date,
+        calendar: Calendar = .current
+    ) -> [WeeklyRecapInsight] {
+        guard let month = calendar.dateInterval(of: .month, for: date) else { return [] }
+        return source
+            .filter { $0.snapshotCount > 1 && month.contains($0.weekStart) }
+            .sorted { $0.weekStart < $1.weekStart }
+    }
 }
 
 struct RecapMilestone: Identifiable, Equatable, Sendable {
@@ -1089,14 +1100,15 @@ final class WeeklyRecapInsightStore: @unchecked Sendable {
         let previousBucket = previousWeekStart.flatMap { expectedStart in
             ordered.last { $0.weekStart == expectedStart && $0.snapshotCount > 1 }
         }
-        let monthInterval = calendar.dateInterval(of: .month, for: date)
-        let measuredHistory = ordered.filter { bucket in
-            bucket.snapshotCount > 1 && (monthInterval?.contains(bucket.weekStart) ?? false)
-        }
+        let measuredHistory = WeeklyRecapComparison.measuredHistory(
+            from: ordered.map(insight(from:)),
+            inMonthContaining: date,
+            calendar: calendar
+        )
         return WeeklyRecapComparison(
             current: currentBucket.map(insight(from:)) ?? .empty(for: date, calendar: calendar),
             previous: previousBucket.map(insight(from:)),
-            history: measuredHistory.suffix(8).map(insight(from:))
+            history: Array(measuredHistory.suffix(8))
         )
     }
 

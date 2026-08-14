@@ -124,6 +124,25 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertTrue(current.history.allSatisfy { calendar.component(.month, from: $0.weekStart) == 8 })
     }
 
+    func testMeasuredHistoryRejectsStaleMonthsAndBaselineOnlyWeeks() {
+        let history = [
+            weeklyInsight(weekStart: date(2026, 7, 27), snapshotCount: 4, minutes: 420),
+            weeklyInsight(weekStart: date(2026, 8, 3), snapshotCount: 6, minutes: 180),
+            weeklyInsight(weekStart: date(2026, 8, 10), snapshotCount: 1, minutes: 900),
+            weeklyInsight(weekStart: date(2026, 8, 10), snapshotCount: 7, minutes: 211),
+            weeklyInsight(weekStart: date(2026, 9, 7), snapshotCount: 5, minutes: 300)
+        ]
+
+        let measured = WeeklyRecapComparison.measuredHistory(
+            from: history,
+            inMonthContaining: date(2026, 8, 14),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(measured.map(\.weekStart), [date(2026, 8, 3), date(2026, 8, 10)])
+        XCTAssertEqual(measured.map { Int($0.totalListeningDuration / 60) }, [180, 211])
+    }
+
     func testWeeklyInsightsPersistInCompactStore() {
         let directory = temporaryDirectory()
         let monday = date(2026, 8, 10, hour: 9)
@@ -689,6 +708,18 @@ final class WeeklyRecapInsightsTests: XCTestCase {
 
     private func date(_ year: Int, _ month: Int, _ day: Int, hour: Int = 0) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    private func weeklyInsight(weekStart: Date, snapshotCount: Int, minutes: Int) -> WeeklyRecapInsight {
+        WeeklyRecapInsight(
+            weekStart: weekStart,
+            generatedAt: weekStart,
+            trackingStart: weekStart,
+            snapshotCount: snapshotCount,
+            totalPlayDelta: minutes / 3,
+            totalListeningDuration: TimeInterval(minutes * 60),
+            topSong: nil
+        )
     }
 
     private func temporaryDirectory() -> URL {
