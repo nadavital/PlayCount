@@ -208,6 +208,56 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         self.unattributedListeningDuration = unattributedListeningDuration
     }
 
+    fileprivate func replacingMonthStart(_ monthStart: Date) -> MonthlyRecap {
+        MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: generatedAt,
+            lastCaptureReason: lastCaptureReason,
+            trackingStart: trackingStart,
+            snapshotCount: snapshotCount,
+            totalPlayDelta: totalPlayDelta,
+            totalSkipDelta: totalSkipDelta,
+            totalListeningDuration: totalListeningDuration,
+            playedSongCount: playedSongCount,
+            listenedArtistCount: listenedArtistCount,
+            newSongCount: newSongCount,
+            topSongs: topSongs,
+            topArtists: topArtists,
+            topAlbums: topAlbums,
+            biggestGainers: biggestGainers,
+            biggestAlbumGainers: biggestAlbumGainers,
+            biggestArtistGainers: biggestArtistGainers,
+            topNewSongs: topNewSongs,
+            unattributedPlayDelta: unattributedPlayDelta,
+            unattributedListeningDuration: unattributedListeningDuration
+        )
+    }
+
+    fileprivate func rebased(at date: Date, reason: RecapSnapshotReason?) -> MonthlyRecap {
+        MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: date,
+            lastCaptureReason: reason,
+            trackingStart: trackingStart,
+            snapshotCount: snapshotCount + 1,
+            totalPlayDelta: totalPlayDelta,
+            totalSkipDelta: totalSkipDelta,
+            totalListeningDuration: totalListeningDuration,
+            playedSongCount: playedSongCount,
+            listenedArtistCount: listenedArtistCount,
+            newSongCount: newSongCount,
+            topSongs: topSongs,
+            topArtists: topArtists,
+            topAlbums: topAlbums,
+            biggestGainers: biggestGainers,
+            biggestAlbumGainers: biggestAlbumGainers,
+            biggestArtistGainers: biggestArtistGainers,
+            topNewSongs: topNewSongs,
+            unattributedPlayDelta: unattributedPlayDelta,
+            unattributedListeningDuration: unattributedListeningDuration
+        )
+    }
+
     var hasActivity: Bool {
         totalPlayDelta > 0 || newSongCount > 0
     }
@@ -258,6 +308,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
     let id: String
     let capturedAt: Date
     let counterSignature: String
+    let reliabilityPolicyVersion: Int?
     let encodedSnapshot: Data
     let encodedRecaps: Data?
     let encodedYearlyRecaps: Data?
@@ -267,6 +318,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         id: String,
         capturedAt: Date,
         counterSignature: String,
+        reliabilityPolicyVersion: Int? = nil,
         encodedSnapshot: Data,
         encodedRecaps: Data? = nil,
         encodedYearlyRecaps: Data? = nil,
@@ -275,10 +327,100 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         self.id = id
         self.capturedAt = capturedAt
         self.counterSignature = counterSignature
+        self.reliabilityPolicyVersion = reliabilityPolicyVersion
         self.encodedSnapshot = encodedSnapshot
         self.encodedRecaps = encodedRecaps
         self.encodedYearlyRecaps = encodedYearlyRecaps
         self.encodedUnattributedIntervals = encodedUnattributedIntervals
+    }
+}
+
+struct RecapReliabilityStatus: Equatable {
+    let lastTrustedUpdate: Date?
+    let lastRejectedObservation: Date?
+    let recentRejectedObservationCount: Int
+
+    static let empty = RecapReliabilityStatus(
+        lastTrustedUpdate: nil,
+        lastRejectedObservation: nil,
+        recentRejectedObservationCount: 0
+    )
+
+    var isUsingLastReliableUpdate: Bool {
+        guard let lastRejectedObservation else { return false }
+        guard let lastTrustedUpdate else { return true }
+        return lastRejectedObservation > lastTrustedUpdate
+    }
+}
+
+struct RecapDiagnosticMonth: Equatable, Identifiable, Sendable {
+    let monthStart: Date
+    let totalPlayDelta: Int
+    let totalListeningDuration: TimeInterval
+    let recapSnapshotCount: Int
+    let storedSnapshotCount: Int
+    let trackingStart: Date?
+    let generatedAt: Date
+    let unattributedPlayDelta: Int
+    let reliabilityPolicyVersion: Int
+    let isCanonicalMonthIdentity: Bool
+
+    var id: Date { monthStart }
+
+    var sourceDescription: String {
+        storedSnapshotCount > 0 ? "\(storedSnapshotCount) local snapshots" : "Synced monthly summary"
+    }
+}
+
+struct RecapDiagnosticsReport: Equatable, Sendable {
+    let generatedAt: Date
+    let appVersion: String
+    let buildNumber: String
+    let reliabilityPolicyVersion: Int
+    let totalStoredSnapshots: Int
+    let monthlyLedgerCount: Int
+    let cloudSummaryCount: Int
+    let duplicateMonthCount: Int
+    let yearlyTotalsMatchMonthlyLedgers: Bool
+    let unattributedIntervalCount: Int
+    let unattributedPlayDelta: Int
+    let lastTrustedUpdate: Date?
+    let lastRejectedObservation: Date?
+    let recentRejectedObservationCount: Int
+    let months: [RecapDiagnosticMonth]
+
+    var hasCanonicalMonthLedger: Bool {
+        duplicateMonthCount == 0 && months.allSatisfy(\.isCanonicalMonthIdentity)
+    }
+
+    var exportText: String {
+        let monthLines = months.map { month in
+            let tracking = month.trackingStart?.formatted(date: .numeric, time: .shortened) ?? "unknown"
+            return """
+            \(month.monthStart.formatted(.dateTime.year().month(.wide))): plays=\(month.totalPlayDelta), minutes=\(Int((month.totalListeningDuration / 60).rounded())), recapSnapshots=\(month.recapSnapshotCount), storedSnapshots=\(month.storedSnapshotCount), trackingStart=\(tracking), generated=\(month.generatedAt.formatted(date: .numeric, time: .shortened)), unattributedPlays=\(month.unattributedPlayDelta), policy=\(month.reliabilityPolicyVersion), canonicalMonth=\(month.isCanonicalMonthIdentity)
+            """
+        }.joined(separator: "\n")
+
+        return """
+        PlayCount Recap Diagnostics
+        App: \(appVersion) (\(buildNumber))
+        Generated: \(generatedAt.formatted(date: .numeric, time: .standard))
+        Reliability policy: \(reliabilityPolicyVersion)
+        Stored snapshots: \(totalStoredSnapshots)
+        Monthly ledgers: \(monthlyLedgerCount)
+        Cloud summaries: \(cloudSummaryCount)
+        Duplicate logical months: \(duplicateMonthCount)
+        Canonical month identities: \(hasCanonicalMonthLedger)
+        Yearly totals match monthly ledgers: \(yearlyTotalsMatchMonthlyLedgers)
+        Unattributed intervals: \(unattributedIntervalCount)
+        Unattributed plays: \(unattributedPlayDelta)
+        Last trusted update: \(lastTrustedUpdate?.formatted(date: .numeric, time: .standard) ?? "none")
+        Last rejected observation: \(lastRejectedObservation?.formatted(date: .numeric, time: .standard) ?? "none")
+        Recent rejected observations: \(recentRejectedObservationCount)
+
+        Monthly coverage
+        \(monthLines.isEmpty ? "No monthly ledgers" : monthLines)
+        """
     }
 }
 
@@ -317,7 +459,8 @@ extension MonthlyRecap {
         fallbackMonth: Date,
         fallbackRecap: MonthlyRecap
     ) -> MonthlyRecap {
-        let calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Calendar.current.timeZone
         guard let firstMonth = months.first else {
             return fallbackRecap
         }
@@ -674,6 +817,7 @@ final class MonthlyRecapSnapshotStore {
     fileprivate static let maxSyncPayloadBytes = 250_000
     fileprivate static let minSyncedSongCount = 100
     private static let currentGapPolicyVersion = 1
+    fileprivate static let currentCounterReliabilityPolicyVersion = 2
     fileprivate static let maxPrioritySyncedSongCount = 120
     fileprivate static let maxSyncedRecapRankedSongCount = 250
     fileprivate static let maxSyncedRecapRankedGroupCount = 100
@@ -843,6 +987,7 @@ final class MonthlyRecapSnapshotStore {
 
         let monthStart: Date
         let generatedAt: Date
+        let reliabilityPolicyVersion: Int?
         let lastCaptureReason: RecapSnapshotReason?
         let trackingStart: Date?
         let snapshotCount: Int
@@ -888,9 +1033,14 @@ final class MonthlyRecapSnapshotStore {
             totalPlayDelta == 0 || !topSongs.isEmpty || !topArtists.isEmpty || !topAlbums.isEmpty
         }
 
-        init(recap: MonthlyRecap, preservingAllRankings: Bool = false) {
+        init(
+            recap: MonthlyRecap,
+            preservingAllRankings: Bool = false,
+            reliabilityPolicyVersion: Int? = MonthlyRecapSnapshotStore.currentCounterReliabilityPolicyVersion
+        ) {
             monthStart = recap.monthStart
             generatedAt = recap.generatedAt
+            self.reliabilityPolicyVersion = reliabilityPolicyVersion
             lastCaptureReason = recap.lastCaptureReason
             trackingStart = recap.trackingStart
             snapshotCount = recap.snapshotCount
@@ -1066,7 +1216,10 @@ final class MonthlyRecapSnapshotStore {
         }
 
         func compacted() -> SyncedMonthlyRecap {
-            SyncedMonthlyRecap(recap: monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: [])))
+            SyncedMonthlyRecap(
+                recap: monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: [])),
+                reliabilityPolicyVersion: reliabilityPolicyVersion
+            )
         }
     }
 
@@ -1076,9 +1229,21 @@ final class MonthlyRecapSnapshotStore {
 
         var id: Int { year }
 
-        init(year: Int, recap: MonthlyRecap) {
+        init(
+            year: Int,
+            recap: MonthlyRecap,
+            reliabilityPolicyVersion: Int? = MonthlyRecapSnapshotStore.currentCounterReliabilityPolicyVersion
+        ) {
             self.year = year
-            self.recap = SyncedMonthlyRecap(recap: recap)
+            self.recap = SyncedMonthlyRecap(
+                recap: recap,
+                reliabilityPolicyVersion: reliabilityPolicyVersion
+            )
+        }
+
+        init(year: Int, recap: SyncedMonthlyRecap) {
+            self.year = year
+            self.recap = recap
         }
 
         func monthlyRecap(artworkLookup: ArtworkLookup) -> MonthlyRecap {
@@ -1137,47 +1302,80 @@ final class MonthlyRecapSnapshotStore {
         let yearlyRecaps: [SyncedYearlyRecap]
     }
 
+    private struct ReliabilityEvent: Codable, Equatable, Identifiable {
+        enum Kind: String, Codable {
+            case rejectedCounterRegression
+            case rejectedCoverageDrop
+        }
+
+        let id: String
+        let occurredAt: Date
+        let kind: Kind
+        let coverageSignature: String?
+        let scannedSongCount: Int
+        let comparableItemCount: Int
+        let regressedItemCount: Int
+        let previousComparablePlayCount: Int
+        let regressedPlayCount: Int
+    }
+
     private struct StoredSnapshots: Codable {
         var schemaVersion: Int
         var gapPolicyVersion: Int
+        var counterReliabilityPolicyVersion: Int
         var snapshots: [LibrarySnapshot]
         var monthlyLedgers: [SyncedMonthlyRecap]
         var syncedRecaps: [SyncedMonthlyRecap]
         var syncedYearlyRecaps: [SyncedYearlyRecap]
         var unattributedIntervals: [UnattributedRecapInterval]
+        var lastTrustedObservationAt: Date?
+        var reliabilityEvents: [ReliabilityEvent]
 
         init(
             schemaVersion: Int,
             gapPolicyVersion: Int = 1,
+            counterReliabilityPolicyVersion: Int = 1,
             snapshots: [LibrarySnapshot],
             monthlyLedgers: [SyncedMonthlyRecap] = [],
             syncedRecaps: [SyncedMonthlyRecap] = [],
             syncedYearlyRecaps: [SyncedYearlyRecap] = [],
-            unattributedIntervals: [UnattributedRecapInterval] = []
+            unattributedIntervals: [UnattributedRecapInterval] = [],
+            lastTrustedObservationAt: Date? = nil,
+            reliabilityEvents: [ReliabilityEvent] = []
         ) {
             self.schemaVersion = schemaVersion
             self.gapPolicyVersion = gapPolicyVersion
+            self.counterReliabilityPolicyVersion = counterReliabilityPolicyVersion
             self.snapshots = snapshots
             self.monthlyLedgers = monthlyLedgers
             self.syncedRecaps = syncedRecaps
             self.syncedYearlyRecaps = syncedYearlyRecaps
             self.unattributedIntervals = unattributedIntervals
+            self.lastTrustedObservationAt = lastTrustedObservationAt
+            self.reliabilityEvents = reliabilityEvents
         }
 
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
             case gapPolicyVersion
+            case counterReliabilityPolicyVersion
             case snapshots
             case monthlyLedgers
             case syncedRecaps
             case syncedYearlyRecaps
             case unattributedIntervals
+            case lastTrustedObservationAt
+            case reliabilityEvents
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
             gapPolicyVersion = try container.decodeIfPresent(Int.self, forKey: .gapPolicyVersion) ?? 0
+            counterReliabilityPolicyVersion = try container.decodeIfPresent(
+                Int.self,
+                forKey: .counterReliabilityPolicyVersion
+            ) ?? 0
             snapshots = try container.decode([LibrarySnapshot].self, forKey: .snapshots)
             monthlyLedgers = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .monthlyLedgers) ?? []
             syncedRecaps = try container.decodeIfPresent([SyncedMonthlyRecap].self, forKey: .syncedRecaps) ?? []
@@ -1185,6 +1383,11 @@ final class MonthlyRecapSnapshotStore {
             unattributedIntervals = try container.decodeIfPresent(
                 [UnattributedRecapInterval].self,
                 forKey: .unattributedIntervals
+            ) ?? []
+            lastTrustedObservationAt = try container.decodeIfPresent(Date.self, forKey: .lastTrustedObservationAt)
+            reliabilityEvents = try container.decodeIfPresent(
+                [ReliabilityEvent].self,
+                forKey: .reliabilityEvents
             ) ?? []
         }
     }
@@ -1240,10 +1443,23 @@ final class MonthlyRecapSnapshotStore {
 
             let syncedRecaps: [SyncedMonthlyRecap] = try metadataCodable("monthlyRecaps", in: database) ?? []
             let gapPolicyVersion = try metadataInteger("gapPolicyVersion", in: database) ?? 0
+            let counterReliabilityPolicyVersion = try metadataInteger(
+                "counterReliabilityPolicyVersion",
+                in: database
+            ) ?? 0
             let monthlyLedgers: [SyncedMonthlyRecap] = try metadataCodable("monthlyLedgers", in: database) ?? syncedRecaps
             let syncedYearlyRecaps: [SyncedYearlyRecap] = try metadataCodable("yearlyRecaps", in: database) ?? []
             let unattributedIntervals: [UnattributedRecapInterval] = try metadataCodable(
                 "unattributedIntervals",
+                in: database
+            ) ?? []
+            let trustedObservationDates: [Date] = try metadataCodable(
+                "lastTrustedObservationAt",
+                in: database
+            ) ?? []
+            let lastTrustedObservationAt = trustedObservationDates.first
+            let reliabilityEvents: [ReliabilityEvent] = try metadataCodable(
+                "reliabilityEvents",
                 in: database
             ) ?? []
             let sql = "SELECT record FROM snapshots ORDER BY sequence ASC"
@@ -1293,11 +1509,14 @@ final class MonthlyRecapSnapshotStore {
             return StoredSnapshots(
                 schemaVersion: Self.schemaVersion,
                 gapPolicyVersion: gapPolicyVersion,
+                counterReliabilityPolicyVersion: counterReliabilityPolicyVersion,
                 snapshots: snapshots,
                 monthlyLedgers: monthlyLedgers,
                 syncedRecaps: syncedRecaps,
                 syncedYearlyRecaps: syncedYearlyRecaps,
-                unattributedIntervals: unattributedIntervals
+                unattributedIntervals: unattributedIntervals,
+                lastTrustedObservationAt: lastTrustedObservationAt,
+                reliabilityEvents: reliabilityEvents
             )
         }
 
@@ -1338,10 +1557,21 @@ final class MonthlyRecapSnapshotStore {
 
                 try setMetadataInteger(Self.schemaVersion, for: "schemaVersion", in: database)
                 try setMetadataInteger(stored.gapPolicyVersion, for: "gapPolicyVersion", in: database)
+                try setMetadataInteger(
+                    stored.counterReliabilityPolicyVersion,
+                    for: "counterReliabilityPolicyVersion",
+                    in: database
+                )
                 try setMetadataCodable(stored.monthlyLedgers, for: "monthlyLedgers", in: database)
                 try setMetadataCodable(stored.syncedRecaps, for: "monthlyRecaps", in: database)
                 try setMetadataCodable(stored.syncedYearlyRecaps, for: "yearlyRecaps", in: database)
                 try setMetadataCodable(stored.unattributedIntervals, for: "unattributedIntervals", in: database)
+                try setMetadataCodable(
+                    stored.lastTrustedObservationAt.map { [$0] } ?? [],
+                    for: "lastTrustedObservationAt",
+                    in: database
+                )
+                try setMetadataCodable(stored.reliabilityEvents, for: "reliabilityEvents", in: database)
                 try execute("COMMIT", in: database)
             } catch {
                 try? execute("ROLLBACK", in: database)
@@ -1792,20 +2022,9 @@ final class MonthlyRecapSnapshotStore {
                 },
                 uniquingKeysWith: { _, latest in latest }
             )
-            let currentMonth = calendar.startOfMonth(containing: date)
-            let availableMonthStarts: [Date]
-            if let firstMonth = monthlyRecaps.first?.monthStart {
-                let normalizedFirstMonth = calendar.startOfMonth(containing: firstMonth)
-                let monthCount = max(
-                    0,
-                    calendar.dateComponents([.month], from: normalizedFirstMonth, to: currentMonth).month ?? 0
-                )
-                availableMonthStarts = (0...monthCount).compactMap {
-                    calendar.date(byAdding: .month, value: $0, to: normalizedFirstMonth)
-                }
-            } else {
-                availableMonthStarts = []
-            }
+            let availableMonthStarts = Array(Set(monthlyRecaps.map {
+                calendar.startOfMonth(containing: $0.monthStart)
+            })).sorted()
             return CachedRecapPresentation(
                 monthlyRecaps: monthlyRecaps,
                 yearlyRecaps: yearlyRecaps,
@@ -1817,6 +2036,12 @@ final class MonthlyRecapSnapshotStore {
     #if DEBUG
     var debugHasLoadedFullSnapshotStore: Bool {
         accessQueue.sync { loadedSnapshots != nil }
+    }
+
+    func debugYearlyReliabilityPolicyVersion(for year: Int) -> Int? {
+        accessQueue.sync {
+            loadLocked().syncedYearlyRecaps.first { $0.year == year }?.recap.reliabilityPolicyVersion
+        }
     }
 
     func debugCreateLegacyArchiveForMigration() throws {
@@ -1834,7 +2059,11 @@ final class MonthlyRecapSnapshotStore {
     func debugInstallPreGapPolicyRecap(_ recap: MonthlyRecap) {
         accessQueue.sync {
             var stored = loadLocked()
-            let ledger = SyncedMonthlyRecap(recap: recap, preservingAllRankings: true)
+            let ledger = SyncedMonthlyRecap(
+                recap: recap,
+                preservingAllRankings: true,
+                reliabilityPolicyVersion: nil
+            )
             stored.gapPolicyVersion = 0
             stored.unattributedIntervals = []
             stored.monthlyLedgers.removeAll { $0.monthStart == recap.monthStart }
@@ -1844,6 +2073,121 @@ final class MonthlyRecapSnapshotStore {
             stored.syncedYearlyRecaps = yearlyRecaps(
                 from: stored.monthlyLedgers,
                 unattributedIntervals: []
+            )
+            saveLocked(stored)
+            loadedSnapshots = nil
+        }
+    }
+
+    func debugInstallPreCounterReliabilityPolicyRecap(_ recap: MonthlyRecap) {
+        accessQueue.sync {
+            var stored = loadLocked()
+            let ledger = SyncedMonthlyRecap(
+                recap: recap,
+                preservingAllRankings: true,
+                reliabilityPolicyVersion: nil
+            )
+            stored.counterReliabilityPolicyVersion = 0
+            stored.monthlyLedgers.removeAll { $0.monthStart == recap.monthStart }
+            stored.monthlyLedgers.append(ledger)
+            stored.syncedRecaps.removeAll { $0.monthStart == recap.monthStart }
+            stored.syncedRecaps.append(ledger.compacted())
+            stored.syncedYearlyRecaps = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            )
+            saveLocked(stored)
+            loadedSnapshots = nil
+        }
+    }
+
+    func debugInstallPreCounterReliabilityPolicyRecapMissingListenedArtistCount(_ recap: MonthlyRecap) throws {
+        try accessQueue.sync {
+            var stored = loadLocked()
+            let modernLedger = SyncedMonthlyRecap(
+                recap: recap,
+                preservingAllRankings: true,
+                reliabilityPolicyVersion: nil
+            )
+            let ledger = try Self.removingListenedArtistCount(from: modernLedger)
+            stored.counterReliabilityPolicyVersion = 0
+            stored.monthlyLedgers.removeAll { $0.monthStart == recap.monthStart }
+            stored.monthlyLedgers.append(ledger)
+            stored.syncedRecaps.removeAll { $0.monthStart == recap.monthStart }
+            stored.syncedRecaps.append(try Self.removingListenedArtistCount(from: ledger.compacted()))
+            stored.syncedYearlyRecaps = try yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            ).map {
+                SyncedYearlyRecap(
+                    year: $0.year,
+                    recap: try Self.removingListenedArtistCount(from: $0.recap)
+                )
+            }
+            saveLocked(stored)
+            loadedSnapshots = nil
+        }
+    }
+
+    private static func removingListenedArtistCount(from recap: SyncedMonthlyRecap) throws -> SyncedMonthlyRecap {
+        let encoded = try JSONEncoder.playCount.encode(recap)
+        guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        object.removeValue(forKey: "listenedArtistCount")
+        return try JSONDecoder.playCount.decode(
+            SyncedMonthlyRecap.self,
+            from: try JSONSerialization.data(withJSONObject: object)
+        )
+    }
+
+    func debugRemoveYearlyRecaps() {
+        accessQueue.sync {
+            var stored = loadLocked()
+            stored.syncedYearlyRecaps = []
+            saveLocked(stored)
+            loadedSnapshots = nil
+        }
+    }
+
+    func debugInstallSyncedRecapCandidates(
+        _ candidates: [(recap: MonthlyRecap, reliabilityPolicyVersion: Int?)]
+    ) {
+        accessQueue.sync {
+            var stored = loadLocked()
+            let monthStarts = Set(candidates.map { $0.recap.monthStart })
+            stored.monthlyLedgers.removeAll { monthStarts.contains($0.monthStart) }
+            stored.syncedRecaps.removeAll { monthStarts.contains($0.monthStart) }
+            for candidate in candidates {
+                let ledger = SyncedMonthlyRecap(
+                    recap: candidate.recap,
+                    preservingAllRankings: true,
+                    reliabilityPolicyVersion: candidate.reliabilityPolicyVersion
+                )
+                stored.monthlyLedgers.append(ledger)
+                stored.syncedRecaps.append(ledger.compacted())
+            }
+            stored.monthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers)
+            stored.syncedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps)
+            saveLocked(stored)
+        }
+    }
+
+    func debugInstallPreMonthIdentityPolicyRecaps(_ recaps: [MonthlyRecap]) {
+        accessQueue.sync {
+            var stored = loadLocked()
+            stored.counterReliabilityPolicyVersion = 1
+            stored.monthlyLedgers = recaps.map {
+                SyncedMonthlyRecap(
+                    recap: $0,
+                    preservingAllRankings: true,
+                    reliabilityPolicyVersion: 1
+                )
+            }
+            stored.syncedRecaps = stored.monthlyLedgers.map { $0.compacted() }
+            stored.syncedYearlyRecaps = yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
             )
             saveLocked(stored)
             loadedSnapshots = nil
@@ -1982,20 +2326,15 @@ final class MonthlyRecapSnapshotStore {
     func availableMonthStarts(through date: Date = Date()) -> [Date] {
         accessQueue.sync {
             let stored = loadLocked()
-            let ordered = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let currentMonth = calendar.startOfMonth(containing: date)
-
-            let firstTrackedMonth = stored.syncedRecaps.map(\.monthStart).min()
-                ?? ordered.first.map { calendar.startOfMonth(containing: $0.capturedAt) }
-            guard let firstMonth = firstTrackedMonth else {
-                return [currentMonth]
-            }
-
-            let monthCount = max(0, calendar.dateComponents([.month], from: firstMonth, to: currentMonth).month ?? 0)
-
-            return (0...monthCount).compactMap {
-                calendar.date(byAdding: .month, value: $0, to: firstMonth)
-            }
+            let persistedMonths = (stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers)
+                .map { calendar.startOfMonth(containing: $0.monthStart) }
+                .filter { $0 <= currentMonth }
+            let snapshotMonths = stored.snapshots.map {
+                calendar.startOfMonth(containing: $0.capturedAt)
+            }.filter { $0 <= currentMonth }
+            let trackedMonths = Array(Set(persistedMonths + snapshotMonths)).sorted()
+            return trackedMonths.isEmpty ? [currentMonth] : trackedMonths
         }
     }
 
@@ -2008,7 +2347,7 @@ final class MonthlyRecapSnapshotStore {
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
                 didChange = true
             }
-            let retainedIntervals = retainedUnattributedIntervals(stored.unattributedIntervals, now: Date())
+            let retainedIntervals = durableUnattributedIntervals(stored.unattributedIntervals)
             if retainedIntervals != stored.unattributedIntervals {
                 stored.unattributedIntervals = retainedIntervals
                 didChange = true
@@ -2052,7 +2391,7 @@ final class MonthlyRecapSnapshotStore {
             if compactRetainedCanonicalSnapshots(in: &stored, now: Date()) {
                 didChange = true
             }
-            let retainedIntervals = retainedUnattributedIntervals(stored.unattributedIntervals, now: Date())
+            let retainedIntervals = durableUnattributedIntervals(stored.unattributedIntervals)
             if retainedIntervals != stored.unattributedIntervals {
                 stored.unattributedIntervals = retainedIntervals
                 didChange = true
@@ -2138,10 +2477,7 @@ final class MonthlyRecapSnapshotStore {
                 stored.unattributedIntervals + incomingUnattributedIntervals
             )
             if mergedUnattributedIntervals != stored.unattributedIntervals {
-                stored.unattributedIntervals = retainedUnattributedIntervals(
-                    mergedUnattributedIntervals,
-                    now: now
-                )
+                stored.unattributedIntervals = durableUnattributedIntervals(mergedUnattributedIntervals)
                 didChange = true
             }
 
@@ -2173,9 +2509,10 @@ final class MonthlyRecapSnapshotStore {
             let stored = loadLocked()
             let ordered = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
             let recap = recap(for: date, snapshots: ordered, syncedRecaps: stored.syncedRecaps)
-            let monthStart = calendar.startOfMonth(containing: date)
-            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? date
-            let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
+            let monthInterval = calendar.recapMonthInterval(containing: date)
+            let monthStart = monthInterval.start
+            let monthEnd = monthInterval.end
+            let inMonth = ordered.filter { monthInterval.contains($0.capturedAt) }
             let latest = ordered.last(where: { $0.capturedAt < monthEnd })
             let baseline = latest.map {
                 baselineSnapshot(for: $0, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
@@ -2205,6 +2542,101 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    func reliabilityStatus() -> RecapReliabilityStatus {
+        accessQueue.sync {
+            let stored = loadLocked()
+            return RecapReliabilityStatus(
+                lastTrustedUpdate: stored.lastTrustedObservationAt ?? stored.snapshots.last?.capturedAt,
+                lastRejectedObservation: stored.reliabilityEvents.last?.occurredAt,
+                recentRejectedObservationCount: stored.reliabilityEvents.count
+            )
+        }
+    }
+
+    func recapDiagnosticsReport(at date: Date = Date()) -> RecapDiagnosticsReport {
+        accessQueue.sync {
+            makeDiagnosticsReport(from: loadLocked(), at: date)
+        }
+    }
+
+    func privacySafeDiagnostics(at date: Date = Date()) -> String {
+        recapDiagnosticsReport(at: date).exportText
+    }
+
+    private func makeDiagnosticsReport(
+        from stored: StoredSnapshots,
+        at date: Date
+    ) -> RecapDiagnosticsReport {
+        let rawLedgers = stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers
+        let canonicalIdentities = rawLedgers.map { Self.canonicalPersistedMonthStart($0.monthStart) }
+        let duplicateMonthCount = max(0, rawLedgers.count - Set(canonicalIdentities).count)
+        let ledgers = Self.mergedSyncedRecaps(rawLedgers)
+        let months = ledgers.reversed().map { ledger in
+            let recap = ledger.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+            let monthYear = calendar.recapYear(containing: ledger.monthStart)
+            let monthNumber = calendar.recapMonth(containing: ledger.monthStart)
+            let storedSnapshotCount = stored.snapshots.lazy.filter {
+                self.calendar.recapYear(containing: $0.capturedAt) == monthYear &&
+                    self.calendar.recapMonth(containing: $0.capturedAt) == monthNumber
+            }.count
+            return RecapDiagnosticMonth(
+                monthStart: ledger.monthStart,
+                totalPlayDelta: recap.totalPlayDelta,
+                totalListeningDuration: recap.totalListeningDuration,
+                recapSnapshotCount: recap.snapshotCount,
+                storedSnapshotCount: storedSnapshotCount,
+                trackingStart: recap.trackingStart,
+                generatedAt: recap.generatedAt,
+                unattributedPlayDelta: recap.unattributedPlayDelta,
+                reliabilityPolicyVersion: ledger.reliabilityPolicyVersion ?? 0,
+                isCanonicalMonthIdentity: ledger.monthStart == Self.canonicalPersistedMonthStart(ledger.monthStart)
+            )
+        }
+
+        let expectedYearlyRecaps = yearlyRecaps(
+            from: ledgers,
+            unattributedIntervals: stored.unattributedIntervals
+        )
+        let expectedYearly = Dictionary(
+            expectedYearlyRecaps.map { ($0.year, $0.recap.totalPlayDelta) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let actualYearly = Dictionary(
+            stored.syncedYearlyRecaps.map { ($0.year, $0.recap.totalPlayDelta) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let yearlyTotalsMatch = expectedYearly == actualYearly
+        let lastEvent = stored.reliabilityEvents.last
+        let effectiveIntervals = Set(ledgers.map { calendar.recapYear(containing: $0.monthStart) })
+            .flatMap { year in
+                effectiveUnattributedIntervals(
+                    for: year,
+                    intervals: stored.unattributedIntervals,
+                    monthlyRecaps: ledgers
+                        .map { $0.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: [])) }
+                        .filter { calendar.recapYear(containing: $0.monthStart) == year }
+                )
+            }
+
+        return RecapDiagnosticsReport(
+            generatedAt: date,
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            buildNumber: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            reliabilityPolicyVersion: stored.counterReliabilityPolicyVersion,
+            totalStoredSnapshots: stored.snapshots.count,
+            monthlyLedgerCount: ledgers.count,
+            cloudSummaryCount: stored.syncedRecaps.count,
+            duplicateMonthCount: duplicateMonthCount,
+            yearlyTotalsMatchMonthlyLedgers: yearlyTotalsMatch,
+            unattributedIntervalCount: effectiveIntervals.count,
+            unattributedPlayDelta: effectiveIntervals.reduce(0) { $0 + $1.recap.totalPlayDelta },
+            lastTrustedUpdate: stored.lastTrustedObservationAt ?? stored.snapshots.last?.capturedAt,
+            lastRejectedObservation: lastEvent?.occurredAt,
+            recentRejectedObservationCount: stored.reliabilityEvents.count,
+            months: months
+        )
+    }
+
     private func recordLocked(
         songs: [TopSong],
         albums: [TopAlbum],
@@ -2224,11 +2656,80 @@ final class MonthlyRecapSnapshotStore {
             songs: songs.map(SongSnapshot.init(song:))
         )
 
+        let previous = stored.snapshots.last(where: {
+            $0.capturedAt < snapshot.capturedAt && $0.isSameDevice(as: snapshot)
+        })
+
+        // MediaPlayer can temporarily return the same library with many counters
+        // reset to zero while the device is offline. Persisting that observation
+        // makes the later online values look like brand-new plays. Keep the last
+        // trustworthy snapshot authoritative until the counters recover.
+        if let previous {
+            let regression = counterRegressionAssessment(snapshot, after: previous)
+            let hasCoverageDrop = !hasComparableCoverage(previous, latest: snapshot)
+            let isMissedMonthBaseline = isUnobservedMonthGap(
+                from: previous.capturedAt,
+                to: snapshot.capturedAt
+            ) && hasComparableScanCount(previous, latest: snapshot)
+            let shouldQuarantineCoverage = hasCoverageDrop && !isMissedMonthBaseline
+            let confirmsCoverageChange = shouldQuarantineCoverage && confirmsStableCoverageChange(
+                snapshot,
+                in: stored
+            )
+            if regression.isLikelyTransient || (shouldQuarantineCoverage && !confirmsCoverageChange) {
+                if shouldCommit() {
+                    stored.reliabilityEvents.append(
+                        ReliabilityEvent(
+                            id: "\(capturedAt.timeIntervalSinceReferenceDate)-\(snapshot.counterSignature)",
+                            occurredAt: capturedAt,
+                            kind: shouldQuarantineCoverage ? .rejectedCoverageDrop : .rejectedCounterRegression,
+                            coverageSignature: snapshot.coverageSignature,
+                            scannedSongCount: songs.count,
+                            comparableItemCount: regression.comparableItemCount,
+                            regressedItemCount: regression.regressedItemCount,
+                            previousComparablePlayCount: regression.previousComparablePlayCount,
+                            regressedPlayCount: regression.regressedPlayCount
+                        )
+                    )
+                    stored.reliabilityEvents = Array(stored.reliabilityEvents.suffix(20))
+                    saveLocked(stored)
+                }
+                return recap(
+                    for: capturedAt,
+                    snapshots: stored.snapshots,
+                    syncedRecaps: stored.syncedRecaps,
+                    sourceSongs: songs,
+                    sourceAlbums: albums,
+                    sourceArtists: artists
+                )
+            }
+
+
+            if confirmsCoverageChange {
+                var updated = stored
+                updated.lastTrustedObservationAt = capturedAt
+                updated.snapshots.append(snapshot)
+                updated.snapshots = retainedCanonicalSnapshots(from: updated.snapshots, now: capturedAt)
+                rebaseMonthlyLedger(in: &updated, current: snapshot)
+                updated.snapshots = compactSnapshotsForLocalStorage(from: updated.snapshots)
+                if shouldCommit() {
+                    saveLocked(updated)
+                    stored = updated
+                }
+                return recap(
+                    for: capturedAt,
+                    snapshots: stored.snapshots,
+                    syncedRecaps: stored.syncedRecaps,
+                    sourceSongs: songs,
+                    sourceAlbums: albums,
+                    sourceArtists: artists
+                )
+            }
+        }
+
         if shouldAppend(snapshot, after: stored.snapshots.last) {
             var updated = stored
-            let previous = updated.snapshots.last(where: {
-                $0.capturedAt < snapshot.capturedAt && $0.isSameDevice(as: snapshot)
-            })
+            updated.lastTrustedObservationAt = capturedAt
             updated.snapshots.append(snapshot)
             updated.snapshots = retainedCanonicalSnapshots(from: updated.snapshots, now: capturedAt)
             if let previous, isUnobservedMonthGap(from: previous.capturedAt, to: snapshot.capturedAt) {
@@ -2241,10 +2742,7 @@ final class MonthlyRecapSnapshotStore {
                         updated.unattributedIntervals + [interval]
                     )
                 }
-                updated.unattributedIntervals = retainedUnattributedIntervals(
-                    updated.unattributedIntervals,
-                    now: capturedAt
-                )
+                updated.unattributedIntervals = durableUnattributedIntervals(updated.unattributedIntervals)
                 establishMonthlyBaseline(in: &updated, current: snapshot)
             } else {
                 updateIncrementalRecap(in: &updated, previous: previous, current: snapshot)
@@ -2254,6 +2752,9 @@ final class MonthlyRecapSnapshotStore {
                 saveLocked(updated)
                 stored = updated
             }
+        } else if shouldCommit(), shouldPersistTrustedObservation(at: capturedAt, in: stored) {
+            stored.lastTrustedObservationAt = capturedAt
+            saveLocked(stored)
         }
 
         return recap(
@@ -2264,6 +2765,82 @@ final class MonthlyRecapSnapshotStore {
             sourceAlbums: albums,
             sourceArtists: artists
         )
+    }
+
+    private struct CounterRegressionAssessment {
+        let comparableItemCount: Int
+        let regressedItemCount: Int
+        let previousComparablePlayCount: Int
+        let regressedPlayCount: Int
+        let isLikelyTransient: Bool
+    }
+
+    private func counterRegressionAssessment(
+        _ snapshot: LibrarySnapshot,
+        after previous: LibrarySnapshot
+    ) -> CounterRegressionAssessment {
+        let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+        var comparableItemCount = 0
+        var regressedItemCount = 0
+        var previousComparablePlayCount = 0
+        var regressedPlayCount = 0
+
+        for song in snapshot.songs {
+            guard let prior = previousByID[song.id], prior.playCount > 0 else { continue }
+            comparableItemCount += 1
+            previousComparablePlayCount += prior.playCount
+
+            guard song.playCount < prior.playCount else { continue }
+            let dateAddedAdvanced = song.dateAdded.map { currentDate in
+                guard let priorDate = prior.dateAdded else { return true }
+                return currentDate.timeIntervalSince(priorDate) > 60
+            } ?? false
+            guard !dateAddedAdvanced else { continue }
+
+            regressedItemCount += 1
+            regressedPlayCount += prior.playCount - song.playCount
+        }
+
+        let isLikelyTransient: Bool
+        if comparableItemCount >= 5, previousComparablePlayCount > 0 {
+            let widespreadItemThreshold = max(5, Int(ceil(Double(comparableItemCount) * 0.05)))
+            let materialPlayThreshold = max(100, Int(ceil(Double(previousComparablePlayCount) * 0.1)))
+            isLikelyTransient = regressedItemCount >= widespreadItemThreshold &&
+                regressedPlayCount >= materialPlayThreshold
+        } else if comparableItemCount > 0, previousComparablePlayCount >= 10 {
+            // A small library cannot meet the normal five-item threshold. A
+            // collapse affecting every comparable item is still safer to hold
+            // than to turn into false new plays when MediaPlayer recovers.
+            let materialPlayThreshold = max(10, Int(ceil(Double(previousComparablePlayCount) * 0.5)))
+            isLikelyTransient = regressedItemCount == comparableItemCount &&
+                regressedPlayCount >= materialPlayThreshold
+        } else {
+            isLikelyTransient = false
+        }
+
+        return CounterRegressionAssessment(
+            comparableItemCount: comparableItemCount,
+            regressedItemCount: regressedItemCount,
+            previousComparablePlayCount: previousComparablePlayCount,
+            regressedPlayCount: regressedPlayCount,
+            isLikelyTransient: isLikelyTransient
+        )
+    }
+
+    private func isLikelyTransientCounterRegression(
+        _ snapshot: LibrarySnapshot,
+        after previous: LibrarySnapshot
+    ) -> Bool {
+        counterRegressionAssessment(snapshot, after: previous).isLikelyTransient
+    }
+
+    private func shouldPersistTrustedObservation(at capturedAt: Date, in stored: StoredSnapshots) -> Bool {
+        if let lastRejected = stored.reliabilityEvents.last?.occurredAt,
+           lastRejected > (stored.lastTrustedObservationAt ?? .distantPast) {
+            return true
+        }
+        guard let lastTrusted = stored.lastTrustedObservationAt else { return true }
+        return capturedAt.timeIntervalSince(lastTrusted) >= 5 * 60
     }
 
     private func shouldAppend(_ snapshot: LibrarySnapshot, after previous: LibrarySnapshot?) -> Bool {
@@ -2277,9 +2854,11 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private func isUnobservedMonthGap(from start: Date, to end: Date) -> Bool {
-        let startMonth = calendar.startOfMonth(containing: start)
-        let endMonth = calendar.startOfMonth(containing: end)
-        return (calendar.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0) > 1
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let startMonth = calendar.recapMonthInterval(containing: start).start
+        let endMonth = calendar.recapMonthInterval(containing: end).start
+        return (gregorian.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0) > 1
     }
 
     private func retainedSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
@@ -2289,14 +2868,13 @@ final class MonthlyRecapSnapshotStore {
         return snapshots.filter { $0.capturedAt >= cutoff }
     }
 
-    private func retainedUnattributedIntervals(
-        _ intervals: [UnattributedRecapInterval],
-        now: Date
+    private func durableUnattributedIntervals(
+        _ intervals: [UnattributedRecapInterval]
     ) -> [UnattributedRecapInterval] {
-        guard let cutoff = calendar.date(byAdding: .month, value: -retentionMonths, to: now) else {
-            return intervals
-        }
-        return intervals.filter { $0.endedAt >= cutoff }
+        // Missed-gap deltas are the only evidence for that listening. Preserve
+        // them for the lifetime of recap history, but cap ranking payloads so
+        // historical yearly totals stay accurate without retaining raw scans.
+        intervals.map { $0.compacted() }
     }
 
     private func retainedCanonicalSnapshots(from snapshots: [LibrarySnapshot], now: Date) -> [LibrarySnapshot] {
@@ -2314,7 +2892,8 @@ final class MonthlyRecapSnapshotStore {
             let ordered = canonicalSnapshots(stream)
             guard let latest = ordered.last else { continue }
             let activeMonth = calendar.startOfMonth(containing: latest.capturedAt)
-            if let baseline = ordered.last(where: { $0.capturedAt < activeMonth }) {
+            let activeMonthBoundary = calendar.recapMonthInterval(containing: latest.capturedAt).start
+            if let baseline = ordered.last(where: { $0.capturedAt < activeMonthBoundary }) {
                 compacted.append(baseline)
             }
             let activeSnapshots = ordered.filter {
@@ -2356,10 +2935,11 @@ final class MonthlyRecapSnapshotStore {
             let ordered = canonicalSnapshots(stream)
             guard let latest = ordered.last else { continue }
             let latestMonth = calendar.startOfMonth(containing: latest.capturedAt)
+            let latestMonthBoundary = calendar.recapMonthInterval(containing: latest.capturedAt).start
             let monthSnapshots = ordered.filter {
                 calendar.startOfMonth(containing: $0.capturedAt) == latestMonth
             }
-            if let baseline = ordered.last(where: { $0.capturedAt < latestMonth }) {
+            if let baseline = ordered.last(where: { $0.capturedAt < latestMonthBoundary }) {
                 syncSnapshots.append(baseline)
             }
             syncSnapshots.append(contentsOf: monthSnapshots)
@@ -2392,6 +2972,7 @@ final class MonthlyRecapSnapshotStore {
                     id: payload.id,
                     capturedAt: payload.capturedAt,
                     counterSignature: payload.counterSignature,
+                    reliabilityPolicyVersion: payload.reliabilityPolicyVersion,
                     encodedSnapshot: payload.encodedSnapshot
                 )
             }
@@ -2424,6 +3005,7 @@ final class MonthlyRecapSnapshotStore {
                 id: payload.id,
                 capturedAt: payload.capturedAt,
                 counterSignature: payload.counterSignature,
+                reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
                 encodedSnapshot: encodedSnapshot,
                 encodedRecaps: encodedRecaps,
                 encodedYearlyRecaps: encodedYearlyRecaps,
@@ -2440,9 +3022,9 @@ final class MonthlyRecapSnapshotStore {
         let generatedLedgers: [SyncedMonthlyRecap]
         if let affectedMonthStarts {
             generatedLedgers = affectedMonthStarts.compactMap { monthStart in
-                let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+                let monthInterval = calendar.recapMonthInterval(containing: monthStart)
                 guard snapshots.contains(where: {
-                    $0.capturedAt >= monthStart && $0.capturedAt < monthEnd
+                    monthInterval.contains($0.capturedAt)
                 }) else { return nil }
                 return SyncedMonthlyRecap(
                     recap: snapshotRecap(for: monthStart, snapshots: snapshots),
@@ -2462,9 +3044,6 @@ final class MonthlyRecapSnapshotStore {
             from: mergedLedgers,
             unattributedIntervals: stored.unattributedIntervals
         )
-        let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
-            stored.syncedYearlyRecaps + generatedYearlyRecaps
-        )
 
         var didChange = false
         if mergedLedgers != stored.monthlyLedgers {
@@ -2475,8 +3054,11 @@ final class MonthlyRecapSnapshotStore {
             stored.syncedRecaps = mergedRecaps
             didChange = true
         }
-        if mergedYearlyRecaps != stored.syncedYearlyRecaps {
-            stored.syncedYearlyRecaps = mergedYearlyRecaps
+        if generatedYearlyRecaps != stored.syncedYearlyRecaps {
+            // Monthly ledgers are the local source of truth. Re-deriving avoids
+            // a stale, lower yearly summary winning a priority merge after a
+            // recording is deleted and re-added under a new persistent ID.
+            stored.syncedYearlyRecaps = generatedYearlyRecaps
             didChange = true
         }
         return didChange
@@ -2492,7 +3074,9 @@ final class MonthlyRecapSnapshotStore {
         rebuildYearly: Bool = true
     ) {
         let monthStart = calendar.startOfMonth(containing: current.capturedAt)
-        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? current.capturedAt
+        let monthInterval = calendar.recapMonthInterval(containing: current.capturedAt)
+        let calculationMonthStart = monthInterval.start
+        let monthEnd = monthInterval.end
         let existing = stored.monthlyLedgers
             .filter { $0.monthStart == monthStart }
             .sorted(by: Self.isHigherPrioritySyncedRecap)
@@ -2514,6 +3098,7 @@ final class MonthlyRecapSnapshotStore {
         let priorRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
         let resolver = RecordingIdentityResolver(snapshots: [previous, current])
         let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+        let previousRecordingIdentities = Set(previous.songs.map { resolver.identity(for: $0) })
 
         var existingSongsByIdentity: [String: MonthlyRecap.RankedSong] = [:]
         var legacyIdentities: [String: Set<String>] = [:]
@@ -2554,13 +3139,13 @@ final class MonthlyRecapSnapshotStore {
         var hasCounterDiscontinuity = false
         for song in current.songs {
             let identity = accumulatedIdentity(for: song)
-            let wasAddedThisMonth = song.dateAdded.map { $0 >= monthStart && $0 < monthEnd } ?? false
+            let wasAddedThisMonth = song.dateAdded.map { $0 >= calculationMonthStart && $0 < monthEnd } ?? false
             let playDelta: Int
             let skipDelta: Int
 
             if let prior = previousByID[song.id] {
                 let dateAddedAdvanced = song.dateAdded.map { currentDate in
-                    guard currentDate >= monthStart && currentDate < monthEnd else { return false }
+                    guard currentDate >= calculationMonthStart && currentDate < monthEnd else { return false }
                     guard let priorDate = prior.dateAdded else { return true }
                     return currentDate.timeIntervalSince(priorDate) > 60
                 } ?? false
@@ -2582,7 +3167,8 @@ final class MonthlyRecapSnapshotStore {
                 // delete/re-add shape. Its new counter is a fresh epoch.
                 playDelta = song.playCount
                 skipDelta = song.skipCount
-                hasCounterDiscontinuity = existingSongsByIdentity[identity] != nil
+                hasCounterDiscontinuity = existingSongsByIdentity[identity] != nil ||
+                    previousRecordingIdentities.contains(identity)
             } else {
                 playDelta = 0
                 skipDelta = 0
@@ -2620,7 +3206,7 @@ final class MonthlyRecapSnapshotStore {
         if !hasCounterDiscontinuity {
             intervalDeltas = rankingDeltas(
                 from: intervalDeltas,
-                monthStart: monthStart,
+                monthStart: calculationMonthStart,
                 monthEnd: monthEnd,
                 aggregatePlayDelta: aggregatePlayDelta
             )
@@ -2699,12 +3285,12 @@ final class MonthlyRecapSnapshotStore {
             ? songListeningDuration
             : aggregateListeningDelta ?? songListeningDuration
         let orderedSnapshots = stored.snapshots.sorted { $0.capturedAt < $1.capturedAt }
-        let inMonthSnapshots = orderedSnapshots.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
+        let inMonthSnapshots = orderedSnapshots.filter { monthInterval.contains($0.capturedAt) }
         let movementBaseline = baselineSnapshot(
             for: current,
             inMonth: inMonthSnapshots,
             ordered: orderedSnapshots,
-            monthStart: monthStart
+            monthStart: calculationMonthStart
         )
         let currentByIdentity = Dictionary(
             current.songs.map { (accumulatedIdentity(for: $0), $0) },
@@ -2754,7 +3340,7 @@ final class MonthlyRecapSnapshotStore {
         )
         guard isPlausibleListeningDuration(
             recap.totalListeningDuration,
-            monthStart: monthStart,
+            monthStart: calculationMonthStart,
             baseline: previous,
             latest: current
         ) else {
@@ -2815,6 +3401,39 @@ final class MonthlyRecapSnapshotStore {
         }
     }
 
+    /// Promotes a repeatedly observed library-size change without attributing
+    /// the newly visible or missing counters as listening. Existing month-to-date
+    /// totals remain intact and this observation becomes the baseline for later
+    /// deltas.
+    private func rebaseMonthlyLedger(
+        in stored: inout StoredSnapshots,
+        current: LibrarySnapshot
+    ) {
+        let monthStart = calendar.startOfMonth(containing: current.capturedAt)
+        guard let existing = stored.monthlyLedgers
+            .filter({ $0.monthStart == monthStart })
+            .sorted(by: Self.isHigherPrioritySyncedRecap)
+            .first else {
+            establishMonthlyBaseline(in: &stored, current: current)
+            return
+        }
+
+        let recap = existing
+            .monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+            .rebased(at: current.capturedAt, reason: current.reason)
+        let ledger = SyncedMonthlyRecap(recap: recap, preservingAllRankings: true)
+        stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+        stored.monthlyLedgers.append(ledger)
+        stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
+        stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+        stored.syncedRecaps.append(ledger.compacted())
+        stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
+        stored.syncedYearlyRecaps = yearlyRecaps(
+            from: stored.monthlyLedgers,
+            unattributedIntervals: stored.unattributedIntervals
+        )
+    }
+
     private func unattributedInterval(
         from previous: LibrarySnapshot,
         to current: LibrarySnapshot,
@@ -2852,10 +3471,17 @@ final class MonthlyRecapSnapshotStore {
         guard totalPlayDelta > 0 || totalSkipDelta > 0 else { return nil }
 
         let artworkLookup = ArtworkLookup(sourceSongs: [])
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let recapYearStart = utc.date(from: DateComponents(
+            timeZone: utc.timeZone,
+            year: calendar.recapYear(containing: current.capturedAt),
+            month: 1,
+            day: 1,
+            hour: 12
+        )) ?? calendar.startOfMonth(containing: current.capturedAt)
         let recap = MonthlyRecap(
-            monthStart: calendar.date(
-                from: DateComponents(year: calendar.component(.year, from: current.capturedAt), month: 1, day: 1)
-            ) ?? calendar.startOfMonth(containing: current.capturedAt),
+            monthStart: recapYearStart,
             generatedAt: current.capturedAt,
             lastCaptureReason: current.reason,
             trackingStart: previous.capturedAt,
@@ -2913,7 +3539,12 @@ final class MonthlyRecapSnapshotStore {
         let artworkLookup = ArtworkLookup(sourceSongs: [])
         let monthlyRecaps = syncedRecaps.map { $0.monthlyRecap(artworkLookup: artworkLookup) }
         let monthlyRecapsByYear = Dictionary(grouping: monthlyRecaps) {
-            calendar.component(.year, from: $0.monthStart)
+            calendar.recapYear(containing: $0.monthStart)
+        }
+        let policyVersionsByYear = Dictionary(grouping: syncedRecaps) {
+            calendar.recapYear(containing: $0.monthStart)
+        }.mapValues { recaps in
+            recaps.map { $0.reliabilityPolicyVersion ?? 0 }.min() ?? 0
         }
 
         return monthlyRecapsByYear.map { year, recaps in
@@ -2931,7 +3562,11 @@ final class MonthlyRecapSnapshotStore {
                 fallbackMonth: fallbackMonth,
                 fallbackRecap: .empty(for: fallbackMonth, calendar: calendar)
             )
-            return SyncedYearlyRecap(year: year, recap: yearlyRecap)
+            return SyncedYearlyRecap(
+                year: year,
+                recap: yearlyRecap,
+                reliabilityPolicyVersion: policyVersionsByYear[year] ?? 0
+            )
         }
     }
 
@@ -2941,8 +3576,8 @@ final class MonthlyRecapSnapshotStore {
         monthlyRecaps: [MonthlyRecap]
     ) -> [UnattributedRecapInterval] {
         let sameYear = intervals.filter {
-            calendar.component(.year, from: $0.startedAt) == year &&
-                calendar.component(.year, from: $0.endedAt) == year
+            calendar.recapYear(containing: $0.startedAt) == year &&
+                calendar.recapYear(containing: $0.endedAt) == year
         }.sorted {
             if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
             return $0.endedAt < $1.endedAt
@@ -3046,13 +3681,20 @@ final class MonthlyRecapSnapshotStore {
     private static func mergedSyncedRecaps(_ recaps: [SyncedMonthlyRecap]) -> [SyncedMonthlyRecap] {
         var recapsByMonth: [Date: SyncedMonthlyRecap] = [:]
         for recap in recaps {
-            guard let existing = recapsByMonth[recap.monthStart] else {
-                recapsByMonth[recap.monthStart] = recap
+            let canonicalMonthStart = canonicalPersistedMonthStart(recap.monthStart)
+            let canonicalRecap = normalizedSyncedRecap(
+                recap,
+                monthStart: canonicalMonthStart,
+                reliabilityPolicyVersion: recap.reliabilityPolicyVersion,
+                preservingAllRankings: true
+            )
+            guard let existing = recapsByMonth[canonicalMonthStart] else {
+                recapsByMonth[canonicalMonthStart] = canonicalRecap
                 continue
             }
 
-            if isHigherPrioritySyncedRecap(recap, than: existing) {
-                recapsByMonth[recap.monthStart] = recap
+            if isHigherPrioritySyncedRecap(canonicalRecap, than: existing) {
+                recapsByMonth[canonicalMonthStart] = canonicalRecap
             }
         }
 
@@ -3062,6 +3704,54 @@ final class MonthlyRecapSnapshotStore {
             }
             return $0.generatedAt < $1.generatedAt
         }
+    }
+
+    private static func normalizedSyncedRecap(
+        _ recap: SyncedMonthlyRecap,
+        monthStart: Date,
+        reliabilityPolicyVersion: Int?,
+        preservingAllRankings: Bool
+    ) -> SyncedMonthlyRecap {
+        let normalized = recap.monthlyRecap(
+            artworkLookup: ArtworkLookup(sourceSongs: [])
+        ).replacingMonthStart(monthStart)
+        return SyncedMonthlyRecap(
+            recap: normalized,
+            preservingAllRankings: preservingAllRankings,
+            reliabilityPolicyVersion: reliabilityPolicyVersion
+        )
+    }
+
+    /// Legacy month starts were encoded as local midnight. Moving between time
+    /// zones therefore created several absolute Dates for the same logical month.
+    /// Choose the nearest UTC month boundary, then store the month at UTC noon so
+    /// it remains in the same calendar month in every supported time zone.
+    private static func canonicalPersistedMonthStart(_ date: Date) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+
+        let components = utc.dateComponents([.year, .month], from: date)
+        guard let currentBoundary = utc.date(from: DateComponents(
+            timeZone: utc.timeZone,
+            year: components.year,
+            month: components.month,
+            day: 1
+        )),
+        let nextBoundary = utc.date(byAdding: .month, value: 1, to: currentBoundary) else {
+            return date
+        }
+
+        let nearestBoundary = abs(date.timeIntervalSince(currentBoundary)) <= abs(date.timeIntervalSince(nextBoundary))
+            ? currentBoundary
+            : nextBoundary
+        let nearestComponents = utc.dateComponents([.year, .month], from: nearestBoundary)
+        return utc.date(from: DateComponents(
+            timeZone: utc.timeZone,
+            year: nearestComponents.year,
+            month: nearestComponents.month,
+            day: 1,
+            hour: 12
+        )) ?? nearestBoundary
     }
 
     private static func mergedSyncedYearlyRecaps(_ recaps: [SyncedYearlyRecap]) -> [SyncedYearlyRecap] {
@@ -3106,6 +3796,12 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private static func isHigherPrioritySyncedRecap(_ lhs: SyncedMonthlyRecap, than rhs: SyncedMonthlyRecap) -> Bool {
+        let lhsPolicyVersion = lhs.reliabilityPolicyVersion ?? 0
+        let rhsPolicyVersion = rhs.reliabilityPolicyVersion ?? 0
+        if lhsPolicyVersion != rhsPolicyVersion {
+            return lhsPolicyVersion > rhsPolicyVersion
+        }
+
         if lhs.hasActivity != rhs.hasActivity {
             return lhs.hasActivity
         }
@@ -3156,15 +3852,14 @@ final class MonthlyRecapSnapshotStore {
         capturedAt: Date,
         calendar: Calendar
     ) -> AggregateCounters {
-        let monthStart = calendar.startOfMonth(containing: capturedAt)
-        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? capturedAt
+        let monthInterval = calendar.recapMonthInterval(containing: capturedAt)
         return AggregateCounters(
             playCount: songs.reduce(0) { $0 + $1.playCount },
             skipCount: songs.reduce(0) { $0 + $1.skipCount },
             listeningDuration: songs.reduce(0) { $0 + (TimeInterval($1.playCount) * $1.playbackDuration) },
             monthNewSongCount: songs.filter {
                 guard let dateAdded = $0.dateAdded else { return false }
-                return dateAdded >= monthStart && dateAdded < monthEnd
+                return monthInterval.contains(dateAdded)
             }.count
         )
     }
@@ -3174,15 +3869,14 @@ final class MonthlyRecapSnapshotStore {
         capturedAt: Date,
         calendar: Calendar
     ) -> AggregateCounters {
-        let monthStart = calendar.startOfMonth(containing: capturedAt)
-        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? capturedAt
+        let monthInterval = calendar.recapMonthInterval(containing: capturedAt)
         return AggregateCounters(
             playCount: songs.reduce(0) { $0 + $1.playCount },
             skipCount: songs.reduce(0) { $0 + $1.skipCount },
             listeningDuration: songs.reduce(0) { $0 + (TimeInterval($1.playCount) * $1.playbackDuration) },
             monthNewSongCount: songs.filter {
                 guard let dateAdded = $0.dateAdded else { return false }
-                return dateAdded >= monthStart && dateAdded < monthEnd
+                return monthInterval.contains(dateAdded)
             }.count
         )
     }
@@ -3226,8 +3920,9 @@ final class MonthlyRecapSnapshotStore {
             for monthSnapshots in snapshotsByMonth.values {
                 let orderedMonthSnapshots = monthSnapshots.sorted { $0.capturedAt < $1.capturedAt }
                 guard let baseline = orderedMonthSnapshots.first else { continue }
-                let monthStart = calendar.startOfMonth(containing: baseline.capturedAt)
-                let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? baseline.capturedAt
+                let monthInterval = calendar.recapMonthInterval(containing: baseline.capturedAt)
+                let monthStart = monthInterval.start
+                let monthEnd = monthInterval.end
                 let baselineSongsByID = Dictionary(uniqueKeysWithValues: baseline.songs.map { ($0.id, $0) })
                 var changedSongScores: [UInt64: (playDelta: Int, listeningDuration: TimeInterval)] = [:]
 
@@ -3383,7 +4078,16 @@ final class MonthlyRecapSnapshotStore {
             }
         }
 
-        return canonical.sortedForSyncPayloads()
+        let ordered = canonical.sortedForSyncPayloads()
+        var reliable: [LibrarySnapshot] = []
+        for snapshot in ordered {
+            let previous = reliable.last(where: { $0.isSameDevice(as: snapshot) })
+            if let previous, isLikelyTransientCounterRegression(snapshot, after: previous) {
+                continue
+            }
+            reliable.append(snapshot)
+        }
+        return reliable
     }
 
     private func recapCandidateForDeviceStream(
@@ -3394,7 +4098,9 @@ final class MonthlyRecapSnapshotStore {
         sourceArtists: [TopArtist]
     ) -> RecapCandidate {
         let monthStart = calendar.startOfMonth(containing: date)
-        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? date
+        let monthInterval = calendar.recapMonthInterval(containing: date)
+        let calculationMonthStart = monthInterval.start
+        let monthEnd = monthInterval.end
 
         guard let latest = ordered.last(where: { $0.capturedAt < monthEnd }) else {
             return RecapCandidate(
@@ -3404,15 +4110,20 @@ final class MonthlyRecapSnapshotStore {
             )
         }
 
-        let inMonth = ordered.filter { $0.capturedAt >= monthStart && $0.capturedAt < monthEnd }
-        let baseline = baselineSnapshot(for: latest, inMonth: inMonth, ordered: ordered, monthStart: monthStart)
+        let inMonth = ordered.filter { monthInterval.contains($0.capturedAt) }
+        let baseline = baselineSnapshot(
+            for: latest,
+            inMonth: inMonth,
+            ordered: ordered,
+            monthStart: calculationMonthStart
+        )
         let artworkLookup = ArtworkLookup(sourceSongs: sourceSongs, sourceAlbums: sourceAlbums, sourceArtists: sourceArtists)
         let epochAnalysis = counterEpochAnalysis(
             baseline: baseline,
             inMonth: inMonth,
             latest: latest,
             history: ordered,
-            monthStart: monthStart,
+            monthStart: calculationMonthStart,
             monthEnd: monthEnd
         )
         let aggregateDeltas = aggregateDeltas(
@@ -3424,7 +4135,7 @@ final class MonthlyRecapSnapshotStore {
 
         let playDeltas = rankingDeltas(
             from: deltas.filter { $0.playDelta > 0 },
-            monthStart: monthStart,
+            monthStart: calculationMonthStart,
             monthEnd: monthEnd,
             aggregatePlayDelta: aggregateDeltas?.playDelta
         )
@@ -3483,7 +4194,7 @@ final class MonthlyRecapSnapshotStore {
 
         let newSongCount = latest.songs.filter { song in
             guard let dateAdded = song.dateAdded else { return false }
-            return dateAdded >= monthStart && dateAdded < monthEnd
+            return dateAdded >= calculationMonthStart && dateAdded < monthEnd
         }.count
         let totalListeningDuration = aggregateDeltas?.listeningDuration ?? deltas.reduce(0) { $0 + $1.listeningDuration }
         let songLevelPlayDelta = playDeltas.reduce(0) { $0 + $1.playDelta }
@@ -3492,7 +4203,12 @@ final class MonthlyRecapSnapshotStore {
             ? min(1, Double(songLevelPlayDelta) / Double(expectedPlayDelta))
             : 1
 
-        guard isPlausibleListeningDuration(totalListeningDuration, monthStart: monthStart, baseline: baseline, latest: latest) else {
+        guard isPlausibleListeningDuration(
+            totalListeningDuration,
+            monthStart: calculationMonthStart,
+            baseline: baseline,
+            latest: latest
+        ) else {
             return RecapCandidate(
                 recap: .empty(for: date, calendar: calendar),
                 rankingCoverage: 0,
@@ -3937,9 +4653,77 @@ final class MonthlyRecapSnapshotStore {
     private func hasComparableCoverage(_ baseline: LibrarySnapshot, latest: LibrarySnapshot) -> Bool {
         let baselineCount = baseline.scannedSongCount ?? baseline.songs.count
         let latestCount = latest.scannedSongCount ?? latest.songs.count
-        guard latestCount > 0 else { return true }
-        guard baselineCount > 0 else { return false }
-        return Double(baselineCount) / Double(latestCount) >= minimumComparableCoverageRatio
+        guard hasComparableScanCount(baseline, latest: latest) else {
+            return false
+        }
+
+        // Cloud payloads intentionally retain only priority songs, so their
+        // aggregate scan counts are the available coverage signal. Local scans
+        // contain every observed song and can additionally prove membership.
+        guard baseline.songs.count >= baselineCount,
+              latest.songs.count >= latestCount else {
+            return true
+        }
+
+        let resolver = RecordingIdentityResolver(snapshots: [baseline, latest])
+        let baselineIdentities = Set(baseline.songs.map { resolver.identity(for: $0) })
+        let latestSongsByIdentity = Dictionary(
+            grouping: latest.songs,
+            by: { resolver.identity(for: $0) }
+        )
+        let latestIdentities = Set(latestSongsByIdentity.keys)
+        guard baselineIdentities.isSubset(of: latestIdentities) else {
+            return false
+        }
+
+        let addedIdentities = latestIdentities.subtracting(baselineIdentities)
+        return addedIdentities.allSatisfy { identity in
+            latestSongsByIdentity[identity]?.allSatisfy { song in
+                song.dateAdded.map { $0 >= baseline.capturedAt } ?? false
+            } ?? false
+        }
+    }
+
+    private func hasComparableScanCount(_ baseline: LibrarySnapshot, latest: LibrarySnapshot) -> Bool {
+        let baselineCount = baseline.scannedSongCount ?? baseline.songs.count
+        let latestCount = latest.scannedSongCount ?? latest.songs.count
+        guard baselineCount > 0, latestCount > 0 else {
+            return baselineCount == latestCount
+        }
+        return Double(min(baselineCount, latestCount)) / Double(max(baselineCount, latestCount))
+            >= minimumComparableCoverageRatio
+    }
+
+    /// A single incomplete MediaPlayer query must never become a counter
+    /// baseline. A real large library edit is promoted only after a library
+    /// shape and a later observation confirms it. Promotion rebases without
+    /// counting the coverage difference as plays.
+    private func confirmsStableCoverageChange(
+        _ snapshot: LibrarySnapshot,
+        in stored: StoredSnapshots
+    ) -> Bool {
+        let latestCount = snapshot.scannedSongCount ?? snapshot.songs.count
+        guard let pending = stored.reliabilityEvents.reversed().first(where: {
+            $0.kind == .rejectedCoverageDrop &&
+                $0.occurredAt > (stored.lastTrustedObservationAt ?? .distantPast)
+        }) else {
+            return false
+        }
+
+        guard snapshot.capturedAt.timeIntervalSince(pending.occurredAt) >= minimumSnapshotInterval,
+              snapshot.capturedAt.timeIntervalSince(pending.occurredAt) <= 7 * 24 * 60 * 60 else {
+            return false
+        }
+
+        let pendingCount = pending.scannedSongCount
+        guard pending.coverageSignature == snapshot.coverageSignature else {
+            return false
+        }
+        guard pendingCount > 0, latestCount > 0 else {
+            return pendingCount == latestCount
+        }
+        return Double(min(pendingCount, latestCount)) / Double(max(pendingCount, latestCount))
+            >= minimumComparableCoverageRatio
     }
 
     private func isPlausibleListeningDuration(
@@ -4186,9 +4970,8 @@ final class MonthlyRecapSnapshotStore {
         if stored.monthlyLedgers.isEmpty {
             stored.monthlyLedgers = stored.syncedRecaps
         }
-        stored.unattributedIntervals = retainedUnattributedIntervals(
-            Self.mergedUnattributedIntervals(stored.unattributedIntervals + discoveredIntervals),
-            now: stored.snapshots.map(\.capturedAt).max() ?? Date()
+        stored.unattributedIntervals = durableUnattributedIntervals(
+            Self.mergedUnattributedIntervals(stored.unattributedIntervals + discoveredIntervals)
         )
 
         for monthStart in affectedMonths {
@@ -4208,7 +4991,7 @@ final class MonthlyRecapSnapshotStore {
         stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
 
-        let affectedYears = Set(affectedMonths.map { calendar.component(.year, from: $0) })
+        let affectedYears = Set(affectedMonths.map { calendar.recapYear(containing: $0) })
         let rebuiltYears = yearlyRecaps(
             from: stored.monthlyLedgers,
             unattributedIntervals: stored.unattributedIntervals
@@ -4233,16 +5016,21 @@ final class MonthlyRecapSnapshotStore {
         stored.monthlyLedgers = stored.monthlyLedgers.map {
             SyncedMonthlyRecap(
                 recap: $0.monthlyRecap(artworkLookup: artworkLookup),
-                preservingAllRankings: true
+                preservingAllRankings: true,
+                reliabilityPolicyVersion: $0.reliabilityPolicyVersion
             )
         }
         stored.syncedRecaps = stored.syncedRecaps.map {
-            SyncedMonthlyRecap(recap: $0.monthlyRecap(artworkLookup: artworkLookup))
+            SyncedMonthlyRecap(
+                recap: $0.monthlyRecap(artworkLookup: artworkLookup),
+                reliabilityPolicyVersion: $0.reliabilityPolicyVersion
+            )
         }
         stored.syncedYearlyRecaps = stored.syncedYearlyRecaps.map {
             SyncedYearlyRecap(
                 year: $0.year,
-                recap: $0.monthlyRecap(artworkLookup: artworkLookup)
+                recap: $0.monthlyRecap(artworkLookup: artworkLookup),
+                reliabilityPolicyVersion: $0.recap.reliabilityPolicyVersion
             )
         }
 
@@ -4259,6 +5047,66 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
+    /// Canonicalizes legacy local-midnight month identities before rebuilding the
+    /// active month. This prevents the same logical month from being summed more
+    /// than once after travel or time-zone changes, while retaining the most
+    /// complete single ledger for each month.
+    private func migrateCounterReliabilityPolicyIfNeeded(in stored: inout StoredSnapshots) -> Bool {
+        guard stored.counterReliabilityPolicyVersion < Self.currentCounterReliabilityPolicyVersion else {
+            return false
+        }
+        stored.counterReliabilityPolicyVersion = Self.currentCounterReliabilityPolicyVersion
+
+        let streams = Dictionary(grouping: stored.snapshots.sortedForSyncPayloads()) {
+            $0.logicalDeviceKey(fallbackDeviceIdentifier: deviceIdentifier)
+        }
+        if stored.monthlyLedgers.isEmpty {
+            stored.monthlyLedgers = stored.syncedRecaps
+        }
+
+        let legacyLedgerCount = stored.monthlyLedgers.count
+        stored.monthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers).map {
+            Self.normalizedSyncedRecap(
+                $0,
+                monthStart: Self.canonicalPersistedMonthStart($0.monthStart),
+                reliabilityPolicyVersion: $0.reliabilityPolicyVersion,
+                preservingAllRankings: true
+            )
+        }
+        stored.syncedRecaps = stored.monthlyLedgers.map { $0.compacted() }
+        let collapsedLedgerCount = max(0, legacyLedgerCount - stored.monthlyLedgers.count)
+        if collapsedLedgerCount > 0 {
+            print("Recap month identity migration collapsed \(collapsedLedgerCount) duplicate month ledger(s)")
+        }
+
+        let activeMonthStarts = Set(streams.values.compactMap { stream in
+            canonicalSnapshots(stream).last.map { calendar.startOfMonth(containing: $0.capturedAt) }
+        })
+
+        for monthStart in activeMonthStarts {
+            let rebuiltRecap = snapshotRecap(for: monthStart, snapshots: stored.snapshots)
+            guard rebuiltRecap.snapshotCount > 0 else { continue }
+            let full = SyncedMonthlyRecap(recap: rebuiltRecap, preservingAllRankings: true)
+            stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+            stored.monthlyLedgers.append(full)
+            stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+            stored.syncedRecaps.append(full.compacted())
+        }
+
+        stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
+        stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
+        let affectedYears = Set(stored.monthlyLedgers.map { calendar.recapYear(containing: $0.monthStart) })
+        let rebuiltYears = yearlyRecaps(
+            from: stored.monthlyLedgers,
+            unattributedIntervals: stored.unattributedIntervals
+        ).filter { affectedYears.contains($0.year) }
+        stored.syncedYearlyRecaps.removeAll { affectedYears.contains($0.year) }
+        stored.syncedYearlyRecaps.append(contentsOf: rebuiltYears)
+        stored.syncedYearlyRecaps.sort { $0.year < $1.year }
+        print("Recap reliability policy migration finished at version \(Self.currentCounterReliabilityPolicyVersion)")
+        return true
+    }
+
     private func loadLocked() -> StoredSnapshots {
         if let loadedSnapshots {
             return loadedSnapshots
@@ -4267,6 +5115,9 @@ final class MonthlyRecapSnapshotStore {
         let ledger = LedgerDatabase(url: ledgerURL)
         if var stored = try? ledger.load() {
             var didMigrate = migrateGapPolicyIfNeeded(in: &stored)
+            if migrateCounterReliabilityPolicyIfNeeded(in: &stored) {
+                didMigrate = true
+            }
             if migrateListenedArtistCountsIfNeeded(in: &stored) {
                 didMigrate = true
             }
@@ -4279,7 +5130,11 @@ final class MonthlyRecapSnapshotStore {
         }
 
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            let empty = StoredSnapshots(schemaVersion: 3, snapshots: [])
+            let empty = StoredSnapshots(
+                schemaVersion: 3,
+                counterReliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                snapshots: []
+            )
             loadedSnapshots = empty
             return empty
         }
@@ -4309,7 +5164,11 @@ final class MonthlyRecapSnapshotStore {
                 return legacy
             }
         } catch {
-            let empty = StoredSnapshots(schemaVersion: 3, snapshots: [])
+            let empty = StoredSnapshots(
+                schemaVersion: 3,
+                counterReliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                snapshots: []
+            )
             loadedSnapshots = empty
             return empty
         }
@@ -4744,6 +5603,11 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             .joined(separator: "|")
     }
 
+    var coverageSignature: String {
+        let identifiers = songs.map(\.id).sorted().map(String.init).joined(separator: "|")
+        return String(Self.stableHash(identifiers), radix: 16)
+    }
+
     func isSameDevice(as snapshot: Self) -> Bool {
         guard let deviceIdentifier, let otherDeviceIdentifier = snapshot.deviceIdentifier else {
             return true
@@ -4809,6 +5673,7 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
             id: snapshot.syncIdentifier,
             capturedAt: snapshot.capturedAt,
             counterSignature: snapshot.counterSignature,
+            reliabilityPolicyVersion: MonthlyRecapSnapshotStore.currentCounterReliabilityPolicyVersion,
             encodedSnapshot: data,
             encodedRecaps: encodedRecaps,
             encodedYearlyRecaps: encodedYearlyRecaps,
@@ -4928,9 +5793,43 @@ private extension JSONDecoder {
 }
 
 extension Calendar {
+    func recapMonthInterval(containing date: Date) -> DateInterval {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.locale = Locale(identifier: "en_US_POSIX")
+        gregorian.timeZone = timeZone
+        return gregorian.dateInterval(of: .month, for: date)
+            ?? DateInterval(start: gregorian.startOfDay(for: date), duration: 31 * 24 * 60 * 60)
+    }
+
+    func recapYear(containing date: Date) -> Int {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.locale = Locale(identifier: "en_US_POSIX")
+        gregorian.timeZone = timeZone
+        return gregorian.component(.year, from: date)
+    }
+
+    func recapMonth(containing date: Date) -> Int {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.locale = Locale(identifier: "en_US_POSIX")
+        gregorian.timeZone = timeZone
+        return gregorian.component(.month, from: date)
+    }
+
     func startOfMonth(containing date: Date) -> Date {
-        let components = dateComponents([.year, .month], from: date)
-        return self.date(from: components) ?? startOfDay(for: date)
+        let localBoundary = recapMonthInterval(containing: date).start
+        var localGregorian = Calendar(identifier: .gregorian)
+        localGregorian.locale = Locale(identifier: "en_US_POSIX")
+        localGregorian.timeZone = timeZone
+        let components = localGregorian.dateComponents([.year, .month], from: localBoundary)
+        var stableCalendar = Calendar(identifier: .gregorian)
+        stableCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return stableCalendar.date(from: DateComponents(
+            timeZone: stableCalendar.timeZone,
+            year: components.year,
+            month: components.month,
+            day: 1,
+            hour: 12
+        )) ?? startOfDay(for: date)
     }
 }
 

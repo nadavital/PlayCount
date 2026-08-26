@@ -28,6 +28,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
         let dateAdded: Date?
         let albumPersistentID: UInt64
         let artistPersistentID: UInt64
+        let discNumber: Int?
         let trackNumber: Int
 
         init(song: TopSong) {
@@ -44,6 +45,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
             dateAdded = song.dateAdded
             albumPersistentID = song.albumPersistentID
             artistPersistentID = song.artistPersistentID
+            discNumber = song.discNumber
             trackNumber = song.trackNumber
         }
 
@@ -63,6 +65,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
                 artwork: nil,
                 albumPersistentID: albumPersistentID,
                 artistPersistentID: artistPersistentID,
+                discNumber: discNumber ?? 0,
                 trackNumber: trackNumber
             )
         }

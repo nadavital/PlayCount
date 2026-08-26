@@ -9,13 +9,6 @@ struct TopSongsView: View {
 
     var body: some View {
         List {
-            if let categorySelection {
-                LibraryCategoryPicker(selection: categorySelection)
-                    .listRowInsets(.init(top: 8, leading: 16, bottom: 4, trailing: 16))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            }
-
             if songs.isEmpty {
                 if !hasLoadedInitialSnapshot {
                     LoadingListSection(title: manager.loadingStage.message ?? "Loading your top songs…")
@@ -71,7 +64,14 @@ struct TopSongsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
-        .scrollEdgeEffectStyle(.soft, for: .top)
+        .playCountSoftTopScrollEdge()
+        .safeAreaBar(edge: .top, spacing: 0) {
+            if let categorySelection {
+                LibraryCategoryPicker(selection: categorySelection)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+            }
+        }
         .refreshable {
             manager.refreshTopItems()
         }

@@ -508,7 +508,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         )
         let recaps = await manager.storedRecapsForIntents()
         let latestUsable = PlayCountIntentRecaps.latestUsable(from: recaps)
-        XCTAssertEqual(latestUsable?.monthStart, priorMonth)
+        XCTAssertEqual(latestUsable?.monthStart, calendar.startOfMonth(containing: priorMonth))
         XCTAssertEqual(latestUsable?.topSongs.first?.playDelta, 5)
         XCTAssertFalse(manager.hasLoadedInitialSnapshot)
     }
@@ -546,8 +546,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
 
         XCTAssertFalse(coldStore.debugHasLoadedFullSnapshotStore)
         XCTAssertEqual(presentation.monthlyRecaps.count, 2)
-        XCTAssertEqual(presentation.availableMonthStarts.count, 3)
-        XCTAssertEqual(calendar.component(.month, from: presentation.availableMonthStarts[1]), 6)
+        XCTAssertEqual(presentation.availableMonthStarts.count, 2)
+        XCTAssertEqual(calendar.component(.month, from: presentation.availableMonthStarts[1]), 7)
         manager.seedRecapCaches(from: presentation)
 
         let cachedMay = try XCTUnwrap(presentation.monthlyRecaps.first {
@@ -557,9 +557,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             calendar.isDate($0.monthStart, equalTo: julyEnd, toGranularity: .month)
         })
         let cachedYear = try XCTUnwrap(presentation.yearlyRecaps[2026])
-        let june = presentation.availableMonthStarts[1]
         XCTAssertEqual(manager.recap(forMonthContaining: mayEnd), cachedMay)
-        XCTAssertEqual(manager.recap(forMonthContaining: june), .empty(for: june))
         XCTAssertEqual(manager.recap(forMonthContaining: julyEnd), cachedJuly)
         XCTAssertEqual(manager.yearlyRecap(for: 2026), cachedYear)
         XCTAssertEqual(manager.yearToDateRecap(through: mayEnd).totalPlayDelta, 6)
@@ -686,6 +684,23 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(manager.listenTimeRank(of: shorterRecentSong), 2)
     }
 
+    @MainActor
+    func testRecentlyPlayedSongsArePreparedByRecencyAndExcludeUnknownDates() {
+        let olderDate = Date(timeIntervalSince1970: 1_000)
+        let newerDate = Date(timeIntervalSince1970: 2_000)
+        let manager = manager(
+            songs: [
+                song(id: 1, title: "Older", artist: "Nova Lane", playCount: 30, lastPlayedDate: olderDate),
+                song(id: 2, title: "Unknown", artist: "Nova Lane", playCount: 100, lastPlayedDate: nil),
+                song(id: 3, title: "Newer", artist: "Nova Lane", playCount: 1, lastPlayedDate: newerDate)
+            ],
+            albums: [],
+            artists: []
+        )
+
+        XCTAssertEqual(manager.recentlyPlayedSongs.map(\.title), ["Newer", "Older"])
+    }
+
     func testRankMapsUseSameTieBreakersAsVisibleAlbumAndArtistOrder() {
         let zAlbum = album(id: 1, title: "Z Album", artist: "Nova Lane", playCount: 10, totalPlayDuration: 100, artistPersistentID: 10)
         let aAlbum = album(id: 2, title: "A Album", artist: "Nova Lane", playCount: 10, totalPlayDuration: 100, artistPersistentID: 10)
@@ -780,7 +795,9 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             totalPlayDuration: 4_320,
             lastPlayedDate: capturedAt.addingTimeInterval(-60),
             albumPersistentID: 84,
-            artistPersistentID: 126
+            artistPersistentID: 126,
+            discNumber: 2,
+            trackNumber: 7
         )
 
         cache.save(songs: [source], capturedAt: capturedAt)
@@ -791,6 +808,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(loaded.songs.first?.title, "Cached Song")
         XCTAssertEqual(loaded.songs.first?.playCount, 18)
         XCTAssertEqual(loaded.songs.first?.totalPlayDuration, 4_320)
+        XCTAssertEqual(loaded.songs.first?.discNumber, 2)
+        XCTAssertEqual(loaded.songs.first?.trackNumber, 7)
         XCTAssertNil(loaded.songs.first?.artwork)
         XCTAssertNotNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(59)))
         XCTAssertNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(61)))
@@ -992,6 +1011,36 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(yearly.biggestArtistGainers.first?.id, "21")
     }
 
+    func testAlbumSongOrderSupportsTracklistAndMostPlayed() {
+        let discTwo = song(
+            id: 1,
+            title: "Encore",
+            artist: "Artist",
+            playCount: 80,
+            discNumber: 2,
+            trackNumber: 1
+        )
+        let opener = song(
+            id: 2,
+            title: "Opening",
+            artist: "Artist",
+            playCount: 10,
+            discNumber: 1,
+            trackNumber: 1
+        )
+        let second = song(
+            id: 3,
+            title: "Second",
+            artist: "Artist",
+            playCount: 40,
+            discNumber: 1,
+            trackNumber: 2
+        )
+
+        XCTAssertEqual(AlbumSongOrder.tracklist.sorted([discTwo, second, opener]).map(\.id), [2, 3, 1])
+        XCTAssertEqual(AlbumSongOrder.mostPlayed.sorted([opener, second, discTwo]).map(\.id), [1, 3, 2])
+    }
+
     private func manager(
         songs: [TopSong],
         albums: [TopAlbum],
@@ -1023,7 +1072,9 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         lastPlayedDate: Date? = nil,
         dateAdded: Date? = nil,
         albumPersistentID: UInt64 = 1,
-        artistPersistentID: UInt64 = 0
+        artistPersistentID: UInt64 = 0,
+        discNumber: Int = 0,
+        trackNumber: Int = 1
     ) -> TopSong {
         TopSong(
             id: id,
@@ -1040,7 +1091,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             artwork: nil,
             albumPersistentID: albumPersistentID,
             artistPersistentID: artistPersistentID,
-            trackNumber: 1
+            discNumber: discNumber,
+            trackNumber: trackNumber
         )
     }
 

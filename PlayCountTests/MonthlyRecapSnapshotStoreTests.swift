@@ -136,6 +136,8 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
 
         let payloads = sourceStore.localSyncPayloads()
 
+        // The active month needs its prior-month baseline plus its first and
+        // latest observations; archived months travel as the compact summary.
         XCTAssertEqual(payloads.count, 3)
         XCTAssertEqual(payloads.filter { $0.encodedRecaps != nil }.count, 1)
         XCTAssertTrue(targetStore.mergeSyncPayloads(payloads, now: mayLatest))
@@ -282,6 +284,647 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         let recap = store.recap(forMonthContaining: fullDate)
         XCTAssertEqual(recap.totalPlayDelta, 0)
         XCTAssertTrue(recap.topSongs.isEmpty)
+    }
+
+    func testModestPartialBaselineDoesNotInflateWhenFullLibraryAppears() {
+        let store = makeStore(named: "modest-partial-baseline")
+        let partialDate = date(year: 2026, month: 5, day: 1, hour: 8)
+        let fullDate = date(year: 2026, month: 5, day: 1, hour: 9)
+        let confirmedDate = date(year: 2026, month: 5, day: 1, hour: 10)
+        let playedDate = date(year: 2026, month: 5, day: 1, hour: 11)
+        let partial = (1...5).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 0)
+        }
+        let full = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: $0 <= 5 ? 0 : 1)
+        }
+
+        _ = store.record(songs: partial, at: partialDate, reason: .appLaunch)
+        let recap = store.record(songs: full, at: fullDate, reason: .foreground)
+
+        XCTAssertEqual(recap.totalPlayDelta, 0)
+        XCTAssertTrue(recap.topSongs.isEmpty)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let confirmed = store.record(songs: full, at: confirmedDate, reason: .foreground)
+        XCTAssertEqual(confirmed.totalPlayDelta, 0)
+        XCTAssertFalse(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let played = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: $0 <= 5 ? 1 : 2)
+        }
+        let updated = store.record(songs: played, at: playedDate, reason: .playbackChanged)
+        XCTAssertEqual(updated.totalPlayDelta, 10)
+    }
+
+    func testNinetyPercentPartialObservationCannotInflateWhenMissingSongReturns() {
+        let store = makeStore(named: "ninety-percent-partial")
+        let baselineDate = date(year: 2026, month: 8, day: 1, hour: 8)
+        let partialDate = date(year: 2026, month: 8, day: 10, hour: 8)
+        let recoveredDate = date(year: 2026, month: 8, day: 20, hour: 8)
+        let fullLibrary = (1...10).map { id in
+            song(
+                id: UInt64(id),
+                title: "Song \(id)",
+                playCount: id == 10 ? 1_000 : 0
+            )
+        }
+        let partialLibrary = Array(fullLibrary.prefix(9))
+
+        _ = store.record(songs: fullLibrary, at: baselineDate, reason: .appLaunch)
+        let held = store.record(songs: partialLibrary, at: partialDate, reason: .foreground)
+        XCTAssertEqual(held.totalPlayDelta, 0)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let recovered = store.record(songs: fullLibrary, at: recoveredDate, reason: .foreground)
+        XCTAssertEqual(recovered.totalPlayDelta, 0)
+        XCTAssertTrue(recovered.topSongs.isEmpty)
+        XCTAssertFalse(store.reliabilityStatus().isUsingLastReliableUpdate)
+    }
+
+    func testConfirmedLargeLibraryDeletionRebasesWithoutFreezingFuturePlays() {
+        let store = makeStore(named: "confirmed-library-deletion")
+        let baselineDate = date(year: 2026, month: 8, day: 1, hour: 8)
+        let deletionDate = date(year: 2026, month: 8, day: 2, hour: 8)
+        let confirmationDate = date(year: 2026, month: 8, day: 2, hour: 9)
+        let listeningDate = date(year: 2026, month: 8, day: 2, hour: 10)
+        let full = (1...20).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let reduced = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let played = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 101)
+        }
+
+        _ = store.record(songs: full, at: baselineDate, reason: .appLaunch)
+        let held = store.record(songs: reduced, at: deletionDate, reason: .libraryChanged)
+        XCTAssertEqual(held.totalPlayDelta, 0)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let rebased = store.record(songs: reduced, at: confirmationDate, reason: .foreground)
+        XCTAssertEqual(rebased.totalPlayDelta, 0)
+        XCTAssertFalse(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let updated = store.record(songs: played, at: listeningDate, reason: .playbackChanged)
+        XCTAssertEqual(updated.totalPlayDelta, 10)
+        XCTAssertEqual(updated.topSongs.count, 10)
+    }
+
+    func testDifferentPartialMembershipDoesNotConfirmCoverageRebase() {
+        let store = makeStore(named: "rotating-partial-coverage")
+        let baselineDate = date(year: 2026, month: 8, day: 1, hour: 8)
+        let firstPartialDate = date(year: 2026, month: 8, day: 2, hour: 8)
+        let differentPartialDate = date(year: 2026, month: 8, day: 2, hour: 9)
+        let confirmedDate = date(year: 2026, month: 8, day: 2, hour: 10)
+        let full = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let firstHalf = Array(full.prefix(5))
+        let secondHalf = Array(full.suffix(5))
+
+        _ = store.record(songs: full, at: baselineDate, reason: .appLaunch)
+        _ = store.record(songs: firstHalf, at: firstPartialDate, reason: .foreground)
+        let stillHeld = store.record(songs: secondHalf, at: differentPartialDate, reason: .foreground)
+        XCTAssertEqual(stillHeld.totalPlayDelta, 0)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let rebased = store.record(songs: secondHalf, at: confirmedDate, reason: .foreground)
+        XCTAssertEqual(rebased.totalPlayDelta, 0)
+        XCTAssertFalse(store.reliabilityStatus().isUsingLastReliableUpdate)
+    }
+
+    func testTransientOfflineCounterRegressionDoesNotInflateRecapAfterRecovery() {
+        let store = makeStore(named: "offline-counter-regression")
+        let baselineDate = date(year: 2026, month: 7, day: 31, hour: 22)
+        let firstAugustCapture = date(year: 2026, month: 8, day: 4, hour: 10)
+        let offlineCapture = date(year: 2026, month: 8, day: 4, hour: 11)
+        let recoveredCapture = date(year: 2026, month: 8, day: 4, hour: 12)
+
+        func songs(playCount: Int) -> [TopSong] {
+            (1...30).map {
+                song(id: UInt64($0), title: "Song \($0)", playCount: playCount)
+            }
+        }
+
+        _ = store.record(songs: songs(playCount: 100), at: baselineDate, reason: .foreground)
+        let beforeOffline = store.record(
+            songs: songs(playCount: 101),
+            at: firstAugustCapture,
+            reason: .foreground
+        )
+        let whileOffline = store.record(
+            songs: songs(playCount: 0),
+            at: offlineCapture,
+            reason: .foreground
+        )
+        let afterRecovery = store.record(
+            songs: songs(playCount: 102),
+            at: recoveredCapture,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(beforeOffline.totalPlayDelta, 30)
+        XCTAssertEqual(whileOffline.totalPlayDelta, 30)
+        XCTAssertEqual(whileOffline.generatedAt, firstAugustCapture)
+        XCTAssertEqual(afterRecovery.totalPlayDelta, 60)
+        XCTAssertEqual(afterRecovery.topSongs.count, 30)
+        XCTAssertTrue(afterRecovery.topSongs.allSatisfy { $0.playDelta == 2 })
+    }
+
+    func testSmallLibraryCounterCollapseIsQuarantinedAndReportedWithoutMediaNames() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountSmallLibraryRegression-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "small-library-counter-regression"
+        )
+        let baselineDate = date(year: 2026, month: 7, day: 31, hour: 22)
+        let firstCapture = date(year: 2026, month: 8, day: 4, hour: 10)
+        let offlineCapture = date(year: 2026, month: 8, day: 4, hour: 11)
+        let recoveredCapture = date(year: 2026, month: 8, day: 4, hour: 12)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Private Song Name", artist: "Private Artist", playCount: 50)],
+            at: baselineDate,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Private Song Name", artist: "Private Artist", playCount: 51)],
+            at: firstCapture,
+            reason: .foreground
+        )
+        let whileOffline = store.record(
+            songs: [song(id: 1, title: "Private Song Name", artist: "Private Artist", playCount: 0)],
+            at: offlineCapture,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(whileOffline.totalPlayDelta, 1)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+        XCTAssertEqual(store.reliabilityStatus().recentRejectedObservationCount, 1)
+        let diagnostics = store.privacySafeDiagnostics(at: offlineCapture)
+        XCTAssertFalse(diagnostics.contains("Private Song Name"))
+        XCTAssertFalse(diagnostics.contains("Private Artist"))
+        XCTAssertTrue(diagnostics.contains("Recent rejected observations: 1"))
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "small-library-counter-regression"
+        )
+        XCTAssertTrue(relaunched.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let recovered = relaunched.record(
+            songs: [song(id: 1, title: "Private Song Name", artist: "Private Artist", playCount: 52)],
+            at: recoveredCapture,
+            reason: .foreground
+        )
+        XCTAssertEqual(recovered.totalPlayDelta, 2)
+        XCTAssertFalse(relaunched.reliabilityStatus().isUsingLastReliableUpdate)
+    }
+
+    func testDiagnosticsReportExplainsMonthlyCoverageWithoutMediaNames() throws {
+        let store = makeStore(named: "diagnostics-coverage")
+        let baselineDate = date(year: 2026, month: 4, day: 30, hour: 22)
+        let mayDate = date(year: 2026, month: 5, day: 20, hour: 12)
+        let juneStart = date(year: 2026, month: 6, day: 1, hour: 8)
+        let juneDate = date(year: 2026, month: 6, day: 18, hour: 12)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Private May Song", artist: "Private Artist", playCount: 100)],
+            at: baselineDate,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Private May Song", artist: "Private Artist", playCount: 104)],
+            at: mayDate,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Private May Song", artist: "Private Artist", playCount: 104)],
+            at: juneStart,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Private May Song", artist: "Private Artist", playCount: 107)],
+            at: juneDate,
+            reason: .foreground
+        )
+
+        let report = store.recapDiagnosticsReport(at: juneDate)
+        let yearly = try XCTUnwrap(store.syncedYearlyRecap(for: 2026))
+
+        XCTAssertTrue(report.hasCanonicalMonthLedger)
+        XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
+        XCTAssertEqual(report.months.reduce(0) { $0 + $1.totalPlayDelta }, yearly.totalPlayDelta)
+        XCTAssertEqual(report.months.first { Calendar.current.component(.month, from: $0.monthStart) == 6 }?.totalPlayDelta, 3)
+        XCTAssertTrue(report.months.allSatisfy { $0.reliabilityPolicyVersion == 2 })
+        XCTAssertTrue(report.months.contains { $0.sourceDescription.hasSuffix(" local snapshots") })
+        XCTAssertFalse(report.exportText.contains("Private May Song"))
+        XCTAssertFalse(report.exportText.contains("Private Artist"))
+        XCTAssertTrue(report.exportText.contains("Yearly totals match monthly ledgers: true"))
+    }
+
+    func testFreshStoreDiagnosticsUseCurrentReliabilityPolicy() {
+        let store = makeStore(named: "diagnostics-fresh-store")
+
+        let report = store.recapDiagnosticsReport(at: date(year: 2026, month: 8, day: 25))
+
+        XCTAssertEqual(report.reliabilityPolicyVersion, 2)
+        XCTAssertTrue(report.hasCanonicalMonthLedger)
+        XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
+        XCTAssertTrue(report.months.isEmpty)
+    }
+
+    func testRepeatedCloudMergeIsIdempotentAndDiagnosticsStayCanonical() {
+        let source = makeStore(named: "diagnostics-cloud-source")
+        let target = makeStore(named: "diagnostics-cloud-target")
+        let baselineDate = date(year: 2026, month: 7, day: 31, hour: 22)
+        let latestDate = date(year: 2026, month: 8, day: 20, hour: 12)
+
+        _ = source.record(
+            songs: [song(id: 1, title: "Cloud Song", playCount: 40)],
+            at: baselineDate,
+            reason: .foreground
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Cloud Song", playCount: 47)],
+            at: latestDate,
+            reason: .foreground
+        )
+        let payloads = source.localSyncPayloads()
+
+        XCTAssertTrue(target.mergeSyncPayloads(payloads, now: latestDate))
+        let first = target.recapDiagnosticsReport(at: latestDate)
+        XCTAssertFalse(target.mergeSyncPayloads(payloads, now: latestDate))
+        let second = target.recapDiagnosticsReport(at: latestDate)
+
+        XCTAssertEqual(first.months, second.months)
+        XCTAssertEqual(second.duplicateMonthCount, 0)
+        XCTAssertTrue(second.hasCanonicalMonthLedger)
+        XCTAssertTrue(second.yearlyTotalsMatchMonthlyLedgers)
+        XCTAssertEqual(target.recap(forMonthContaining: latestDate).totalPlayDelta, 7)
+    }
+
+    func testMonthBoundaryUsesLocalMidnightNotCanonicalNoon() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountBoundary-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "local-midnight-boundary"
+        )
+        let july = date(year: 2026, month: 7, day: 31, hour: 23)
+        let august = date(year: 2026, month: 8, day: 1, hour: 1)
+
+        _ = store.record(songs: [song(id: 1, title: "Boundary", playCount: 100)], at: july, reason: .foreground)
+        _ = store.record(songs: [song(id: 1, title: "Boundary", playCount: 104)], at: august, reason: .foreground)
+
+        XCTAssertEqual(store.recap(forMonthContaining: july).totalPlayDelta, 0)
+        XCTAssertEqual(store.recap(forMonthContaining: august).totalPlayDelta, 4)
+    }
+
+    func testPartialReturnAfterMissedMonthWaitsForComparableRecovery() {
+        let store = makeStore(named: "partial-gap-recovery")
+        let may = date(year: 2026, month: 5, day: 31, hour: 20)
+        let partialJuly = date(year: 2026, month: 7, day: 10, hour: 10)
+        let recoveredJuly = date(year: 2026, month: 7, day: 10, hour: 11)
+        let fullLibrary = (1...100).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let partialLibrary = (1...10).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 130)
+        }
+        let recoveredLibrary = (1...100).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 130)
+        }
+
+        _ = store.record(songs: fullLibrary, at: may, reason: .foreground)
+        let held = store.record(songs: partialLibrary, at: partialJuly, reason: .appLaunch)
+        XCTAssertEqual(held.totalPlayDelta, 0)
+        XCTAssertTrue(store.reliabilityStatus().isUsingLastReliableUpdate)
+
+        let recovered = store.record(songs: recoveredLibrary, at: recoveredJuly, reason: .foreground)
+        XCTAssertEqual(recovered.totalPlayDelta, 0)
+        XCTAssertFalse(store.reliabilityStatus().isUsingLastReliableUpdate)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 3_000)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2026)?.unattributedPlayDelta, 3_000)
+    }
+
+    func testBuddhistCalendarKeepsGregorianMonthIdentity() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountBuddhist-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone(secondsFromGMT: 0)!
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: buddhist,
+            deviceIdentifier: "buddhist-calendar"
+        )
+        let july = date(year: 2026, month: 7, day: 31, hour: 23)
+        let august = date(year: 2026, month: 8, day: 2, hour: 1)
+
+        _ = store.record(songs: [song(id: 1, title: "Calendar", playCount: 100)], at: july, reason: .foreground)
+        let recap = store.record(songs: [song(id: 1, title: "Calendar", playCount: 104)], at: august, reason: .foreground)
+
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(secondsFromGMT: 0)!
+        XCTAssertEqual(recap.totalPlayDelta, 4)
+        XCTAssertEqual(gregorian.component(.year, from: recap.monthStart), 2026)
+        XCTAssertEqual(gregorian.component(.month, from: recap.monthStart), 8)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 4)
+        XCTAssertEqual(
+            store.syncedYearlyRecap(for: 2026).map { gregorian.component(.year, from: $0.monthStart) },
+            2026
+        )
+    }
+
+    func testDiagnosticsAcceptValidMissedMonthEvidence() {
+        let store = makeStore(named: "diagnostics-gap-evidence")
+        let may = date(year: 2026, month: 5, day: 31)
+        let julyReturn = date(year: 2026, month: 7, day: 10)
+        let julyLatest = date(year: 2026, month: 7, day: 15)
+
+        _ = store.record(songs: [song(id: 1, title: "Private Gap Song", playCount: 100)], at: may, reason: .foreground)
+        _ = store.record(songs: [song(id: 1, title: "Private Gap Song", playCount: 130)], at: julyReturn, reason: .appLaunch)
+        _ = store.record(songs: [song(id: 1, title: "Private Gap Song", playCount: 135)], at: julyLatest, reason: .foreground)
+
+        let report = store.recapDiagnosticsReport(at: julyLatest)
+        XCTAssertEqual(report.months.reduce(0) { $0 + $1.totalPlayDelta }, 5)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 35)
+        XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
+        XCTAssertEqual(report.unattributedIntervalCount, 1)
+        XCTAssertEqual(report.unattributedPlayDelta, 30)
+        XCTAssertTrue(report.exportText.contains("Unattributed plays: 30"))
+        XCTAssertFalse(report.exportText.contains("Private Gap Song"))
+    }
+
+    func testHistoricalMissedGapEvidenceSurvivesRawSnapshotRetention() {
+        let store = makeStore(named: "durable-historical-gap")
+        let january = date(year: 2024, month: 1, day: 31)
+        let marchReturn = date(year: 2024, month: 3, day: 10)
+        let marchLatest = date(year: 2024, month: 3, day: 15)
+
+        _ = store.record(songs: [song(id: 1, title: "Historical Gap", playCount: 100)], at: january, reason: .foreground)
+        _ = store.record(songs: [song(id: 1, title: "Historical Gap", playCount: 130)], at: marchReturn, reason: .appLaunch)
+        _ = store.record(songs: [song(id: 1, title: "Historical Gap", playCount: 135)], at: marchLatest, reason: .foreground)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2024)?.totalPlayDelta, 35)
+
+        _ = store.localSyncPayloads()
+
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2024)?.totalPlayDelta, 35)
+        XCTAssertEqual(store.syncedYearlyRecap(for: 2024)?.unattributedPlayDelta, 30)
+        let diagnostics = store.recapDiagnosticsReport(at: Date())
+        XCTAssertEqual(diagnostics.unattributedIntervalCount, 1)
+        XCTAssertEqual(diagnostics.unattributedPlayDelta, 30)
+        XCTAssertTrue(diagnostics.yearlyTotalsMatchMonthlyLedgers)
+    }
+
+    func testDiagnosticsRejectMissingYearlySummary() {
+        let store = makeStore(named: "diagnostics-missing-year")
+        let baseline = date(year: 2026, month: 8, day: 1)
+        let latest = date(year: 2026, month: 8, day: 2)
+        _ = store.record(songs: [song(id: 1, title: "Missing Year", playCount: 10)], at: baseline, reason: .appLaunch)
+        _ = store.record(songs: [song(id: 1, title: "Missing Year", playCount: 12)], at: latest, reason: .foreground)
+        store.debugRemoveYearlyRecaps()
+
+        XCTAssertFalse(store.recapDiagnosticsReport(at: latest).yearlyTotalsMatchMonthlyLedgers)
+    }
+
+    func testMigrationDoesNotPromoteUnrebuildableHistoricalLedgerToPolicyV2() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountHistoricalPolicy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let target = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "historical-policy-target"
+        )
+        let julyBaseline = date(year: 2026, month: 7, day: 1)
+        let julyLatest = date(year: 2026, month: 7, day: 15)
+        let augustBaseline = date(year: 2026, month: 8, day: 1)
+        _ = target.record(songs: [song(id: 1, title: "Historical", playCount: 100)], at: julyBaseline, reason: .appLaunch)
+        let accurate = target.record(songs: [song(id: 1, title: "Historical", playCount: 130)], at: julyLatest, reason: .foreground)
+        _ = target.record(songs: [song(id: 1, title: "Historical", playCount: 130)], at: augustBaseline, reason: .foreground)
+        let polluted = MonthlyRecap(
+            monthStart: accurate.monthStart,
+            generatedAt: accurate.generatedAt,
+            lastCaptureReason: accurate.lastCaptureReason,
+            trackingStart: accurate.trackingStart,
+            snapshotCount: accurate.snapshotCount,
+            totalPlayDelta: 3_030,
+            totalSkipDelta: accurate.totalSkipDelta,
+            totalListeningDuration: 3_030 * 180,
+            playedSongCount: accurate.playedSongCount,
+            listenedArtistCount: accurate.listenedArtistCount,
+            newSongCount: accurate.newSongCount,
+            topSongs: accurate.topSongs,
+            topArtists: accurate.topArtists,
+            topAlbums: accurate.topAlbums,
+            biggestGainers: accurate.biggestGainers,
+            biggestAlbumGainers: accurate.biggestAlbumGainers,
+            biggestArtistGainers: accurate.biggestArtistGainers,
+            topNewSongs: accurate.topNewSongs
+        )
+        try target.debugInstallPreCounterReliabilityPolicyRecapMissingListenedArtistCount(polluted)
+
+        let migrated = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "historical-policy-target"
+        )
+        let julyDiagnostic = try XCTUnwrap(migrated.recapDiagnosticsReport(at: augustBaseline).months.first {
+            calendar.recapMonth(containing: $0.monthStart) == 7
+        })
+        XCTAssertEqual(julyDiagnostic.reliabilityPolicyVersion, 0)
+        XCTAssertEqual(migrated.debugYearlyReliabilityPolicyVersion(for: 2026), 0)
+        XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).listenedArtistCount, 1)
+
+        let source = makeStore(named: "historical-policy-source")
+        _ = source.record(songs: [song(id: 1, title: "Historical", playCount: 100)], at: julyBaseline, reason: .appLaunch)
+        _ = source.record(songs: [song(id: 1, title: "Historical", playCount: 130)], at: julyLatest, reason: .foreground)
+        XCTAssertTrue(migrated.mergeSyncPayloads(source.localSyncPayloads(), now: augustBaseline))
+        XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).totalPlayDelta, 30)
+    }
+
+    func testReliablePolicyRecapWinsOverLargerLegacyCloudSummary() {
+        let store = makeStore(named: "reliable-policy-priority")
+        let baselineDate = date(year: 2026, month: 7, day: 31, hour: 22)
+        let latestDate = date(year: 2026, month: 8, day: 4, hour: 10)
+        _ = store.record(
+            songs: [song(id: 1, title: "Reliable", playCount: 100)],
+            at: baselineDate,
+            reason: .foreground
+        )
+        let reliable = store.record(
+            songs: [song(id: 1, title: "Reliable", playCount: 102)],
+            at: latestDate,
+            reason: .foreground
+        )
+        let inflatedLegacy = MonthlyRecap(
+            monthStart: reliable.monthStart,
+            generatedAt: reliable.generatedAt,
+            lastCaptureReason: reliable.lastCaptureReason,
+            trackingStart: reliable.trackingStart,
+            snapshotCount: reliable.snapshotCount,
+            totalPlayDelta: 5_002,
+            totalSkipDelta: reliable.totalSkipDelta,
+            totalListeningDuration: 5_002 * 180,
+            playedSongCount: reliable.playedSongCount,
+            listenedArtistCount: reliable.listenedArtistCount,
+            newSongCount: reliable.newSongCount,
+            topSongs: reliable.topSongs,
+            topArtists: reliable.topArtists,
+            topAlbums: reliable.topAlbums,
+            biggestGainers: reliable.biggestGainers,
+            biggestAlbumGainers: reliable.biggestAlbumGainers,
+            biggestArtistGainers: reliable.biggestArtistGainers,
+            topNewSongs: reliable.topNewSongs
+        )
+
+        store.debugInstallSyncedRecapCandidates([
+            (inflatedLegacy, nil),
+            (reliable, 2)
+        ])
+
+        XCTAssertEqual(store.recap(forMonthContaining: latestDate).totalPlayDelta, 2)
+        XCTAssertTrue(store.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 2 })
+    }
+
+    func testMonthIdentityMigrationCollapsesTimezoneVariantsWithoutSummingThem() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMonthIdentityRepair-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "month-identity-repair"
+        )
+
+        func legacyRecap(monthStart: Date, generatedAt: Date, plays: Int) -> MonthlyRecap {
+            let rankedSong = MonthlyRecap.RankedSong(
+                id: 1,
+                title: "Timezone Song",
+                artist: "Artist",
+                albumTitle: "Album",
+                playDelta: plays,
+                skipDelta: 0,
+                listeningDuration: TimeInterval(plays * 180),
+                artwork: nil
+            )
+            return MonthlyRecap(
+                monthStart: monthStart,
+                generatedAt: generatedAt,
+                lastCaptureReason: .foreground,
+                trackingStart: monthStart,
+                snapshotCount: 2,
+                totalPlayDelta: plays,
+                totalSkipDelta: 0,
+                totalListeningDuration: TimeInterval(plays * 180),
+                playedSongCount: 1,
+                listenedArtistCount: 1,
+                newSongCount: 0,
+                topSongs: [rankedSong],
+                topArtists: [],
+                topAlbums: [],
+                biggestGainers: [],
+                topNewSongs: []
+            )
+        }
+
+        store.debugInstallPreMonthIdentityPolicyRecaps([
+            legacyRecap(
+                monthStart: date(year: 2026, month: 7, day: 31, hour: 21),
+                generatedAt: date(year: 2026, month: 8, day: 4),
+                plays: 76
+            ),
+            legacyRecap(
+                monthStart: date(year: 2026, month: 8, day: 1, hour: 7),
+                generatedAt: date(year: 2026, month: 8, day: 20),
+                plays: 90
+            )
+        ])
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "month-identity-repair"
+        )
+        let august = relaunched.recap(forMonthContaining: date(year: 2026, month: 8, day: 25))
+        let presentation = relaunched.cachedRecapPresentation(through: date(year: 2026, month: 8, day: 25))
+
+        XCTAssertEqual(august.totalPlayDelta, 90)
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 90)
+        XCTAssertEqual(presentation.monthlyRecaps.count, 1)
+        XCTAssertEqual(presentation.availableMonthStarts.count, 1)
+        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 2 })
+    }
+
+    func testCounterReliabilityMigrationRepairsInflatedActiveMonthLedger() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountCounterRepair-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "counter-repair"
+        )
+        let baselineDate = date(year: 2026, month: 7, day: 31, hour: 22)
+        let latestDate = date(year: 2026, month: 8, day: 4, hour: 10)
+        let baselineSongs = (1...30).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let latestSongs = (1...30).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 101)
+        }
+
+        _ = store.record(songs: baselineSongs, at: baselineDate, reason: .foreground)
+        let correct = store.record(songs: latestSongs, at: latestDate, reason: .foreground)
+        XCTAssertEqual(correct.totalPlayDelta, 30)
+
+        let polluted = MonthlyRecap(
+            monthStart: correct.monthStart,
+            generatedAt: correct.generatedAt,
+            lastCaptureReason: correct.lastCaptureReason,
+            trackingStart: correct.trackingStart,
+            snapshotCount: correct.snapshotCount,
+            totalPlayDelta: 3_030,
+            totalSkipDelta: correct.totalSkipDelta,
+            totalListeningDuration: 3_030 * 180,
+            playedSongCount: correct.playedSongCount,
+            listenedArtistCount: correct.listenedArtistCount,
+            newSongCount: correct.newSongCount,
+            topSongs: correct.topSongs,
+            topArtists: correct.topArtists,
+            topAlbums: correct.topAlbums,
+            biggestGainers: correct.biggestGainers,
+            biggestAlbumGainers: correct.biggestAlbumGainers,
+            biggestArtistGainers: correct.biggestArtistGainers,
+            topNewSongs: correct.topNewSongs
+        )
+        store.debugInstallPreCounterReliabilityPolicyRecap(polluted)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "counter-repair"
+        )
+        let repaired = relaunched.recap(forMonthContaining: latestDate)
+        XCTAssertEqual(repaired.totalPlayDelta, 30)
+        XCTAssertEqual(repaired.topSongs.count, 30)
+        XCTAssertTrue(repaired.topSongs.allSatisfy { $0.playDelta == 1 })
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 30)
     }
 
     func testImplausibleLocalStreamDoesNotOverridePlausibleRemoteRecap() {
@@ -1056,7 +1699,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             reason: .appLaunch
         )
         _ = store.record(songs: [], at: julyDeletion, reason: .libraryChanged)
-        _ = store.record(
+        let julyRecap = store.record(
             songs: [
                 song(
                     id: 2,
@@ -1071,8 +1714,13 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             reason: .appLaunch
         )
 
+        XCTAssertEqual(julyRecap.totalPlayDelta, 71)
         let yearly = store.syncedYearlyRecap(for: 2026)
-        XCTAssertEqual(yearly?.totalPlayDelta, 115)
+        XCTAssertEqual(
+            yearly?.totalPlayDelta,
+            115,
+            store.privacySafeDiagnostics(at: julyLatest)
+        )
         XCTAssertEqual(yearly?.playedSongCount, 1)
         XCTAssertEqual(yearly?.topSongs.count, 1)
         XCTAssertEqual(yearly?.topSongs.first?.id, 2)
@@ -1299,7 +1947,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         )
         let cached = try XCTUnwrap(coldStore.cachedRecapSummaries().last)
 
-        XCTAssertEqual(cached.monthStart, date(year: 2026, month: 5, day: 1, hour: 0))
+        XCTAssertEqual(cached.monthStart, calendar.startOfMonth(containing: baselineDate))
         XCTAssertEqual(cached.topSongs.first?.title, "Summary Song")
         XCTAssertEqual(cached.topSongs.first?.playDelta, 6)
     }
@@ -1438,7 +2086,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(migrated.recap(forMonthContaining: julyLatest).totalPlayDelta, expectedJuly.totalPlayDelta)
         XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.totalPlayDelta, expectedYear.totalPlayDelta)
         XCTAssertEqual(migrated.syncedYearlyRecap(for: 2026)?.topSongs.first?.playDelta, expectedYear.topSongs.first?.playDelta)
-        XCTAssertEqual(migrated.availableMonthStarts(through: julyLatest).count, 3)
+        XCTAssertEqual(migrated.availableMonthStarts(through: julyLatest).count, 2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("recap-ledger.sqlite").path))
 
@@ -1683,6 +2331,9 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(yearly.totalPlayDelta, 35)
         XCTAssertEqual(yearly.topSongs.first?.playDelta, 35)
         XCTAssertEqual(yearly.unattributedPlayDelta, 0)
+        let diagnostics = target.recapDiagnosticsReport(at: julyLatest)
+        XCTAssertEqual(diagnostics.unattributedIntervalCount, 0)
+        XCTAssertEqual(diagnostics.unattributedPlayDelta, 0)
     }
 
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {

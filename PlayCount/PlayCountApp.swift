@@ -35,6 +35,7 @@ struct PlayCountApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(libraryManager: mediaLibraryManager)
+                .tint(PlayCountBrand.accent)
                 .task {
                     if !Self.isRunningTests {
                         RecapBackgroundRefreshScheduler.schedule()

@@ -323,6 +323,32 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         )
     }
 
+    func testCloudRecordRoundTripKeepsGapEvidenceOutsideNearLimitSnapshot() throws {
+        let snapshotData = Data(repeating: 0x5A, count: 249_000)
+        let intervalData = Data(repeating: 0xA5, count: 12_000)
+        XCTAssertGreaterThan(snapshotData.count + intervalData.count, 250_000)
+        let original = RecapSnapshotSyncPayload(
+            id: "near-limit-gap-evidence",
+            capturedAt: date(year: 2026, month: 8, day: 25),
+            counterSignature: "near-limit",
+            reliabilityPolicyVersion: 2,
+            encodedSnapshot: snapshotData,
+            encodedRecaps: Data("monthly".utf8),
+            encodedYearlyRecaps: Data("yearly".utf8),
+            encodedUnattributedIntervals: intervalData
+        )
+        let recordID = CKRecord.ID(
+            recordName: original.id,
+            zoneID: CKRecordZone.ID(zoneName: "test-zone", ownerName: CKCurrentUserDefaultName)
+        )
+
+        let record = CloudKitRecapSyncClient.record(from: original, recordID: recordID)
+        let roundTripped = try XCTUnwrap(CloudKitRecapSyncClient.payload(from: record))
+
+        XCTAssertEqual(roundTripped, original)
+        XCTAssertEqual(roundTripped.encodedUnattributedIntervals, intervalData)
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountCloudTests-\(UUID().uuidString)-\(name)", isDirectory: true)

@@ -19,6 +19,7 @@ struct TopSong: Identifiable {
     let artwork: MPMediaItemArtwork?
     let albumPersistentID: UInt64
     let artistPersistentID: UInt64
+    let discNumber: Int
     let trackNumber: Int
     let playbackStoreID: String
 
@@ -37,6 +38,7 @@ struct TopSong: Identifiable {
         artwork: MPMediaItemArtwork?,
         albumPersistentID: UInt64,
         artistPersistentID: UInt64,
+        discNumber: Int = 0,
         trackNumber: Int,
         playbackStoreID: String = ""
     ) {
@@ -54,6 +56,7 @@ struct TopSong: Identifiable {
         self.artwork = artwork
         self.albumPersistentID = albumPersistentID
         self.artistPersistentID = artistPersistentID
+        self.discNumber = discNumber
         self.trackNumber = trackNumber
         self.playbackStoreID = playbackStoreID
     }
@@ -73,6 +76,7 @@ struct TopSong: Identifiable {
             (artwork == nil) == (other.artwork == nil) &&
             albumPersistentID == other.albumPersistentID &&
             artistPersistentID == other.artistPersistentID &&
+            discNumber == other.discNumber &&
             trackNumber == other.trackNumber &&
             playbackStoreID == other.playbackStoreID
     }
@@ -194,6 +198,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private struct PreparedLibrarySnapshot {
         let snapshot: MediaLibrarySnapshot
         let summary: LibrarySummary
+        let recentlyPlayedSongs: [TopSong]
         let sortedSongs: [TopSong]
         let sortedAlbums: [TopAlbum]
         let sortedArtists: [TopArtist]
@@ -279,9 +284,9 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             case .idle:
                 return nil
             case .readingLibrary:
-                return "Reading your Apple Music library…"
+                return "Loading library…"
             case .preparingInsights:
-                return "Preparing your listening insights…"
+                return "Updating insights…"
             }
         }
     }
@@ -292,6 +297,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var librarySongs: [TopSong] = []
     @Published private(set) var libraryAlbums: [TopAlbum] = []
     @Published private(set) var libraryArtists: [TopArtist] = []
+    @Published private(set) var recentlyPlayedSongs: [TopSong] = []
     @Published private(set) var librarySummary: LibrarySummary = .empty
     @Published var authorizationStatus: MPMediaLibraryAuthorizationStatus
     @Published var isLoading: Bool = false
@@ -312,6 +318,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     @Published private(set) var libraryLastUpdated: Date?
     @Published private(set) var nowPlayingState: NowPlayingState?
     @Published private(set) var monthlyRecap: MonthlyRecap = .empty(for: Date())
+    @Published private(set) var recapReliabilityStatus: RecapReliabilityStatus = .empty
     @Published private(set) var weeklyRecapComparison: WeeklyRecapComparison = .empty()
     @Published private(set) var availableRecapMonths: [Date] = []
     let nowPlayingProgress = NowPlayingProgress()
@@ -393,8 +400,15 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         #if DEBUG
         if Self.isScreenshotModeEnabled {
             authorizationStatus = .authorized
-            monthlyRecap = .empty(for: Date())
+            monthlyRecap = .empty(for: Self.screenshotReferenceDate)
             loadScreenshotFixture()
+            if ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotReliabilityNotice") {
+                recapReliabilityStatus = RecapReliabilityStatus(
+                    lastTrustedUpdate: Self.screenshotReferenceDate.addingTimeInterval(-45 * 60),
+                    lastRejectedObservation: Self.screenshotReferenceDate,
+                    recentRejectedObservationCount: 1
+                )
+            }
             return
         }
         #endif
@@ -715,7 +729,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let generation = operation.generation
         let token = operation.token
 
-        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison, RecapMilestone?)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore, milestoneLedger] in
+        let result: (PreparedLibrarySnapshot, MonthlyRecap, CachedRecapPresentation, WeeklyRecapComparison, RecapMilestone?, RecapReliabilityStatus)? = await Task.detached(priority: .utility) { [snapshotStore, weeklyInsightStore, milestoneLedger] in
             let snapshot = Self.fetchLibrarySnapshot()
             let preparedSnapshot = Self.prepareLibrarySnapshot(
                 snapshot,
@@ -772,7 +786,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     previous: $0
                 ).last
             }
-            return (preparedSnapshot, recap, cachedPresentation, weeklyComparison, newlyEarned)
+            return (
+                preparedSnapshot,
+                recap,
+                cachedPresentation,
+                weeklyComparison,
+                newlyEarned,
+                snapshotStore.reliabilityStatus()
+            )
         }.value
 
         guard let result else {
@@ -795,6 +816,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             self.applyOrDeferPreparedLibrarySnapshot(result.0, recap: result.1)
             self.seedRecapCaches(from: result.2, currentRecap: result.1)
             self.weeklyRecapComparison = result.3
+            self.recapReliabilityStatus = result.5
             self.availableRecapMonths = result.2.availableMonthStarts
             self.hasLoadedInitialSnapshot = true
             self.hasStartedInitialRefresh = true
@@ -1086,6 +1108,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 sourceAlbums: sourceAlbums,
                 sourceArtists: sourceArtists
             )
+            let reliabilityStatus = snapshotStore.reliabilityStatus()
 
             let shouldSyncAgain = await MainActor.run { [weak self] in
                 guard let self else { return false }
@@ -1104,6 +1127,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: currentRecap)
                 let updatedDeferredPresentation = self.updateDeferredLibraryRecap(currentRecap)
                 self.monthlyRecap = currentRecap
+                self.recapReliabilityStatus = reliabilityStatus
                 if !updatedDeferredPresentation {
                     self.detailPresentationUpdates.notify()
                 }
@@ -1129,6 +1153,19 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             snapshotStore.debugSummary(),
             recapArtworkDebugSummary()
         ].joined(separator: "\n\n")
+    }
+
+    func privacySafeRecapDiagnostics() -> String {
+        [
+            snapshotStore.privacySafeDiagnostics(),
+            "iOS: \(UIDevice.current.systemVersion)",
+            "Media permission: \(authorizationStatus == .authorized ? "authorized" : "not authorized")",
+            "Cloud recap sync: \(recapCloudSyncService == nil ? "unavailable" : "configured")"
+        ].joined(separator: "\n")
+    }
+
+    func recapDiagnosticsReport() -> RecapDiagnosticsReport {
+        snapshotStore.recapDiagnosticsReport()
     }
 
     #if DEBUG
@@ -1469,6 +1506,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 sourceAlbums: snapshot.albums,
                 sourceArtists: snapshot.artists
             )
+            let reliabilityStatus = snapshotStore.reliabilityStatus()
             let availableMonths = cachedPresentation.availableMonthStarts.isEmpty
                 ? snapshotStore.availableMonthStarts()
                 : cachedPresentation.availableMonthStarts
@@ -1483,6 +1521,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.seedRecapCaches(from: cachedPresentation, currentRecap: recap)
                 let updatedDeferredPresentation = self.updateDeferredLibraryRecap(recap)
                 self.monthlyRecap = recap
+                self.recapReliabilityStatus = reliabilityStatus
                 self.weeklyRecapComparison = weeklyComparison
                 if !updatedDeferredPresentation {
                     self.detailPresentationUpdates.notify()
@@ -1588,6 +1627,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 albums: snapshot.albums,
                 artists: snapshot.artists
             ),
+            recentlyPlayedSongs: Self.recentlyPlayedSongs(from: snapshot.songs),
             sortedSongs: sortedSongs,
             sortedAlbums: sortedAlbums,
             sortedArtists: sortedArtists,
@@ -1613,6 +1653,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         librarySongs = snapshot.songs
         libraryAlbums = snapshot.albums
         libraryArtists = snapshot.artists
+        recentlyPlayedSongs = prepared.recentlyPlayedSongs
         albumMilestoneAliasCounts = snapshot.albums.reduce(into: [:]) {
             $0[MediaMilestoneLedger.albumMetadataIdentity($1), default: 0] += 1
         }
@@ -1823,6 +1864,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let resortedPreparedSnapshot = PreparedLibrarySnapshot(
             snapshot: prepared.snapshot,
             summary: prepared.summary,
+            recentlyPlayedSongs: prepared.recentlyPlayedSongs,
             sortedSongs: prepared.sortedSongs,
             sortedAlbums: prepared.sortedAlbums,
             sortedArtists: prepared.sortedArtists,
@@ -2264,6 +2306,32 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Keeps the Search landing page cheap even for very large libraries. The
+    /// result is prepared with the rest of the library snapshot rather than
+    /// sorting the full library from a SwiftUI body update.
+    private static func recentlyPlayedSongs(from songs: [TopSong], limit: Int = 12) -> [TopSong] {
+        var recent: [TopSong] = []
+        recent.reserveCapacity(min(limit, songs.count))
+
+        for song in songs where song.lastPlayedDate != nil {
+            let insertionIndex = recent.firstIndex { existing in
+                let songDate = song.lastPlayedDate ?? .distantPast
+                let existingDate = existing.lastPlayedDate ?? .distantPast
+                if songDate != existingDate {
+                    return songDate > existingDate
+                }
+                return song.id < existing.id
+            } ?? recent.endIndex
+
+            recent.insert(song, at: insertionIndex)
+            if recent.count > limit {
+                recent.removeLast()
+            }
+        }
+
+        return recent
+    }
+
     private static func isHigherPlayCountSong(_ lhs: TopSong, _ rhs: TopSong) -> Bool {
         if lhs.playCount == rhs.playCount {
             if lhs.totalPlayDuration == rhs.totalPlayDuration {
@@ -2405,6 +2473,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
             artwork: item.artwork,
             albumPersistentID: item.albumPersistentID,
             artistPersistentID: item.artistPersistentID,
+            discNumber: item.discNumber,
             trackNumber: item.albumTrackNumber
         )
 
@@ -2604,6 +2673,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                     artwork: item.artwork,
                     albumPersistentID: item.albumPersistentID,
                     artistPersistentID: item.artistPersistentID,
+                    discNumber: item.discNumber,
                     trackNumber: item.albumTrackNumber,
                     playbackStoreID: item.playbackStoreID
                 )
@@ -2759,6 +2829,12 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
 }
 
 extension MediaLibraryManager {
+    private static let screenshotReferenceDate: Date = {
+        Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 2026, month: 8, day: 16, hour: 12)
+        )!
+    }()
+
     final class NowPlayingProgress: ObservableObject {
         @Published private(set) var currentTime: TimeInterval = 0
         @Published private(set) var duration: TimeInterval = 0
@@ -2987,6 +3063,7 @@ extension MediaLibraryManager {
             librarySongs = []
             libraryAlbums = []
             libraryArtists = []
+            recentlyPlayedSongs = []
             librarySummary = .empty
             hasLoadedInitialSnapshot = false
             isLoading = true
@@ -2998,6 +3075,7 @@ extension MediaLibraryManager {
         librarySongs = songs
         libraryAlbums = Self.screenshotAlbums(from: songs)
         libraryArtists = Self.screenshotArtists(from: songs)
+        recentlyPlayedSongs = Self.recentlyPlayedSongs(from: songs)
         librarySummary = LibrarySummary(songs: librarySongs, albums: libraryAlbums, artists: libraryArtists)
         topSongs = Array(librarySongs.prefix(20))
         topAlbums = Array(libraryAlbums.prefix(20))
@@ -3061,8 +3139,8 @@ extension MediaLibraryManager {
             skipCount: max(0, delta / 4),
             totalPlayDuration: TimeInterval(plays) * duration,
             playbackDuration: duration,
-            lastPlayedDate: Date().addingTimeInterval(-TimeInterval(id * 1200)),
-            dateAdded: Date().addingTimeInterval(-TimeInterval(id * 3200)),
+            lastPlayedDate: screenshotReferenceDate.addingTimeInterval(-TimeInterval(id * 1200)),
+            dateAdded: screenshotReferenceDate.addingTimeInterval(-TimeInterval(id * 3200)),
             artwork: screenshotArtwork(coverIndex: coverIndex, title: initials, subtitle: artist, colors: colors),
             albumPersistentID: id,
             artistPersistentID: artistID ?? id + 1_000,
@@ -3157,7 +3235,7 @@ extension MediaLibraryManager {
     private static func screenshotRecap(from songs: [TopSong], monthStart overrideMonthStart: Date? = nil) -> MonthlyRecap {
         let calendar = Calendar.current
         let monthStart = overrideMonthStart.map { calendar.screenshotStartOfMonth(containing: $0) }
-            ?? calendar.screenshotStartOfMonth(containing: Date())
+            ?? calendar.screenshotStartOfMonth(containing: screenshotReferenceDate)
         let monthOrdinal = calendar.component(.year, from: monthStart) * 12 + calendar.component(.month, from: monthStart)
         let rotation = abs(monthOrdinal) % max(songs.count, 1)
         let monthlySongs = songs.rotatedLeft(by: rotation)
@@ -3199,11 +3277,12 @@ extension MediaLibraryManager {
             )
         }
 
-        let trackingStart = calendar.date(byAdding: .month, value: -4, to: monthStart) ?? Date().addingTimeInterval(-60 * 60 * 24 * 120)
+        let trackingStart = calendar.date(byAdding: .month, value: -4, to: monthStart)
+            ?? screenshotReferenceDate.addingTimeInterval(-60 * 60 * 24 * 120)
 
         return MonthlyRecap(
             monthStart: monthStart,
-            generatedAt: Date(),
+            generatedAt: screenshotReferenceDate,
             lastCaptureReason: .manualRefresh,
             trackingStart: trackingStart,
             snapshotCount: 58,
@@ -3243,7 +3322,7 @@ extension MediaLibraryManager {
 
     private static func screenshotWeeklyRecapComparison(from songs: [TopSong]) -> WeeklyRecapComparison {
         let calendar = Calendar.current
-        let now = Date()
+        let now = screenshotReferenceDate
         let monthStart = calendar.dateInterval(of: .month, for: now)?.start ?? calendar.startOfDay(for: now)
         let fixtureNow = calendar.component(.day, from: now) >= 14
             ? now

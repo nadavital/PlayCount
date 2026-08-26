@@ -265,6 +265,7 @@ struct RecapShareStudio: View {
                 .padding(18)
             }
             .scrollIndicators(.hidden)
+            .playCountSoftTopScrollEdge()
             .safeAreaInset(edge: .bottom) {
                 ShareLink(
                     item: payload,
@@ -284,7 +285,7 @@ struct RecapShareStudio: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    PlayCountSheetDismissButton { dismiss() }
                 }
             }
             .onAppear { normalizeSelections() }
@@ -353,7 +354,7 @@ private struct RecapShareTemplatePicker: View {
                             .padding(.horizontal, 12)
                             .frame(height: 38)
                             .background(
-                                selection == template ? Color.accentColor : Color.secondary.opacity(0.12),
+                                selection == template ? PlayCountBrand.accent : Color.secondary.opacity(0.12),
                                 in: Capsule()
                             )
                             .foregroundStyle(selection == template ? Color.white : Color.primary)
@@ -541,10 +542,10 @@ private struct PlayCountShareBrandMark: View {
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: size * 0.22)
-                        .fill(Color(red: 0.65, green: 0.88, blue: 0.96))
+                        .fill(.white)
                     Image(systemName: "medal.fill")
                         .font(.system(size: size * 0.55, weight: .bold))
-                        .foregroundStyle(.yellow, .red)
+                        .foregroundStyle(.yellow, PlayCountBrand.burgundy)
                 }
             }
         }
@@ -555,12 +556,7 @@ private struct PlayCountShareBrandMark: View {
     }
 
     private static let image: UIImage? = {
-        let names = [
-            "PlayCountIcon-iOS-Default-1024@1x",
-            "PlayCountIcon60x60@2x",
-            "PlayCountIcon76x76@2x~ipad"
-        ]
-        return names.lazy.compactMap { UIImage(named: $0) }.first
+        UIImage(named: "PlayCountShareIcon")
     }()
 }
 

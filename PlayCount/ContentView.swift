@@ -124,7 +124,7 @@ private struct AuthorizedLibraryView: View {
                         .toolbar {
                             if !LibraryTab.isScreenshotModeEnabled {
                                 ToolbarItem(placement: .topBarTrailing) {
-                                    Button("Done") {
+                                    PlayCountSheetDismissButton {
                                         presentedScreenshotArtist = nil
                                     }
                                 }
@@ -276,33 +276,31 @@ private struct PhoneLibraryView: View {
     }
 
     var body: some View {
-        Group {
-            switch selection {
-            case .songs:
-                TopSongsView(
-                    songs: manager.topSongs,
-                    sortMetric: manager.sortMetric,
-                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                    manager: manager,
-                    categorySelection: $selection
-                )
-            case .albums:
-                TopAlbumsView(
-                    albums: manager.topAlbums,
-                    sortMetric: manager.sortMetric,
-                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                    manager: manager,
-                    categorySelection: $selection
-                )
-            case .artists:
-                TopArtistsView(
-                    artists: manager.topArtists,
-                    sortMetric: manager.sortMetric,
-                    hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
-                    manager: manager,
-                    categorySelection: $selection
-                )
-            }
+        switch selection {
+        case .songs:
+            TopSongsView(
+                songs: manager.topSongs,
+                sortMetric: manager.sortMetric,
+                hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                manager: manager,
+                categorySelection: $selection
+            )
+        case .albums:
+            TopAlbumsView(
+                albums: manager.topAlbums,
+                sortMetric: manager.sortMetric,
+                hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                manager: manager,
+                categorySelection: $selection
+            )
+        case .artists:
+            TopArtistsView(
+                artists: manager.topArtists,
+                sortMetric: manager.sortMetric,
+                hasLoadedInitialSnapshot: manager.hasLoadedInitialSnapshot,
+                manager: manager,
+                categorySelection: $selection
+            )
         }
     }
 }
@@ -326,6 +324,8 @@ struct LibraryCategoryPicker: View {
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: .infinity)
+        .frame(height: 32)
+        .accessibilityHint("Switches the library ranking")
     }
 }
 

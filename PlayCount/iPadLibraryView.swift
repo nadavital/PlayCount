@@ -99,7 +99,7 @@ struct iPadLibraryView: View {
                     .toolbar {
                         if !LibraryTab.isScreenshotModeEnabled {
                             ToolbarItem(placement: .topBarTrailing) {
-                                Button("Done") {
+                                PlayCountSheetDismissButton {
                                     presentedNowPlayingSong = nil
                                 }
                             }
@@ -197,6 +197,7 @@ private struct iPadAllTimeDashboardView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .refreshable {
             manager.refreshTopItems()
         }
@@ -325,9 +326,9 @@ private struct iPadDashboardSummaryBar: View {
                 HStack(spacing: 10) {
                     Image(systemName: metric.systemImage)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(PlayCountBrand.accent)
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(Color.accentColor.opacity(0.10)))
+                        .background(Circle().fill(PlayCountBrand.accent.opacity(0.10)))
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(metric.value)

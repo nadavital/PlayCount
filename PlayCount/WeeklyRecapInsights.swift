@@ -63,14 +63,26 @@ struct WeeklyRecapComparison: Equatable, Sendable {
         calendar: Calendar = .current
     ) -> [WeeklyRecapInsight] {
         guard let month = calendar.dateInterval(of: .month, for: date) else { return [] }
-        return source
-            .filter { $0.snapshotCount > 1 && month.contains($0.weekStart) }
+        let measured = source.filter { $0.snapshotCount > 1 && month.contains($0.weekStart) }
+
+        // Older stores may contain the same local week using slightly
+        // different absolute dates after a time-zone/calendar change. Treat
+        // those as one week and keep the newest observation; otherwise the
+        // chart can report several "weeks" that all render on the same date.
+        return Dictionary(grouping: measured) { insight in
+            let components = calendar.dateComponents(
+                [.yearForWeekOfYear, .weekOfYear],
+                from: insight.weekStart
+            )
+            return "\(components.yearForWeekOfYear ?? 0)-\(components.weekOfYear ?? 0)"
+        }
+            .compactMap { $0.value.max { $0.generatedAt < $1.generatedAt } }
             .sorted { $0.weekStart < $1.weekStart }
     }
 }
 
 struct RecapMilestone: Identifiable, Equatable, Sendable {
-    enum Kind: String, Sendable {
+    enum Kind: String, Hashable, Sendable {
         case artistDiscovery
         case songDiscovery
         case listeningTime

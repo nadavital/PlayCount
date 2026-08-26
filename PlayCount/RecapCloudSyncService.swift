@@ -100,10 +100,16 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
     private enum Field {
         static let capturedAt = "capturedAt"
         static let counterSignature = "counterSignature"
+        static let reliabilityPolicyVersion = "reliabilityPolicyVersion"
         static let payload = "payload"
         static let payloadIDs = "payloadIDs"
         static let recapSummaries = "recapSummaries"
         static let yearlyRecapSummaries = "yearlyRecapSummaries"
+    }
+
+    private struct RecapEvidenceEnvelope: Codable {
+        let yearlyRecapSummaries: Data?
+        let unattributedIntervals: Data
     }
 
     private static let containerIdentifier = "iCloud.com.nadavavital.PlayCount"
@@ -186,17 +192,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
 
         let records = uniquePayloads.map { payload in
             let recordID = CKRecord.ID(recordName: payload.id, zoneID: Self.recordZoneID)
-            let record = CKRecord(recordType: recordType, recordID: recordID)
-            record[Field.capturedAt] = payload.capturedAt as NSDate
-            record[Field.counterSignature] = payload.counterSignature as NSString
-            record[Field.payload] = payload.encodedSnapshot as NSData
-            if let encodedRecaps = payload.encodedRecaps {
-                record[Field.recapSummaries] = encodedRecaps as NSData
-            }
-            if let encodedYearlyRecaps = payload.encodedYearlyRecaps {
-                record[Field.yearlyRecapSummaries] = encodedYearlyRecaps as NSData
-            }
-            return record
+            return Self.record(from: payload, recordID: recordID)
         }
 
         let recordIDsToDelete = deletingPayloadIDs.map {
@@ -237,6 +233,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             configuration.desiredKeys = [
                 Field.capturedAt,
                 Field.counterSignature,
+                Field.reliabilityPolicyVersion,
                 Field.payload,
                 Field.recapSummaries,
                 Field.yearlyRecapSummaries
@@ -315,6 +312,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             operation.desiredKeys = [
                 Field.capturedAt,
                 Field.counterSignature,
+                Field.reliabilityPolicyVersion,
                 Field.payload,
                 Field.recapSummaries,
                 Field.yearlyRecapSummaries
@@ -444,11 +442,43 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
     }
 
-    private static func payload(from record: CKRecord) -> RecapSnapshotSyncPayload? {
+    static func record(from payload: RecapSnapshotSyncPayload, recordID: CKRecord.ID) -> CKRecord {
+        let record = CKRecord(recordType: "RecapSnapshot", recordID: recordID)
+        record[Field.capturedAt] = payload.capturedAt as NSDate
+        record[Field.counterSignature] = payload.counterSignature as NSString
+        if let reliabilityPolicyVersion = payload.reliabilityPolicyVersion {
+            record[Field.reliabilityPolicyVersion] = reliabilityPolicyVersion as NSNumber
+        }
+        record[Field.payload] = payload.encodedSnapshot as NSData
+        if let encodedRecaps = payload.encodedRecaps {
+            record[Field.recapSummaries] = encodedRecaps as NSData
+        }
+        if let encodedUnattributedIntervals = payload.encodedUnattributedIntervals,
+           let envelope = try? JSONEncoder().encode(
+               RecapEvidenceEnvelope(
+                   yearlyRecapSummaries: payload.encodedYearlyRecaps,
+                   unattributedIntervals: encodedUnattributedIntervals
+               )
+           ) {
+            record[Field.yearlyRecapSummaries] = envelope as NSData
+        } else if let encodedYearlyRecaps = payload.encodedYearlyRecaps {
+            record[Field.yearlyRecapSummaries] = encodedYearlyRecaps as NSData
+        }
+        return record
+    }
+
+    static func payload(from record: CKRecord) -> RecapSnapshotSyncPayload? {
         let capturedAt = (record[Field.capturedAt] as? Date) ?? (record[Field.capturedAt] as? NSDate).map { $0 as Date }
         let data = (record[Field.payload] as? Data) ?? (record[Field.payload] as? NSData).map { $0 as Data }
         let recapData = (record[Field.recapSummaries] as? Data) ?? (record[Field.recapSummaries] as? NSData).map { $0 as Data }
-        let yearlyRecapData = (record[Field.yearlyRecapSummaries] as? Data) ?? (record[Field.yearlyRecapSummaries] as? NSData).map { $0 as Data }
+        let storedYearlyRecapData = (record[Field.yearlyRecapSummaries] as? Data) ??
+            (record[Field.yearlyRecapSummaries] as? NSData).map { $0 as Data }
+        let evidenceEnvelope = storedYearlyRecapData.flatMap {
+            try? JSONDecoder().decode(RecapEvidenceEnvelope.self, from: $0)
+        }
+        let yearlyRecapData = evidenceEnvelope?.yearlyRecapSummaries ?? storedYearlyRecapData
+        let unattributedIntervalsData = evidenceEnvelope?.unattributedIntervals
+        let reliabilityPolicyVersion = (record[Field.reliabilityPolicyVersion] as? NSNumber)?.intValue
 
         guard let capturedAt,
               let counterSignature = record[Field.counterSignature] as? String,
@@ -460,9 +490,11 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             id: record.recordID.recordName,
             capturedAt: capturedAt,
             counterSignature: counterSignature,
+            reliabilityPolicyVersion: reliabilityPolicyVersion,
             encodedSnapshot: data,
             encodedRecaps: recapData,
-            encodedYearlyRecaps: yearlyRecapData
+            encodedYearlyRecaps: yearlyRecapData,
+            encodedUnattributedIntervals: unattributedIntervalsData
         )
     }
 

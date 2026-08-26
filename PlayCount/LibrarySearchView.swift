@@ -64,6 +64,7 @@ struct LibrarySearchView: View {
         .animation(.easeInOut(duration: 0.2), value: manager.hasLoadedInitialSnapshot)
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .navigationTitle("Search")
         .playCountPrimaryTitleDisplayMode()
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(selectedDomain.searchPrompt))
@@ -132,9 +133,14 @@ struct LibrarySearchView: View {
             }
 
             if selectedDomain == .all || selectedDomain == .songs {
-                Section("Top Songs") {
-                    ForEach(manager.topSongs.prefix(3)) { song in
-                        songLink(song)
+                Section("Recently Played") {
+                    if manager.recentlyPlayedSongs.isEmpty {
+                        Label("No recent library plays yet", systemImage: "clock.arrow.circlepath")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(manager.recentlyPlayedSongs.prefix(5)) { song in
+                            recentSongLink(song)
+                        }
                     }
                 }
             }
@@ -305,6 +311,41 @@ struct LibrarySearchView: View {
             SongInfoView(song: song, manager: manager)
         } label: {
             SongRow(song: song, sortMetric: manager.sortMetric)
+        }
+    }
+
+    private func recentSongLink(_ song: TopSong) -> some View {
+        NavigationLink {
+            SongInfoView(song: song, manager: manager)
+        } label: {
+            HStack(spacing: 12) {
+                ArtworkView(
+                    artwork: song.artwork,
+                    size: CGSize(width: 48, height: 48),
+                    cornerRadius: 9
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(song.title)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(song.artist)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if let lastPlayedDate = song.lastPlayedDate {
+                    Text(lastPlayedDate, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 

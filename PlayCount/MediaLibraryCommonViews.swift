@@ -50,9 +50,20 @@ private enum ArtworkColorCalculator {
 }
 
 extension MPMediaItemArtwork {
-    func averageColorComponents(maxDimension: CGFloat = 80) -> (Double, Double, Double)? {
-        let pixelDimension = Int(maxDimension.rounded(.up))
-        let key = "\(ObjectIdentifier(self))-\(pixelDimension)" as NSString
+    func cachedAverageColorComponents(
+        cacheKey: String,
+        maxDimension: CGFloat = 80
+    ) -> (Double, Double, Double)? {
+        let key = averageColorCacheKey(cacheKey: cacheKey, maxDimension: maxDimension)
+        guard let cached = ArtworkColorCalculator.cache.object(forKey: key) else { return nil }
+        return (cached.red, cached.green, cached.blue)
+    }
+
+    func averageColorComponents(
+        maxDimension: CGFloat = 80,
+        cacheKey: String? = nil
+    ) -> (Double, Double, Double)? {
+        let key = averageColorCacheKey(cacheKey: cacheKey, maxDimension: maxDimension)
         if let cached = ArtworkColorCalculator.cache.object(forKey: key) {
             return (cached.red, cached.green, cached.blue)
         }
@@ -94,6 +105,14 @@ extension MPMediaItemArtwork {
 
         return (color.red, color.green, color.blue)
     }
+
+    private func averageColorCacheKey(
+        cacheKey: String?,
+        maxDimension: CGFloat
+    ) -> NSString {
+        let pixelDimension = Int(maxDimension.rounded(.up))
+        return "\(cacheKey ?? String(describing: ObjectIdentifier(self)))-\(pixelDimension)" as NSString
+    }
 }
 
 struct EmptyLibrarySection: View {
@@ -129,7 +148,7 @@ struct EmptyLibraryArtworkCluster: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.accentColor.opacity(0.28),
+                            PlayCountBrand.accent.opacity(0.28),
                             Color.pink.opacity(0.22),
                             Color.orange.opacity(0.18)
                         ],
@@ -278,10 +297,10 @@ struct ArtistArtworkView: View {
             } else {
                 ZStack {
                     Circle()
-                        .fill(Color.accentColor.opacity(0.15))
+                        .fill(PlayCountBrand.accent.opacity(0.15))
                     Text(initials)
                         .font(initials == "🎤" ? .system(size: diameter / 2.2) : .system(size: diameter / 2.2, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(PlayCountBrand.accent)
                 }
             }
         }
@@ -560,8 +579,8 @@ struct LoadingListSection: View {
             }
 
             Section {
-                ForEach(0..<5, id: \.self) { _ in
-                    LoadingMediaRow()
+                ForEach(0..<5, id: \.self) { index in
+                    LoadingMediaRow(index: index)
                         .accessibilityHidden(true)
                 }
             }
@@ -570,34 +589,50 @@ struct LoadingListSection: View {
 }
 
 private struct LoadingMediaRow: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let index: Int
 
     var body: some View {
-        PhaseAnimator(reduceMotion ? [false] : [false, true]) { highlighted in
+        GeometryReader { proxy in
             row
-                .opacity(highlighted ? 0.58 : 0.9)
-        } animation: { _ in
-            .easeInOut(duration: 0.9)
+                .frame(width: proxy.size.width, alignment: .leading)
         }
+        .frame(height: 72)
     }
 
     private var row: some View {
         HStack(spacing: 12) {
             Circle().fill(.secondary.opacity(0.13)).frame(width: 34, height: 34)
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.secondary.opacity(0.14)).frame(width: 56, height: 56)
+            loadingArtwork
             VStack(alignment: .leading, spacing: 7) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.14)).frame(maxWidth: 170).frame(height: 13)
+                    .fill(.secondary.opacity(0.14))
+                    .frame(width: titleWidth, height: 13)
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.1)).frame(maxWidth: 118).frame(height: 10)
+                    .fill(.secondary.opacity(0.1))
+                    .frame(width: subtitleWidth, height: 10)
             }
-            Spacer(minLength: 8)
-            Capsule().fill(.secondary.opacity(0.12)).frame(width: 44, height: 28)
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: 64)
         .padding(.vertical, 4)
         .redacted(reason: .placeholder)
+    }
+
+    private var loadingArtwork: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return shape
+            .fill(.secondary.opacity(0.1))
+            .overlay { shape.strokeBorder(PlayCountBrand.burgundy.opacity(0.82), lineWidth: 0.75) }
+            .frame(width: 56, height: 56)
+    }
+
+    private var titleWidth: CGFloat {
+        [152, 188, 132, 174, 145][index % 5]
+    }
+
+    private var subtitleWidth: CGFloat {
+        [96, 124, 108, 88, 116][index % 5]
     }
 }
 
@@ -605,30 +640,74 @@ struct PlayCountLoadingMark: View {
     let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var pausesAnimation: Bool {
+        reduceMotion || ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
+            ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
+    }
+
     var body: some View {
-        PhaseAnimator(reduceMotion ? [false] : [false, true]) { expanded in
-            ZStack {
-                Circle()
-                    .stroke(Color.accentColor.opacity(expanded ? 0.18 : 0.42), lineWidth: size * 0.08)
-                    .scaleEffect(expanded ? 1.18 : 0.9)
-                Circle()
-                    .fill(.thinMaterial)
-                    .overlay {
-                        Circle().strokeBorder(.white.opacity(0.22), lineWidth: 0.7)
-                    }
-                Image(systemName: "music.note")
-                    .font(.system(size: size * 0.42, weight: .bold))
-                    .foregroundStyle(Color.accentColor)
-                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
-            }
-            .frame(width: size, height: size)
-        } animation: { _ in
-            .easeInOut(duration: 1.05)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: pausesAnimation)) { context in
+            medal(phase: animationPhase(for: context.date))
         }
         .accessibilityHidden(true)
     }
-}
 
+    private func animationPhase(for date: Date) -> Double {
+        guard !pausesAnimation else { return 0.35 }
+        return date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: 2.4) / 2.4
+    }
+
+    private func medal(phase: Double) -> some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [PlayCountBrand.burgundy, PlayCountBrand.burgundy.opacity(0.76)],
+                        center: UnitPoint(
+                            x: 0.42 + 0.16 * cos(phase * .pi * 2),
+                            y: 0.42 + 0.16 * sin(phase * .pi * 2)
+                        ),
+                        startRadius: 0,
+                        endRadius: size * 0.6
+                    )
+                )
+                .frame(width: size * 0.84, height: size * 0.84)
+                .blur(radius: size * 0.035)
+
+            loadingGlassLens
+
+            Image(systemName: "play.fill")
+                .font(.system(size: size * 0.25, weight: .bold))
+                .foregroundStyle(.white.opacity(0.92))
+                .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+                .offset(x: size * 0.015)
+
+            Circle()
+                .trim(from: 0.03, to: 0.16)
+                .stroke(
+                    .white.opacity(0.52),
+                    style: StrokeStyle(lineWidth: max(0.7, size * 0.025), lineCap: .round)
+                )
+                .frame(width: size * 0.75, height: size * 0.75)
+                .rotationEffect(.degrees(phase * 360))
+        }
+        .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private var loadingGlassLens: some View {
+        if #available(iOS 26.0, *) {
+            Color.clear
+                .frame(width: size, height: size)
+                .glassEffect(.clear.tint(PlayCountBrand.burgundy.opacity(0.32)), in: .circle)
+        } else {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay { Circle().strokeBorder(.white.opacity(0.28), lineWidth: 0.75) }
+        }
+    }
+}
 
 struct LibraryStatusOverlayModifier: ViewModifier {
     let isLoading: Bool
@@ -735,6 +814,15 @@ struct CachedLibraryStatusRow: View {
 
 extension View {
     @ViewBuilder
+    func playCountSoftTopScrollEdge() -> some View {
+        if #available(iOS 27.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
     func playCountPrimaryTitleDisplayMode() -> some View {
         if #available(iOS 27.0, *) {
             toolbarTitleDisplayMode(.inlineLarge)
@@ -758,6 +846,31 @@ extension View {
 
     func playCountCardSurface(cornerRadius: CGFloat) -> some View {
         modifier(PlayCountCardSurfaceModifier(cornerRadius: cornerRadius))
+    }
+}
+
+struct PlayCountSheetDismissButton: View {
+    let action: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            dismissButton
+                .buttonStyle(.glassProminent)
+                .tint(PlayCountBrand.accent)
+        } else {
+            dismissButton
+                .buttonStyle(.borderedProminent)
+                .tint(PlayCountBrand.accent)
+        }
+    }
+
+    private var dismissButton: some View {
+        Button(action: action) {
+            Image(systemName: "checkmark")
+                .font(.subheadline.weight(.bold))
+        }
+        .accessibilityLabel("Done")
     }
 }
 

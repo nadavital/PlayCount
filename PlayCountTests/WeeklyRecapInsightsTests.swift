@@ -143,6 +143,37 @@ final class WeeklyRecapInsightsTests: XCTestCase {
         XCTAssertEqual(measured.map { Int($0.totalListeningDuration / 60) }, [180, 211])
     }
 
+    func testMeasuredHistoryCollapsesLegacyEntriesForTheSameCalendarWeek() {
+        let monday = date(2026, 8, 10)
+        let legacyDuplicate = WeeklyRecapInsight(
+            weekStart: date(2026, 8, 10, hour: 2),
+            generatedAt: date(2026, 8, 12),
+            trackingStart: monday,
+            snapshotCount: 3,
+            totalPlayDelta: 10,
+            totalListeningDuration: 120 * 60,
+            topSong: nil
+        )
+        let newest = WeeklyRecapInsight(
+            weekStart: monday,
+            generatedAt: date(2026, 8, 14),
+            trackingStart: monday,
+            snapshotCount: 5,
+            totalPlayDelta: 20,
+            totalListeningDuration: 240 * 60,
+            topSong: nil
+        )
+
+        let measured = WeeklyRecapComparison.measuredHistory(
+            from: [legacyDuplicate, newest],
+            inMonthContaining: date(2026, 8, 14),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(measured.count, 1)
+        XCTAssertEqual(Int((measured.first?.totalListeningDuration ?? 0) / 60), 240)
+    }
+
     func testWeeklyInsightsPersistInCompactStore() {
         let directory = temporaryDirectory()
         let monday = date(2026, 8, 10, hour: 9)

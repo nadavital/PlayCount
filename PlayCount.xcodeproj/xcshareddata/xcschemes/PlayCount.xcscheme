@@ -41,6 +41,17 @@
                ReferencedContainer = "container:PlayCount.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7A03C0032DD2000000000003"
+               BuildableName = "PlayCountUITests.xctest"
+               BlueprintName = "PlayCountUITests"
+               ReferencedContainer = "container:PlayCount.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

@@ -201,6 +201,8 @@ struct SongInfoView: View {
 
                 MediaDetailMilestonesSection(
                     milestones: manager.milestones(for: song),
+                    subject: song.title,
+                    scopeLabel: "Song",
                     artwork: song.artwork,
                     artworkCornerRadius: 16
                 )
@@ -234,13 +236,19 @@ struct SongInfoView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y > 260
         } action: { _, shouldShowTitle in
             guard showsNavigationTitle != shouldShowTitle else { return }
             showsNavigationTitle = shouldShowTitle
         }
-        .background(MediaDetailBackground(artwork: song.artwork))
+        .background(
+            MediaDetailBackground(
+                artwork: song.artwork,
+                cacheKey: "song-\(song.id)-\(song.title)-\(song.artist)"
+            )
+        )
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         .toolbar {
@@ -274,6 +282,15 @@ struct AlbumInfoView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showsNavigationTitle = false
     @ObservedObject private var detailUpdates: MediaLibraryManager.DetailPresentationUpdates
+    private let songsSectionID = "album-detail-songs"
+
+    private static var screenshotFocusesSongs: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotAlbumSongs")
+        #else
+        false
+        #endif
+    }
 
     init(
         album: TopAlbum,
@@ -319,13 +336,16 @@ struct AlbumInfoView: View {
         let monthlySongs = resolvedRecapContext?.songs(for: resolvedAlbum) ?? []
         let periodSummaries = resolvedRecapContext?.periodSummaries(for: resolvedAlbum) ?? []
 
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: isRegularWidth ? 32 : 24) {
                 AlbumDetailHeader(album: resolvedAlbum, artist: artist, manager: manager, recapContext: resolvedRecapContext)
                     .frame(maxWidth: .infinity)
 
                 MediaDetailMilestonesSection(
                     milestones: manager.milestones(for: resolvedAlbum),
+                    subject: resolvedAlbum.title,
+                    scopeLabel: "Album",
                     artwork: resolvedAlbum.artwork,
                     artworkCornerRadius: 16
                 )
@@ -350,21 +370,34 @@ struct AlbumInfoView: View {
                     manager: manager,
                     recapContext: resolvedRecapContext
                 )
+                .id(songsSectionID)
+                }
+                .padding(.horizontal, isRegularWidth ? 36 : 24)
+                .padding(.top, isRegularWidth ? 28 : 0)
+                .padding(.bottom, bottomPadding)
+                .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(.horizontal, isRegularWidth ? 36 : 24)
-            .padding(.top, isRegularWidth ? 28 : 0)
-            .padding(.bottom, bottomPadding)
-            .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .scrollIndicators(.hidden)
+            .playCountSoftTopScrollEdge()
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y > 260
+            } action: { _, shouldShowTitle in
+                guard showsNavigationTitle != shouldShowTitle else { return }
+                showsNavigationTitle = shouldShowTitle
+            }
+            .task {
+                guard Self.screenshotFocusesSongs else { return }
+                try? await Task.sleep(for: .milliseconds(450))
+                proxy.scrollTo(songsSectionID, anchor: .top)
+            }
         }
-        .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y > 260
-        } action: { _, shouldShowTitle in
-            guard showsNavigationTitle != shouldShowTitle else { return }
-            showsNavigationTitle = shouldShowTitle
-        }
-        .background(MediaDetailBackground(artwork: resolvedAlbum.artwork))
+        .background(
+            MediaDetailBackground(
+                artwork: resolvedAlbum.artwork,
+                cacheKey: "album-\(resolvedAlbum.id)-\(resolvedAlbum.title)-\(resolvedAlbum.artist)"
+            )
+        )
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         .toolbar {
@@ -473,6 +506,8 @@ struct ArtistInfoView: View {
 
                     MediaDetailMilestonesSection(
                         milestones: manager.milestones(for: resolvedArtist),
+                        subject: resolvedArtist.name,
+                        scopeLabel: "Artist",
                         artwork: resolvedArtist.artwork,
                         artworkCornerRadius: 38
                     )
@@ -583,13 +618,19 @@ struct ArtistInfoView: View {
             }
         }
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .onScrollGeometryChange(for: Bool.self) { geometry in
             geometry.contentOffset.y > 260
         } action: { _, shouldShowTitle in
             guard showsNavigationTitle != shouldShowTitle else { return }
             showsNavigationTitle = shouldShowTitle
         }
-        .background(MediaDetailBackground(artwork: resolvedArtist.artwork))
+        .background(
+            MediaDetailBackground(
+                artwork: resolvedArtist.artwork,
+                cacheKey: "artist-\(resolvedArtist.id)-\(resolvedArtist.name)"
+            )
+        )
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         .toolbar {
@@ -1235,8 +1276,11 @@ private struct MediaDetailListeningMetrics: View {
 
 private struct MediaDetailMilestonesSection: View {
     let milestones: [RecapMilestone]
+    let subject: String
+    let scopeLabel: String
     let artwork: MPMediaItemArtwork?
     let artworkCornerRadius: CGFloat
+    @State private var isShowingCollection = false
 
     private var summaries: [MilestoneProgressSummary] {
         MilestoneCollectionPresentation.progressSummary(from: milestones)
@@ -1248,9 +1292,17 @@ private struct MediaDetailMilestonesSection: View {
                 Text("Milestones")
                     .font(.title3.weight(.semibold))
                 Spacer()
-                Text("All Time")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                Button {
+                    isShowingCollection = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("View All")
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.plain)
             }
 
             MilestoneShelf {
@@ -1259,7 +1311,8 @@ private struct MediaDetailMilestonesSection: View {
                         MediaMilestoneProgressCard(
                             summary: summary,
                             artwork: artwork,
-                            artworkCornerRadius: artworkCornerRadius
+                            artworkCornerRadius: artworkCornerRadius,
+                            action: { isShowingCollection = true }
                         )
                     }
                 }
@@ -1269,6 +1322,23 @@ private struct MediaDetailMilestonesSection: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .accessibilityElement(children: .contain)
+        .sheet(isPresented: $isShowingCollection) {
+            MediaMilestonesSheet(
+                subject: subject,
+                scopeLabel: scopeLabel,
+                milestones: milestones,
+                artwork: artwork,
+                artworkCornerRadius: artworkCornerRadius
+            )
+        }
+        .task {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMediaMilestones") {
+                try? await Task.sleep(for: .milliseconds(300))
+                isShowingCollection = true
+            }
+            #endif
+        }
     }
 }
 
@@ -1276,12 +1346,10 @@ private struct MediaMilestoneProgressCard: View {
     let summary: MilestoneProgressSummary
     let artwork: MPMediaItemArtwork?
     let artworkCornerRadius: CGFloat
-    @State private var isShowingPath = false
+    let action: () -> Void
 
     var body: some View {
-        Button {
-            isShowingPath = true
-        } label: {
+        Button(action: action) {
             HStack(spacing: 14) {
                 ZStack(alignment: .bottomTrailing) {
                     ArtworkView(
@@ -1307,7 +1375,7 @@ private struct MediaMilestoneProgressCard: View {
                             value: min(next.currentValue, next.targetValue),
                             total: next.targetValue
                         )
-                        .tint(MilestoneMedalTier(stage: next.stage).glassTint)
+                        .tint(PlayCountBrand.accent)
                         Text("Next: \(next.title)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1329,16 +1397,157 @@ private struct MediaMilestoneProgressCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Shows every milestone in this path")
-        .sheet(isPresented: $isShowingPath) {
-            MilestonePathSheet(selected: summary.featured, milestones: summary.series)
-        }
+        .accessibilityHint("Shows every milestone for this \(summary.kind.collectionTitle.lowercased()) collection")
     }
 
     private var accessibilityLabel: String {
         let earned = summary.highestEarned.map { "Highest earned: \($0.title)." } ?? "No milestone earned yet."
         let next = summary.next.map { "Next: \($0.title), \($0.valueLabel)." } ?? "Collection complete."
         return "\(summary.kind.collectionTitle). \(earned) \(next)"
+    }
+}
+
+private struct MediaMilestonesSheet: View {
+    let subject: String
+    let scopeLabel: String
+    let milestones: [RecapMilestone]
+    let artwork: MPMediaItemArtwork?
+    let artworkCornerRadius: CGFloat
+    @Environment(\.dismiss) private var dismiss
+
+    private var earned: [RecapMilestone] {
+        milestones.filter(\.isEarned).sorted { lhs, rhs in
+            if lhs.stage != rhs.stage { return lhs.stage > rhs.stage }
+            return lhs.targetValue > rhs.targetValue
+        }
+    }
+
+    private var next: [RecapMilestone] {
+        MilestoneCollectionPresentation.groups(from: milestones).compactMap { group in
+            group.first { !$0.isEarned }
+        }
+    }
+
+    private var later: [RecapMilestone] {
+        let nextIDs = Set(next.map(\.id))
+        return milestones.filter { !$0.isEarned && !nextIDs.contains($0.id) }
+    }
+
+    private let columns = [GridItem(.adaptive(minimum: 96, maximum: 132), spacing: 14)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    HStack(spacing: 14) {
+                        ArtworkView(
+                            artwork: artwork,
+                            size: CGSize(width: 72, height: 72),
+                            cornerRadius: artworkCornerRadius
+                        )
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(scopeLabel.uppercased())
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(subject)
+                                .font(.title3.weight(.semibold))
+                                .lineLimit(2)
+                            Text("\(earned.count) earned")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if !earned.isEmpty {
+                        milestoneCollectionSection(title: "Earned", milestones: earned)
+                    }
+
+                    if !next.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Up Next")
+                                .font(.title3.weight(.semibold))
+                            ForEach(next) { milestone in
+                                MilestoneUpcomingRow(milestone: milestone)
+                            }
+                        }
+                    }
+
+                    if !later.isEmpty {
+                        milestoneCollectionSection(title: "Later", milestones: later)
+                    }
+                }
+                .padding(20)
+            }
+            .scrollIndicators(.hidden)
+            .playCountSoftTopScrollEdge()
+            .navigationTitle("Milestones")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    PlayCountSheetDismissButton { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func milestoneCollectionSection(title: String, milestones: [RecapMilestone]) -> some View {
+        let groups = MilestoneCollectionPresentation.groups(from: milestones)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                if let first = group.first {
+                    Text(first.kind.collectionTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
+                        ForEach(group.sorted(by: milestoneDisplayOrder)) { milestone in
+                            VStack(spacing: 7) {
+                                MilestoneBadge(milestone: milestone, size: 76, showsProgress: false)
+                                Text(milestone.title)
+                                    .font(.caption.weight(.semibold))
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .top)
+                            .opacity(milestone.isEarned ? 1 : 0.48)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityValue(milestone.statusLabel)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func milestoneDisplayOrder(_ lhs: RecapMilestone, _ rhs: RecapMilestone) -> Bool {
+        if lhs.isEarned != rhs.isEarned { return lhs.isEarned }
+        return lhs.isEarned ? lhs.targetValue > rhs.targetValue : lhs.targetValue < rhs.targetValue
+    }
+}
+
+private struct MilestoneUpcomingRow: View {
+    let milestone: RecapMilestone
+
+    var body: some View {
+        HStack(spacing: 14) {
+            MilestoneBadge(milestone: milestone, size: 58, showsProgress: false)
+                .opacity(0.55)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(milestone.kind.collectionTitle)
+                    .font(.subheadline.weight(.semibold))
+                Text(milestone.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ProgressView(value: milestone.progress)
+                    .tint(PlayCountBrand.accent)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.38), in: .rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+        .accessibilityValue("\(Int((milestone.progress * 100).rounded())) percent complete")
     }
 }
 
@@ -1465,16 +1674,54 @@ private struct SongRelatedSections: View {
     }
 }
 
+enum AlbumSongOrder: String, CaseIterable, Identifiable {
+    case tracklist = "Tracklist"
+    case mostPlayed = "Most Played"
+
+    var id: Self { self }
+
+    func sorted(_ songs: [TopSong]) -> [TopSong] {
+        songs.sorted { lhs, rhs in
+            switch self {
+            case .tracklist:
+                if lhs.discNumber != rhs.discNumber { return lhs.discNumber < rhs.discNumber }
+                if lhs.trackNumber != rhs.trackNumber { return lhs.trackNumber < rhs.trackNumber }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            case .mostPlayed:
+                if lhs.playCount != rhs.playCount { return lhs.playCount > rhs.playCount }
+                if lhs.discNumber != rhs.discNumber { return lhs.discNumber < rhs.discNumber }
+                if lhs.trackNumber != rhs.trackNumber { return lhs.trackNumber < rhs.trackNumber }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        }
+    }
+}
+
 private struct AlbumSongsSection: View {
+
     let songs: [TopSong]
     let sortMetric: MediaLibraryManager.SortMetric
     let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
+    @State private var order: AlbumSongOrder = .tracklist
+
+    private var orderedSongs: [TopSong] {
+        order.sorted(songs)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Songs")
-                .font(.title3.weight(.semibold))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Songs")
+                    .font(.title3.weight(.semibold))
+
+                Picker("Song order", selection: $order) {
+                    ForEach(AlbumSongOrder.allCases) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
 
             if songs.isEmpty {
                 Text("We haven't tracked individual plays for this album yet.")
@@ -1482,16 +1729,20 @@ private struct AlbumSongsSection: View {
                     .foregroundStyle(.secondary)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(songs.enumerated(), id: \.element.id) { index, song in
+                    ForEach(orderedSongs.enumerated(), id: \.element.id) { index, song in
                         VStack(spacing: 0) {
                             NavigationLink {
                                 SongInfoView(song: song, manager: manager, recapContext: recapContext)
                             } label: {
-                                AlbumTrackRow(song: song, sortMetric: sortMetric)
+                                AlbumTrackRow(
+                                    song: song,
+                                    sortMetric: sortMetric,
+                                    displayNumber: order == .tracklist ? song.trackNumber : index + 1
+                                )
                             }
                             .buttonStyle(.plain)
 
-                            if index < songs.count - 1 {
+                            if index < orderedSongs.count - 1 {
                                 Divider()
                                     .overlay(Color.primary.opacity(0.1))
                             }
@@ -1507,11 +1758,12 @@ private struct AlbumSongsSection: View {
 private struct AlbumTrackRow: View {
     let song: TopSong
     let sortMetric: MediaLibraryManager.SortMetric
+    let displayNumber: Int
 
     var body: some View {
         HStack(spacing: 16) {
-            if song.trackNumber > 0 {
-                Text("\(song.trackNumber)")
+            if displayNumber > 0 {
+                Text("\(displayNumber)")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 32, alignment: .trailing)
@@ -1778,6 +2030,7 @@ private struct MonthlyDetailSongsListView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .navigationTitle(title)
         .playCountPushedTitleDisplayMode()
     }
@@ -1919,6 +2172,7 @@ private struct ArtistSongsListView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .navigationTitle("\(artist.name) Songs")
         .playCountPushedTitleDisplayMode()
     }
@@ -1961,6 +2215,7 @@ private struct ArtistAlbumsListView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
+        .playCountSoftTopScrollEdge()
         .navigationTitle("\(artist.name) Albums")
         .playCountPushedTitleDisplayMode()
     }
@@ -1968,19 +2223,29 @@ private struct ArtistAlbumsListView: View {
 
 private struct MediaDetailBackground: View {
     let artwork: MPMediaItemArtwork?
+    let cacheKey: String
     @Environment(\.colorScheme) private var colorScheme
     @State private var artworkColorComponents: (Double, Double, Double)?
 
+    init(artwork: MPMediaItemArtwork?, cacheKey: String) {
+        self.artwork = artwork
+        self.cacheKey = cacheKey
+        _artworkColorComponents = State(
+            initialValue: artwork?.cachedAverageColorComponents(cacheKey: cacheKey)
+        )
+    }
+
     var body: some View {
         ZStack {
+            Color(.systemGroupedBackground)
+
             if let gradientColors {
                 LinearGradient(
                     colors: gradientColors,
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-            } else {
-                Color(.systemGroupedBackground)
+                .transition(.opacity)
             }
 
             LinearGradient(
@@ -1994,16 +2259,21 @@ private struct MediaDetailBackground: View {
             )
         }
         .ignoresSafeArea()
-        .task(id: artwork.map(ObjectIdentifier.init)) {
+        .animation(.easeOut(duration: 0.22), value: artworkColorComponents != nil)
+        .task(id: cacheKey) {
             guard let artwork else {
                 artworkColorComponents = nil
                 return
             }
-            artworkColorComponents = nil
-            try? await Task.sleep(for: .milliseconds(120))
+
+            if let cached = artwork.cachedAverageColorComponents(cacheKey: cacheKey) {
+                artworkColorComponents = cached
+                return
+            }
+
             guard !Task.isCancelled else { return }
             let components = await Task.detached(priority: .utility) {
-                artwork.averageColorComponents()
+                artwork.averageColorComponents(cacheKey: cacheKey)
             }.value
             guard !Task.isCancelled else { return }
             artworkColorComponents = components

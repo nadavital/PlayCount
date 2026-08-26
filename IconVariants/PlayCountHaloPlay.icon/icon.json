@@ -3,8 +3,55 @@
     "refractivity",
     "specular-location"
   ],
-  "fill" : "system-light",
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.70588,0.88235,0.99216,1.00000"
+  },
   "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "display-p3:0.69020,0.32941,0.11765,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "display-p3:0.76078,0.36863,0.12941,1.00000"
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "display-p3:0.16078,0.16078,0.16078,1.00000"
+              }
+            }
+          ],
+          "image-name" : "play.svg",
+          "name" : "foreground play symbol",
+          "position" : {
+            "scale" : 0.34,
+            "translation-in-points" : [
+              12,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "combined",
+      "name" : "04_foreground_play",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.12
+      },
+      "specular" : "outside",
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
+      }
+    },
     {
       "layers" : [
         {
@@ -27,8 +74,8 @@
               }
             }
           ],
-          "image-name" : "disc-play-cutout.svg",
-          "name" : "opaque gold medal with play cutout",
+          "image-name" : "disc.svg",
+          "name" : "opaque gold medal center",
           "position" : {
             "scale" : 0.6000000000000001,
             "translation-in-points" : [
@@ -39,7 +86,7 @@
         }
       ],
       "lighting" : "combined",
-      "name" : "03_opaque_gold_medal_center",
+      "name" : "03_opaque_medal_center",
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.26
@@ -48,55 +95,6 @@
       "translucency" : {
         "enabled" : false,
         "value" : 0
-      }
-    },
-    {
-      "blur-material" : null,
-      "layers" : [
-        {
-          "fill-specializations" : [
-            {
-              "value" : {
-                "solid" : "display-p3:0.78431,0.31373,0.07059,0.90000"
-              }
-            },
-            {
-              "appearance" : "dark",
-              "value" : {
-                "solid" : "display-p3:0.86275,0.28235,0.04706,0.92000"
-              }
-            },
-            {
-              "appearance" : "tinted",
-              "value" : {
-                "solid" : "display-p3:0.68235,0.68235,0.68235,0.88000"
-              }
-            }
-          ],
-          "image-name" : "disc.svg",
-          "name" : "copper glass medal backing",
-          "position" : {
-            "scale" : 0.52,
-            "translation-in-points" : [
-              0,
-              0
-            ]
-          }
-        }
-      ],
-      "name" : "02_copper_glass_cutout",
-      "refractivity" : {
-        "depth" : 0.7831640625,
-        "enabled" : true,
-        "strength" : 0.9583984375
-      },
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.6
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.78
       }
     },
     {
@@ -141,8 +139,8 @@
         "strength" : 0.34
       },
       "shadow" : {
-        "kind" : "layer-color",
-        "opacity" : 0.32
+        "kind" : "neutral",
+        "opacity" : 0.28
       },
       "specular" : "inside",
       "translucency" : {
@@ -172,7 +170,6 @@
               }
             }
           ],
-          "hidden" : true,
           "image-name" : "ribbon-stripe.svg",
           "name" : "cyan ribbon stripes",
           "position" : {
@@ -206,7 +203,7 @@
           "image-name" : "ribbon-base.svg",
           "name" : "burgundy ribbons",
           "position" : {
-            "scale" : 1.08,
+            "scale" : 1,
             "translation-in-points" : [
               0,
               -128
@@ -215,7 +212,7 @@
         }
       ],
       "lighting" : "combined",
-      "name" : "00_striped_ribbons",
+      "name" : "01_striped_ribbons",
       "refractivity" : {
         "depth" : 0.08,
         "enabled" : true,
@@ -223,7 +220,7 @@
       },
       "shadow" : {
         "kind" : "layer-color",
-        "opacity" : 0.42
+        "opacity" : 0.28
       },
       "specular" : "inside",
       "translucency" : {

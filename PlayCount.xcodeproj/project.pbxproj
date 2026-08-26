@@ -10,6 +10,7 @@
 		50FF36952DA594AB00E9F5CD /* PlayCount.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlayCount.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A02C0012DD1000000000001 /* PlayCount iPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayCount iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7A01C0012DD0000000000001 /* PlayCountTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlayCountTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A03C0012DD2000000000001 /* PlayCountUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PlayCountUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -45,6 +46,11 @@
 			path = PlayCountTests;
 			sourceTree = "<group>";
 		};
+		7A03C0022DD2000000000002 /* PlayCountUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PlayCountUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +75,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A03C0052DD2000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,6 +90,7 @@
 			children = (
 				50FF36972DA594AB00E9F5CD /* PlayCount */,
 				7A01C0022DD0000000000002 /* PlayCountTests */,
+				7A03C0022DD2000000000002 /* PlayCountUITests */,
 				50FF36962DA594AB00E9F5CD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -87,6 +101,7 @@
 				50FF36952DA594AB00E9F5CD /* PlayCount.app */,
 				7A02C0012DD1000000000001 /* PlayCount iPad.app */,
 				7A01C0012DD0000000000001 /* PlayCountTests.xctest */,
+				7A03C0012DD2000000000001 /* PlayCountUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -161,10 +176,40 @@
 			productReference = 7A01C0012DD0000000000001 /* PlayCountTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		7A03C0032DD2000000000003 /* PlayCountUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A03C00A2DD200000000000A /* Build configuration list for PBXNativeTarget "PlayCountUITests" */;
+			buildPhases = (
+				7A03C0042DD2000000000004 /* Sources */,
+				7A03C0052DD2000000000005 /* Frameworks */,
+				7A03C0062DD2000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7A03C0092DD2000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7A03C0022DD2000000000002 /* PlayCountUITests */,
+			);
+			name = PlayCountUITests;
+			packageProductDependencies = (
+			);
+			productName = PlayCountUITests;
+			productReference = 7A03C0012DD2000000000001 /* PlayCountUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXContainerItemProxy section */
 		7A01C0082DD0000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 50FF368D2DA594AB00E9F5CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 50FF36942DA594AB00E9F5CD;
+			remoteInfo = PlayCount;
+		};
+		7A03C0082DD2000000000008 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 50FF368D2DA594AB00E9F5CD /* Project object */;
 			proxyType = 1;
@@ -191,6 +236,10 @@
 						CreatedOnToolsVersion = 16.3;
 						TestTargetID = 50FF36942DA594AB00E9F5CD;
 					};
+					7A03C0032DD2000000000003 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 50FF36942DA594AB00E9F5CD;
+					};
 				};
 			};
 			buildConfigurationList = 50FF36902DA594AB00E9F5CD /* Build configuration list for PBXProject "PlayCount" */;
@@ -210,6 +259,7 @@
 				50FF36942DA594AB00E9F5CD /* PlayCount */,
 				7A02C0042DD1000000000004 /* PlayCount iPad */,
 				7A01C0032DD0000000000003 /* PlayCountTests */,
+				7A03C0032DD2000000000003 /* PlayCountUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -230,6 +280,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		7A01C0062DD0000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7A03C0062DD2000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -260,6 +317,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A03C0042DD2000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -267,6 +331,11 @@
 			isa = PBXTargetDependency;
 			target = 50FF36942DA594AB00E9F5CD /* PlayCount */;
 			targetProxy = 7A01C0082DD0000000000008 /* PBXContainerItemProxy */;
+		};
+		7A03C0092DD2000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 50FF36942DA594AB00E9F5CD /* PlayCount */;
+			targetProxy = 7A03C0082DD2000000000008 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -402,7 +471,7 @@
 				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202607141547;
+				CURRENT_PROJECT_VERSION = 202608251610;
 				DEVELOPMENT_TEAM = C4MRP56MF5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -436,7 +505,7 @@
 				CODE_SIGN_ENTITLEMENTS = PlayCount/PlayCount.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202607141547;
+				CURRENT_PROJECT_VERSION = 202608251610;
 				DEVELOPMENT_TEAM = C4MRP56MF5;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -576,6 +645,52 @@
 			};
 			name = Release;
 		};
+		7A03C00B2DD200000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCountUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PlayCount;
+			};
+			name = Debug;
+		};
+		7A03C00C2DD200000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = C4MRP56MF5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nadavavital.PlayCountUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PlayCount;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -611,6 +726,15 @@
 			buildConfigurations = (
 				7A01C00B2DD000000000000B /* Debug */,
 				7A01C00C2DD000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A03C00A2DD200000000000A /* Build configuration list for PBXNativeTarget "PlayCountUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A03C00B2DD200000000000B /* Debug */,
+				7A03C00C2DD200000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
