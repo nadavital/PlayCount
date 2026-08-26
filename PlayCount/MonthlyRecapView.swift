@@ -187,7 +187,7 @@ struct MonthlyRecapView: View {
     }
 
     private var selectedMonthStartOrCurrent: Date {
-        normalizedMonth(selectedMonthStart ?? manager.monthlyRecap.monthStart)
+        normalizedMonth(selectedMonthStart ?? availableMonthStarts.last ?? manager.monthlyRecap.monthStart)
     }
 
     private var availableMonthStarts: [Date] {
@@ -1220,7 +1220,8 @@ struct MonthlyRecapView: View {
             return
         }
 
-        selectedMonthStart = normalizedMonth(manager.monthlyRecap.monthStart)
+        selectedMonthStart = availableMonthStarts.last.map(normalizedMonth)
+            ?? normalizedMonth(manager.monthlyRecap.monthStart)
     }
 
     private func selectMonth(_ month: Date) {

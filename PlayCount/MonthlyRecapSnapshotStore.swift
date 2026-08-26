@@ -264,6 +264,13 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         totalPlayDelta > 0 || newSongCount > 0
     }
 
+    var hasListeningActivity: Bool {
+        totalPlayDelta > 0 ||
+            totalListeningDuration > 0 ||
+            unattributedPlayDelta > 0 ||
+            unattributedListeningDuration > 0
+    }
+
     var isTrackingOnlyBaseline: Bool {
         snapshotCount <= 1 || (totalPlayDelta == 0 && totalSkipDelta == 0 && newSongCount == 0)
     }
@@ -1049,6 +1056,13 @@ final class MonthlyRecapSnapshotStore {
 
         var hasActivity: Bool {
             totalPlayDelta > 0 || newSongCount > 0
+        }
+
+        var hasListeningActivity: Bool {
+            totalPlayDelta > 0 ||
+                totalListeningDuration > 0 ||
+                (unattributedPlayDelta ?? 0) > 0 ||
+                (unattributedListeningDuration ?? 0) > 0
         }
 
         var hasRankingEvidence: Bool {
@@ -2199,7 +2213,7 @@ final class MonthlyRecapSnapshotStore {
                 },
                 uniquingKeysWith: { _, latest in latest }
             )
-            let availableMonthStarts = Array(Set(monthlyRecaps.map {
+            let availableMonthStarts = Array(Set(monthlyRecaps.filter(\.hasListeningActivity).map {
                 calendar.startOfMonth(containing: $0.monthStart)
             })).sorted()
             return CachedRecapPresentation(
@@ -2542,12 +2556,13 @@ final class MonthlyRecapSnapshotStore {
             let stored = loadLocked()
             let currentMonth = calendar.startOfMonth(containing: date)
             let persistedMonths = (stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers)
+                .filter(\.hasListeningActivity)
                 .map { calendar.startOfMonth(containing: $0.monthStart) }
                 .filter { $0 <= currentMonth }
-            let snapshotMonths = stored.snapshots.map {
-                calendar.startOfMonth(containing: $0.capturedAt)
-            }.filter { $0 <= currentMonth }
-            let trackedMonths = Array(Set(persistedMonths + snapshotMonths)).sorted()
+            // A raw baseline proves only that tracking occurred, not that the
+            // month has a recap worth navigating to. The durable monthly ledger
+            // is the authoritative source for whether activity exists.
+            let trackedMonths = Array(Set(persistedMonths)).sorted()
             return trackedMonths.isEmpty ? [currentMonth] : trackedMonths
         }
     }
@@ -4172,14 +4187,33 @@ final class MonthlyRecapSnapshotStore {
     }
 
     private static func isHigherPrioritySyncedRecap(_ lhs: SyncedMonthlyRecap, than rhs: SyncedMonthlyRecap) -> Bool {
+        // An empty reconstruction is not evidence that a previously populated
+        // month was actually empty. Snapshot compaction, a stale device, or a
+        // partial library scan can all produce a newer-policy zero summary.
+        // Match the local migration's retention rule and keep observed activity
+        // across policy versions rather than deleting history during sync.
+        if lhs.hasActivity != rhs.hasActivity {
+            return lhs.hasActivity
+        }
+
         let lhsPolicyVersion = lhs.reliabilityPolicyVersion ?? 0
         let rhsPolicyVersion = rhs.reliabilityPolicyVersion ?? 0
         if lhsPolicyVersion != rhsPolicyVersion {
+            // A higher policy version describes the calculation rules, not the
+            // completeness of the raw history available to that calculation.
+            // CloudKit may retain a newly rebuilt recap produced from compacted
+            // snapshots beside an older durable accumulator. Do not let the
+            // sparse rebuild erase more observations and activity solely on its
+            // version number. Equal-coverage legacy inflation is still repaired
+            // by the newer policy below.
+            let lhsWouldDiscardDurableCoverage = lhs.snapshotCount < rhs.snapshotCount &&
+                lhs.totalPlayDelta <= rhs.totalPlayDelta
+            let rhsWouldDiscardDurableCoverage = rhs.snapshotCount < lhs.snapshotCount &&
+                rhs.totalPlayDelta <= lhs.totalPlayDelta
+            if lhsWouldDiscardDurableCoverage != rhsWouldDiscardDurableCoverage {
+                return !lhsWouldDiscardDurableCoverage
+            }
             return lhsPolicyVersion > rhsPolicyVersion
-        }
-
-        if lhs.hasActivity != rhs.hasActivity {
-            return lhs.hasActivity
         }
 
         if lhs.hasRankingEvidence != rhs.hasRankingEvidence {
@@ -5519,6 +5553,31 @@ final class MonthlyRecapSnapshotStore {
             }
             let rebuiltRecap = winner.recap
             let existing = stored.monthlyLedgers.first { $0.monthStart == monthStart }
+            // Raw snapshots are intentionally compacted after their deltas have
+            // been folded into the durable monthly ledger. A later policy
+            // migration can therefore see only a sparse first/last sample for
+            // an otherwise well-observed month. Never replace that accumulator
+            // with a lower total derived from fewer observations merely because
+            // the surviving songs overlap; the overlap proves identity, not
+            // completeness. Promote the preserved ledger to the audited policy
+            // so an equally sparse CloudKit reconstruction cannot supersede it.
+            let wouldDiscardDurableCoverage = existing.map {
+                rebuiltRecap.snapshotCount < $0.snapshotCount &&
+                    rebuiltRecap.totalPlayDelta <= $0.totalPlayDelta
+            } ?? false
+            if let existing, wouldDiscardDurableCoverage {
+                let preserved = Self.normalizedSyncedRecap(
+                    existing,
+                    monthStart: monthStart,
+                    reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                    preservingAllRankings: true
+                )
+                stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+                stored.monthlyLedgers.append(preserved)
+                stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+                stored.syncedRecaps.append(preserved.compacted())
+                continue
+            }
             let wouldErasePopulatedHistory = (existing?.totalPlayDelta ?? 0) > 0 && rebuiltRecap.totalPlayDelta == 0
             let wouldDegradeExistingEvidence = existing.map { existing in
                 let existingRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
