@@ -1,6 +1,8 @@
 import Foundation
 @preconcurrency import MediaPlayer
+import Security
 import SQLite3
+import UIKit
 
 enum RecapSnapshotReason: String, Codable, Equatable {
     case appLaunch
@@ -309,6 +311,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
     let capturedAt: Date
     let counterSignature: String
     let reliabilityPolicyVersion: Int?
+    let archiveReliabilityPolicyVersion: Int?
     let encodedSnapshot: Data
     let encodedRecaps: Data?
     let encodedYearlyRecaps: Data?
@@ -319,6 +322,7 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         capturedAt: Date,
         counterSignature: String,
         reliabilityPolicyVersion: Int? = nil,
+        archiveReliabilityPolicyVersion: Int? = nil,
         encodedSnapshot: Data,
         encodedRecaps: Data? = nil,
         encodedYearlyRecaps: Data? = nil,
@@ -328,11 +332,27 @@ struct RecapSnapshotSyncPayload: Codable, Equatable, Identifiable {
         self.capturedAt = capturedAt
         self.counterSignature = counterSignature
         self.reliabilityPolicyVersion = reliabilityPolicyVersion
+        self.archiveReliabilityPolicyVersion = archiveReliabilityPolicyVersion
         self.encodedSnapshot = encodedSnapshot
         self.encodedRecaps = encodedRecaps
         self.encodedYearlyRecaps = encodedYearlyRecaps
         self.encodedUnattributedIntervals = encodedUnattributedIntervals
     }
+}
+
+extension RecapSnapshotSyncPayload {
+    static let manifestArchiveOnlyID = "__playcount_manifest_archive__"
+
+    var isManifestArchiveOnly: Bool {
+        id == Self.manifestArchiveOnlyID
+    }
+}
+
+struct RecapArchiveEvidenceData: Equatable {
+    let encodedRecaps: Data?
+    let encodedYearlyRecaps: Data?
+    let encodedUnattributedIntervals: Data?
+    let minimumReliabilityPolicyVersion: Int?
 }
 
 struct RecapReliabilityStatus: Equatable {
@@ -817,7 +837,9 @@ final class MonthlyRecapSnapshotStore {
     fileprivate static let maxSyncPayloadBytes = 250_000
     fileprivate static let minSyncedSongCount = 100
     private static let currentGapPolicyVersion = 1
-    fileprivate static let currentCounterReliabilityPolicyVersion = 2
+    // Version 3 makes the CAS-protected Cloud manifest authoritative for recap
+    // summaries. That lets corrected lower totals outrank stale v2 archives.
+    fileprivate static let currentCounterReliabilityPolicyVersion = 3
     fileprivate static let maxPrioritySyncedSongCount = 120
     fileprivate static let maxSyncedRecapRankedSongCount = 250
     fileprivate static let maxSyncedRecapRankedGroupCount = 100
@@ -1416,8 +1438,8 @@ final class MonthlyRecapSnapshotStore {
         }
 
         private enum LedgerError: Error {
-            case open(String)
-            case sqlite(String)
+            case open(Int32, String)
+            case sqlite(Int32, String)
             case corrupt(String)
         }
 
@@ -1425,6 +1447,19 @@ final class MonthlyRecapSnapshotStore {
 
         init(url: URL) {
             self.url = url
+        }
+
+        static func isDefinitiveCorruption(_ error: Error) -> Bool {
+            if case LedgerError.corrupt = error {
+                return true
+            }
+            if case LedgerError.sqlite(let code, _) = error {
+                return code == SQLITE_CORRUPT || code == SQLITE_NOTADB
+            }
+            if error is DecodingError {
+                return true
+            }
+            return (error as? CocoaError)?.code == .fileReadCorruptFile
         }
 
         var exists: Bool {
@@ -1628,8 +1663,9 @@ final class MonthlyRecapSnapshotStore {
             guard result == SQLITE_OK, let database else {
                 let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
                 if let database { sqlite3_close(database) }
-                throw LedgerError.open(message)
+                throw LedgerError.open(result, message)
             }
+            sqlite3_busy_timeout(database, 5_000)
             return database
         }
 
@@ -1727,8 +1763,9 @@ final class MonthlyRecapSnapshotStore {
         }
 
         private func bind(_ value: String, at index: Int32, to statement: OpaquePointer) throws {
-            guard sqlite3_bind_text(statement, index, value, -1, Self.transient) == SQLITE_OK else {
-                throw LedgerError.sqlite("Could not bind text")
+            let result = sqlite3_bind_text(statement, index, value, -1, Self.transient)
+            guard result == SQLITE_OK else {
+                throw LedgerError.sqlite(result, "Could not bind text")
             }
         }
 
@@ -1736,7 +1773,7 @@ final class MonthlyRecapSnapshotStore {
             let result = value.withUnsafeBytes { bytes in
                 sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), Self.transient)
             }
-            guard result == SQLITE_OK else { throw LedgerError.sqlite("Could not bind data") }
+            guard result == SQLITE_OK else { throw LedgerError.sqlite(result, "Could not bind data") }
         }
 
         private func data(at index: Int32, from statement: OpaquePointer) throws -> Data {
@@ -1749,7 +1786,7 @@ final class MonthlyRecapSnapshotStore {
         }
 
         private func error(for database: OpaquePointer) -> LedgerError {
-            LedgerError.sqlite(String(cString: sqlite3_errmsg(database)))
+            LedgerError.sqlite(sqlite3_errcode(database), String(cString: sqlite3_errmsg(database)))
         }
     }
 
@@ -1934,34 +1971,165 @@ final class MonthlyRecapSnapshotStore {
     private let fileURL: URL
     private let ledgerURL: URL
     private let summaryFileURL: URL
+    private let summaryBackupFileURL: URL
+    private let ledgerAuthorityMarkerURL: URL
     private let calendar: Calendar
     private let deviceIdentifier: String
+    private let legacyDeviceIdentifierToBridge: String?
+    private let persistenceReadAllowed: () -> Bool
+    private let persistenceWriteAllowed: () -> Bool
+    private let legacyArchiveReadAllowed: () -> Bool
+    private let legacyArchiveRetirementAllowed: () -> Bool
     private let accessQueue = DispatchQueue(label: "com.playcount.monthly-recap-snapshots")
     private let retentionMonths = 18
     private let minimumSnapshotInterval: TimeInterval = 60 * 30
     private let minimumComparableCoverageRatio = 0.9
     private let maximumListeningElapsedRatio = 1.25
     private var loadedSnapshots: StoredSnapshots?
+    private var ledgerReadUnavailable = false
+    private var ledgerLoadRetryPending = false
+    private var legacyArchiveReadRetryPending = false
+    private var persistenceSavePending = false
+    private var mergeSavePending = false
+    private var quarantinedLedgerURLsPendingCleanup: [URL] = []
 
-    private static func localDeviceIdentifier() -> String {
+    private static let legacyDeviceBridgeDefaultsKey = "PlayCountRecapSnapshotLegacyDeviceIdentifierToBridge"
+
+    static func resolvedDeviceIdentifier(
+        keychainIdentifier: String?,
+        defaultsIdentifier: String?,
+        storedVendorIdentifier: String?,
+        currentVendorIdentifier: String?
+    ) -> String {
+        if let keychainIdentifier, !keychainIdentifier.isEmpty {
+            return keychainIdentifier
+        }
+        if let defaultsIdentifier,
+           !defaultsIdentifier.isEmpty,
+           let storedVendorIdentifier,
+           let currentVendorIdentifier,
+           storedVendorIdentifier == currentVendorIdentifier {
+            return defaultsIdentifier
+        }
+        return UUID().uuidString
+    }
+
+    static func resolvedLegacyBridgeIdentifier(
+        existingBridgeIdentifier: String?,
+        keychainIdentifier: String?,
+        defaultsIdentifier: String?,
+        storedVendorIdentifier: String?,
+        currentVendorIdentifier: String?,
+        resolvedDeviceIdentifier: String
+    ) -> String? {
+        if let storedVendorIdentifier,
+           let currentVendorIdentifier,
+           storedVendorIdentifier != currentVendorIdentifier {
+            return nil
+        }
+        if keychainIdentifier == nil,
+           storedVendorIdentifier == nil,
+           let defaultsIdentifier,
+           !defaultsIdentifier.isEmpty,
+           defaultsIdentifier != resolvedDeviceIdentifier {
+            return defaultsIdentifier
+        }
+        return existingBridgeIdentifier
+    }
+
+    private static let persistedLocalDeviceIdentifier: String = {
         let key = "PlayCountRecapSnapshotDeviceIdentifier"
-        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
-            return existing
+        let vendorKey = "PlayCountRecapSnapshotDeviceVendorIdentifier"
+        let service = "com.nadavavital.PlayCount.recap-device"
+        let account = "local-device-identifier"
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        var lookup = baseQuery
+        lookup.merge([
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]) { _, new in new }
+        var result: CFTypeRef?
+        let keychainIdentifier: String?
+        if SecItemCopyMatching(lookup as CFDictionary, &result) == errSecSuccess,
+           let data = result as? Data,
+           let existing = String(data: data, encoding: .utf8),
+           !existing.isEmpty {
+            keychainIdentifier = existing
+        } else {
+            keychainIdentifier = nil
         }
 
-        let identifier = UUID().uuidString
+        let currentVendorIdentifier = UIDevice.current.identifierForVendor?.uuidString
+        let defaultsIdentifier = UserDefaults.standard.string(forKey: key)
+        let storedVendorIdentifier = UserDefaults.standard.string(forKey: vendorKey)
+        let identifier = resolvedDeviceIdentifier(
+            keychainIdentifier: keychainIdentifier,
+            defaultsIdentifier: defaultsIdentifier,
+            storedVendorIdentifier: storedVendorIdentifier,
+            currentVendorIdentifier: currentVendorIdentifier
+        )
+        let bridgeIdentifier = resolvedLegacyBridgeIdentifier(
+            existingBridgeIdentifier: UserDefaults.standard.string(forKey: legacyDeviceBridgeDefaultsKey),
+            keychainIdentifier: keychainIdentifier,
+            defaultsIdentifier: defaultsIdentifier,
+            storedVendorIdentifier: storedVendorIdentifier,
+            currentVendorIdentifier: currentVendorIdentifier,
+            resolvedDeviceIdentifier: identifier
+        )
+        if let bridgeIdentifier {
+            // This state is ambiguous: it can be an in-place upgrade or a backup
+            // restored to new hardware. Rotate to a hardware-safe stream, then
+            // bridge exactly the first new snapshot from the legacy stream.
+            UserDefaults.standard.set(bridgeIdentifier, forKey: legacyDeviceBridgeDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: legacyDeviceBridgeDefaultsKey)
+        }
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: Data(identifier.utf8)
+        ]
+        if keychainIdentifier == nil {
+            SecItemDelete(baseQuery as CFDictionary)
+            SecItemAdd(attributes as CFDictionary, nil)
+        }
         UserDefaults.standard.set(identifier, forKey: key)
+        UserDefaults.standard.set(currentVendorIdentifier, forKey: vendorKey)
         return identifier
+    }()
+
+    private static func localDeviceIdentifier() -> String {
+        persistedLocalDeviceIdentifier
+    }
+
+    private static func localLegacyDeviceIdentifierToBridge() -> String? {
+        UserDefaults.standard.string(forKey: legacyDeviceBridgeDefaultsKey)
     }
 
     init(
         fileManager: FileManager = .default,
         directoryURL: URL? = nil,
         calendar: Calendar = .current,
-        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier()
+        deviceIdentifier: String = MonthlyRecapSnapshotStore.localDeviceIdentifier(),
+        legacyDeviceIdentifierToBridge: String? = MonthlyRecapSnapshotStore.localLegacyDeviceIdentifierToBridge(),
+        persistenceReadAllowed: @escaping () -> Bool = { true },
+        persistenceWriteAllowed: @escaping () -> Bool = { true },
+        legacyArchiveReadAllowed: @escaping () -> Bool = { true },
+        legacyArchiveRetirementAllowed: @escaping () -> Bool = { true }
     ) {
         self.calendar = calendar
         self.deviceIdentifier = deviceIdentifier
+        self.legacyDeviceIdentifierToBridge = legacyDeviceIdentifierToBridge
+        self.persistenceReadAllowed = persistenceReadAllowed
+        self.persistenceWriteAllowed = persistenceWriteAllowed
+        self.legacyArchiveReadAllowed = legacyArchiveReadAllowed
+        self.legacyArchiveRetirementAllowed = legacyArchiveRetirementAllowed
 
         let resolvedDirectoryURL: URL
         if let providedDirectoryURL = directoryURL {
@@ -1975,6 +2143,16 @@ final class MonthlyRecapSnapshotStore {
         fileURL = resolvedDirectoryURL.appendingPathComponent("monthly-recap-snapshots.json")
         ledgerURL = resolvedDirectoryURL.appendingPathComponent("recap-ledger.sqlite")
         summaryFileURL = resolvedDirectoryURL.appendingPathComponent("recap-summaries.json")
+        summaryBackupFileURL = resolvedDirectoryURL.appendingPathComponent("recap-summaries.previous.json")
+        ledgerAuthorityMarkerURL = resolvedDirectoryURL.appendingPathComponent("recap-ledger.authoritative")
+    }
+
+    var isPersistenceHealthyForSync: Bool {
+        accessQueue.sync {
+            _ = loadLocked()
+            return !ledgerReadUnavailable && !ledgerLoadRetryPending && !legacyArchiveReadRetryPending &&
+                !persistenceSavePending && !mergeSavePending
+        }
     }
 
     func cachedRecapSummaries(
@@ -2004,8 +2182,7 @@ final class MonthlyRecapSnapshotStore {
         through date: Date = Date()
     ) -> CachedRecapPresentation {
         accessQueue.sync {
-            guard let data = try? Data(contentsOf: summaryFileURL),
-                  let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) else {
+            guard let summaries = resolvedSummaryCache() else {
                 return .empty
             }
             let artworkLookup = ArtworkLookup(
@@ -2038,6 +2215,14 @@ final class MonthlyRecapSnapshotStore {
         accessQueue.sync { loadedSnapshots != nil }
     }
 
+    static func debugSetLegacyDeviceIdentifierToBridge(_ identifier: String?) {
+        UserDefaults.standard.set(identifier, forKey: legacyDeviceBridgeDefaultsKey)
+    }
+
+    static var debugLegacyDeviceIdentifierToBridge: String? {
+        UserDefaults.standard.string(forKey: legacyDeviceBridgeDefaultsKey)
+    }
+
     func debugYearlyReliabilityPolicyVersion(for year: Int) -> Int? {
         accessQueue.sync {
             loadLocked().syncedYearlyRecaps.first { $0.year == year }?.recap.reliabilityPolicyVersion
@@ -2052,6 +2237,8 @@ final class MonthlyRecapSnapshotStore {
             for url in [ledgerURL, URL(fileURLWithPath: ledgerURL.path + "-wal"), URL(fileURLWithPath: ledgerURL.path + "-shm")] {
                 try? FileManager.default.removeItem(at: url)
             }
+            // This helper intentionally recreates a pre-SQLite installation.
+            try? FileManager.default.removeItem(at: ledgerAuthorityMarkerURL)
             loadedSnapshots = nil
         }
     }
@@ -2096,6 +2283,33 @@ final class MonthlyRecapSnapshotStore {
                 from: stored.monthlyLedgers,
                 unattributedIntervals: stored.unattributedIntervals
             )
+            saveLocked(stored)
+            loadedSnapshots = nil
+        }
+    }
+
+    func debugInstallPreCounterReliabilityPolicyEvidence(
+        monthlyLedgerRecaps: [MonthlyRecap],
+        summaryOnlyRecaps: [MonthlyRecap]
+    ) {
+        accessQueue.sync {
+            var stored = loadLocked()
+            stored.counterReliabilityPolicyVersion = Self.currentCounterReliabilityPolicyVersion - 1
+            stored.monthlyLedgers = monthlyLedgerRecaps.map {
+                SyncedMonthlyRecap(
+                    recap: $0,
+                    preservingAllRankings: true,
+                    reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion - 1
+                )
+            }
+            stored.syncedRecaps = (monthlyLedgerRecaps + summaryOnlyRecaps).map {
+                SyncedMonthlyRecap(
+                    recap: $0,
+                    preservingAllRankings: false,
+                    reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion - 1
+                )
+            }
+            stored.syncedYearlyRecaps = []
             saveLocked(stored)
             loadedSnapshots = nil
         }
@@ -2357,7 +2571,7 @@ final class MonthlyRecapSnapshotStore {
             }
             if didChange {
                 guard shouldCommit() else { return [] }
-                saveLocked(stored)
+                guard saveLocked(stored) else { return [] }
             }
             let encodedRecaps = Self.encodedSyncedRecaps(stored.syncedRecaps)
             let encodedYearlyRecaps = Self.encodedSyncedYearlyRecaps(stored.syncedYearlyRecaps)
@@ -2378,7 +2592,9 @@ final class MonthlyRecapSnapshotStore {
                 },
                 encodedRecaps: encodedRecaps,
                 encodedYearlyRecaps: encodedYearlyRecaps,
-                encodedUnattributedIntervals: encodedUnattributedIntervals
+                encodedUnattributedIntervals: encodedUnattributedIntervals,
+                archiveReliabilityPolicyVersion: Self.archiveReliabilityPolicyVersion(in: stored),
+                archiveCapturedAt: Self.archiveCapturedAt(in: stored)
             )
             .uniquedByID()
         }
@@ -2400,7 +2616,7 @@ final class MonthlyRecapSnapshotStore {
                 didChange = true
             }
             if didChange {
-                saveLocked(stored)
+                guard saveLocked(stored) else { return [] }
             }
             let localSnapshots = compactSnapshotsForCloudSync(
                 from: stored.snapshots.filter {
@@ -2423,7 +2639,9 @@ final class MonthlyRecapSnapshotStore {
                 },
                 encodedRecaps: encodedRecaps,
                 encodedYearlyRecaps: encodedYearlyRecaps,
-                encodedUnattributedIntervals: encodedUnattributedIntervals
+                encodedUnattributedIntervals: encodedUnattributedIntervals,
+                archiveReliabilityPolicyVersion: Self.archiveReliabilityPolicyVersion(in: stored),
+                archiveCapturedAt: Self.archiveCapturedAt(in: stored)
             )
             .uniquedByID()
         }
@@ -2481,7 +2699,10 @@ final class MonthlyRecapSnapshotStore {
                 didChange = true
             }
 
-            guard didChange else { return false }
+            guard didChange else {
+                mergeSavePending = false
+                return false
+            }
 
             stored.snapshots = retainedCanonicalSnapshots(
                 from: Array(snapshotsByID.values).sortedForSyncPayloads(),
@@ -2499,8 +2720,9 @@ final class MonthlyRecapSnapshotStore {
             )
             stored.snapshots = compactSnapshotsForLocalStorage(from: stored.snapshots)
             guard shouldCommit() else { return false }
-            saveLocked(stored)
-            return true
+            let didPersist = saveLocked(stored)
+            mergeSavePending = !didPersist
+            return didPersist
         }
     }
 
@@ -2656,9 +2878,17 @@ final class MonthlyRecapSnapshotStore {
             songs: songs.map(SongSnapshot.init(song:))
         )
 
-        let previous = stored.snapshots.last(where: {
+        var previous = stored.snapshots.last(where: {
             $0.capturedAt < snapshot.capturedAt && $0.isSameDevice(as: snapshot)
         })
+        if previous == nil,
+           let legacyDeviceIdentifierToBridge,
+           !legacyDeviceIdentifierToBridge.isEmpty {
+            previous = stored.snapshots.last(where: {
+                $0.capturedAt < snapshot.capturedAt &&
+                    $0.deviceIdentifier == legacyDeviceIdentifierToBridge
+            })
+        }
 
         // MediaPlayer can temporarily return the same library with many counters
         // reset to zero while the device is offline. Persisting that observation
@@ -2713,8 +2943,13 @@ final class MonthlyRecapSnapshotStore {
                 rebaseMonthlyLedger(in: &updated, current: snapshot)
                 updated.snapshots = compactSnapshotsForLocalStorage(from: updated.snapshots)
                 if shouldCommit() {
-                    saveLocked(updated)
+                    let didPersist = saveLocked(updated)
                     stored = updated
+                    retireLegacyDeviceBridgeIfNeeded(
+                        previous: previous,
+                        current: snapshot,
+                        didPersist: didPersist
+                    )
                 }
                 return recap(
                     for: capturedAt,
@@ -2749,8 +2984,13 @@ final class MonthlyRecapSnapshotStore {
             }
             updated.snapshots = compactSnapshotsForLocalStorage(from: updated.snapshots)
             if shouldCommit() {
-                saveLocked(updated)
+                let didPersist = saveLocked(updated)
                 stored = updated
+                retireLegacyDeviceBridgeIfNeeded(
+                    previous: previous,
+                    current: snapshot,
+                    didPersist: didPersist
+                )
             }
         } else if shouldCommit(), shouldPersistTrustedObservation(at: capturedAt, in: stored) {
             stored.lastTrustedObservationAt = capturedAt
@@ -2765,6 +3005,20 @@ final class MonthlyRecapSnapshotStore {
             sourceAlbums: albums,
             sourceArtists: artists
         )
+    }
+
+    private func retireLegacyDeviceBridgeIfNeeded(
+        previous: LibrarySnapshot?,
+        current: LibrarySnapshot,
+        didPersist: Bool
+    ) {
+        guard didPersist,
+              let legacyDeviceIdentifierToBridge,
+              previous?.deviceIdentifier == legacyDeviceIdentifierToBridge,
+              current.deviceIdentifier == deviceIdentifier else {
+            return
+        }
+        UserDefaults.standard.removeObject(forKey: Self.legacyDeviceBridgeDefaultsKey)
     }
 
     private struct CounterRegressionAssessment {
@@ -2952,31 +3206,46 @@ final class MonthlyRecapSnapshotStore {
         _ payloads: [RecapSnapshotSyncPayload],
         encodedRecaps: Data?,
         encodedYearlyRecaps: Data?,
-        encodedUnattributedIntervals: Data?
+        encodedUnattributedIntervals: Data?,
+        archiveReliabilityPolicyVersion: Int,
+        archiveCapturedAt: Date
     ) -> [RecapSnapshotSyncPayload] {
-        guard !payloads.isEmpty,
-              encodedRecaps != nil || encodedYearlyRecaps != nil || encodedUnattributedIntervals != nil else {
+        let hasArchive = encodedRecaps != nil || encodedYearlyRecaps != nil || encodedUnattributedIntervals != nil
+        guard hasArchive else {
             return payloads
         }
+        if payloads.isEmpty {
+            return [RecapSnapshotSyncPayload(
+                id: RecapSnapshotSyncPayload.manifestArchiveOnlyID,
+                capturedAt: archiveCapturedAt,
+                counterSignature: "",
+                reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                archiveReliabilityPolicyVersion: archiveReliabilityPolicyVersion,
+                encodedSnapshot: Data(),
+                encodedRecaps: encodedRecaps,
+                encodedYearlyRecaps: encodedYearlyRecaps,
+                encodedUnattributedIntervals: encodedUnattributedIntervals
+            )]
+        }
 
-        let latestPayloadID = payloads.max {
-            if $0.capturedAt != $1.capturedAt {
-                return $0.capturedAt < $1.capturedAt
-            }
-            return $0.id < $1.id
-        }?.id
+        // Keep two compact archive copies so either edge of rolling snapshot
+        // compaction can disappear without taking finalized recap history with it.
+        let orderedPayloads = payloads.sorted {
+            $0.capturedAt == $1.capturedAt ? $0.id < $1.id : $0.capturedAt < $1.capturedAt
+        }
+        let archivePayloadIDs = Set([orderedPayloads.first?.id, orderedPayloads.last?.id].compactMap { $0 })
 
         return payloads.map { payload in
-            guard payload.id == latestPayloadID else {
+            guard archivePayloadIDs.contains(payload.id) else {
                 return RecapSnapshotSyncPayload(
                     id: payload.id,
                     capturedAt: payload.capturedAt,
                     counterSignature: payload.counterSignature,
                     reliabilityPolicyVersion: payload.reliabilityPolicyVersion,
+                    archiveReliabilityPolicyVersion: nil,
                     encodedSnapshot: payload.encodedSnapshot
                 )
             }
-
             let encodedSnapshot: Data
             if let encodedUnattributedIntervals,
                let snapshot = try? JSONDecoder.playCount.decode(
@@ -3006,12 +3275,26 @@ final class MonthlyRecapSnapshotStore {
                 capturedAt: payload.capturedAt,
                 counterSignature: payload.counterSignature,
                 reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                archiveReliabilityPolicyVersion: archiveReliabilityPolicyVersion,
                 encodedSnapshot: encodedSnapshot,
                 encodedRecaps: encodedRecaps,
                 encodedYearlyRecaps: encodedYearlyRecaps,
                 encodedUnattributedIntervals: encodedUnattributedIntervals
             )
         }
+    }
+
+    private static func archiveReliabilityPolicyVersion(in stored: StoredSnapshots) -> Int {
+        let monthlyVersions = stored.syncedRecaps.map { $0.reliabilityPolicyVersion ?? 0 }
+        let yearlyVersions = stored.syncedYearlyRecaps.map { $0.recap.reliabilityPolicyVersion ?? 0 }
+        return (monthlyVersions + yearlyVersions).min() ?? currentCounterReliabilityPolicyVersion
+    }
+
+    private static func archiveCapturedAt(in stored: StoredSnapshots) -> Date {
+        let recapDates = stored.syncedRecaps.map(\.generatedAt) +
+            stored.syncedYearlyRecaps.map(\.recap.generatedAt) +
+            stored.unattributedIntervals.map(\.endedAt)
+        return recapDates.max() ?? .distantPast
     }
 
     private func updateSyncedRecaps(
@@ -3054,11 +3337,13 @@ final class MonthlyRecapSnapshotStore {
             stored.syncedRecaps = mergedRecaps
             didChange = true
         }
-        if generatedYearlyRecaps != stored.syncedYearlyRecaps {
-            // Monthly ledgers are the local source of truth. Re-deriving avoids
-            // a stale, lower yearly summary winning a priority merge after a
-            // recording is deleted and re-added under a new persistent ID.
-            stored.syncedYearlyRecaps = generatedYearlyRecaps
+        let mergedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+            stored.syncedYearlyRecaps + generatedYearlyRecaps
+        )
+        if mergedYearlyRecaps != stored.syncedYearlyRecaps {
+            // A remote/archive year may be the only surviving evidence even when
+            // this device has no (or only partial) monthly ledgers for that year.
+            stored.syncedYearlyRecaps = mergedYearlyRecaps
             didChange = true
         }
         return didChange
@@ -3081,10 +3366,13 @@ final class MonthlyRecapSnapshotStore {
             .filter { $0.monthStart == monthStart }
             .sorted(by: Self.isHigherPrioritySyncedRecap)
             .first
+        let bridgesLegacyUpgrade = legacyDeviceIdentifierToBridge != nil &&
+            previous?.deviceIdentifier == legacyDeviceIdentifierToBridge &&
+            current.deviceIdentifier == deviceIdentifier
 
         guard let existing,
               let previous,
-              previous.isSameDevice(as: current),
+              previous.isSameDevice(as: current) || bridgesLegacyUpgrade,
               abs(existing.generatedAt.timeIntervalSince(previous.capturedAt)) < 0.001,
               hasComparableCoverage(previous, latest: current) else {
             _ = updateSyncedRecaps(
@@ -3359,9 +3647,11 @@ final class MonthlyRecapSnapshotStore {
         stored.syncedRecaps.append(ledger.compacted())
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
         if rebuildYearly {
-            stored.syncedYearlyRecaps = yearlyRecaps(
-                from: stored.monthlyLedgers,
-                unattributedIntervals: stored.unattributedIntervals
+            stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+                stored.syncedYearlyRecaps + yearlyRecaps(
+                    from: stored.monthlyLedgers,
+                    unattributedIntervals: stored.unattributedIntervals
+                )
             )
         }
     }
@@ -3394,9 +3684,11 @@ final class MonthlyRecapSnapshotStore {
         stored.monthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers + [fullBaseline])
         stored.syncedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + [compactBaseline])
         if rebuildYearly {
-            stored.syncedYearlyRecaps = yearlyRecaps(
-                from: stored.monthlyLedgers,
-                unattributedIntervals: stored.unattributedIntervals
+            stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+                stored.syncedYearlyRecaps + yearlyRecaps(
+                    from: stored.monthlyLedgers,
+                    unattributedIntervals: stored.unattributedIntervals
+                )
             )
         }
     }
@@ -3428,9 +3720,11 @@ final class MonthlyRecapSnapshotStore {
         stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
         stored.syncedRecaps.append(ledger.compacted())
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
-        stored.syncedYearlyRecaps = yearlyRecaps(
-            from: stored.monthlyLedgers,
-            unattributedIntervals: stored.unattributedIntervals
+        stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+            stored.syncedYearlyRecaps + yearlyRecaps(
+                from: stored.monthlyLedgers,
+                unattributedIntervals: stored.unattributedIntervals
+            )
         )
     }
 
@@ -3642,6 +3936,88 @@ final class MonthlyRecapSnapshotStore {
     private static func encodedUnattributedIntervals(_ intervals: [UnattributedRecapInterval]) -> Data? {
         guard !intervals.isEmpty else { return nil }
         return try? JSONEncoder.playCount.encode(intervals.map { $0.compacted() })
+    }
+
+    static func mergedArchiveEvidence(
+        existingRecaps: Data?,
+        existingYearlyRecaps: Data?,
+        existingUnattributedIntervals: Data?,
+        localRecaps: Data?,
+        localYearlyRecaps: Data?,
+        localUnattributedIntervals: Data?,
+        preferLocalFallback: Bool
+    ) -> RecapArchiveEvidenceData {
+        func monthly(from data: Data?) -> [SyncedMonthlyRecap]? {
+            guard let data else { return [] }
+            if let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) {
+                return summaries.monthlyRecaps
+            }
+            return try? JSONDecoder.playCount.decode([SyncedMonthlyRecap].self, from: data)
+        }
+        func yearly(from data: Data?) -> [SyncedYearlyRecap]? {
+            guard let data else { return [] }
+            return try? JSONDecoder.playCount.decode([SyncedYearlyRecap].self, from: data)
+        }
+        func intervals(from data: Data?) -> [UnattributedRecapInterval]? {
+            guard let data else { return [] }
+            return try? JSONDecoder.playCount.decode([UnattributedRecapInterval].self, from: data)
+        }
+        func fallback(_ existing: Data?, _ local: Data?) -> Data? {
+            preferLocalFallback ? (local ?? existing) : (existing ?? local)
+        }
+
+        let existingMonthly = monthly(from: existingRecaps)
+        let localMonthly = monthly(from: localRecaps)
+        let mergedMonthly = existingMonthly.flatMap { existing in
+            localMonthly.map { mergedSyncedRecaps(existing + $0) }
+        }
+        let existingYearly = yearly(from: existingYearlyRecaps)
+        let localYearly = yearly(from: localYearlyRecaps)
+        let mergedYearly = existingYearly.flatMap { existing in
+            localYearly.map { mergedSyncedYearlyRecaps(existing + $0) }
+        }
+        let existingIntervals = intervals(from: existingUnattributedIntervals)
+        let localIntervals = intervals(from: localUnattributedIntervals)
+        let mergedIntervals = existingIntervals.flatMap { existing in
+            localIntervals.map { mergedUnattributedIntervals(existing + $0) }
+        }
+        let policies = (mergedMonthly ?? []).map { $0.reliabilityPolicyVersion ?? 0 } +
+            (mergedYearly ?? []).map { $0.recap.reliabilityPolicyVersion ?? 0 }
+
+        return RecapArchiveEvidenceData(
+            encodedRecaps: mergedMonthly.flatMap(encodedSyncedRecaps) ?? fallback(existingRecaps, localRecaps),
+            encodedYearlyRecaps: mergedYearly.flatMap(encodedSyncedYearlyRecaps) ??
+                fallback(existingYearlyRecaps, localYearlyRecaps),
+            encodedUnattributedIntervals: mergedIntervals.flatMap(encodedUnattributedIntervals) ??
+                fallback(existingUnattributedIntervals, localUnattributedIntervals),
+            minimumReliabilityPolicyVersion: policies.min()
+        )
+    }
+
+    static func isValidArchiveEvidence(
+        encodedRecaps: Data?,
+        encodedYearlyRecaps: Data?,
+        encodedUnattributedIntervals: Data?
+    ) -> Bool {
+        isValidMonthlyArchiveEvidence(encodedRecaps) &&
+            isValidYearlyArchiveEvidence(encodedYearlyRecaps) &&
+            isValidUnattributedArchiveEvidence(encodedUnattributedIntervals)
+    }
+
+    static func isValidMonthlyArchiveEvidence(_ data: Data?) -> Bool {
+        guard let data else { return true }
+        return (try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data)) != nil ||
+            (try? JSONDecoder.playCount.decode([SyncedMonthlyRecap].self, from: data)) != nil
+    }
+
+    static func isValidYearlyArchiveEvidence(_ data: Data?) -> Bool {
+        guard let data else { return true }
+        return (try? JSONDecoder.playCount.decode([SyncedYearlyRecap].self, from: data)) != nil
+    }
+
+    static func isValidUnattributedArchiveEvidence(_ data: Data?) -> Bool {
+        guard let data else { return true }
+        return (try? JSONDecoder.playCount.decode([UnattributedRecapInterval].self, from: data)) != nil
     }
 
     private static func syncedRecaps(from payload: RecapSnapshotSyncPayload) -> [SyncedMonthlyRecap] {
@@ -5047,19 +5423,16 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
-    /// Canonicalizes legacy local-midnight month identities before rebuilding the
-    /// active month. This prevents the same logical month from being summed more
-    /// than once after travel or time-zone changes, while retaining the most
-    /// complete single ledger for each month.
+    /// Canonicalizes legacy local-midnight month identities before repairing the
+    /// final evidence-backed month in each device stream. This prevents the same
+    /// logical month from being summed more than once after travel or time-zone
+    /// changes while retaining historical ledgers that lack comparable evidence.
     private func migrateCounterReliabilityPolicyIfNeeded(in stored: inout StoredSnapshots) -> Bool {
         guard stored.counterReliabilityPolicyVersion < Self.currentCounterReliabilityPolicyVersion else {
             return false
         }
         stored.counterReliabilityPolicyVersion = Self.currentCounterReliabilityPolicyVersion
 
-        let streams = Dictionary(grouping: stored.snapshots.sortedForSyncPayloads()) {
-            $0.logicalDeviceKey(fallbackDeviceIdentifier: deviceIdentifier)
-        }
         if stored.monthlyLedgers.isEmpty {
             stored.monthlyLedgers = stored.syncedRecaps
         }
@@ -5073,31 +5446,109 @@ final class MonthlyRecapSnapshotStore {
                 preservingAllRankings: true
             )
         }
-        stored.syncedRecaps = stored.monthlyLedgers.map { $0.compacted() }
+        let normalizedSummaryOnlyRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps).map {
+            Self.normalizedSyncedRecap(
+                $0,
+                monthStart: Self.canonicalPersistedMonthStart($0.monthStart),
+                reliabilityPolicyVersion: $0.reliabilityPolicyVersion,
+                preservingAllRankings: false
+            )
+        }
+        stored.syncedRecaps = Self.mergedSyncedRecaps(
+            normalizedSummaryOnlyRecaps + stored.monthlyLedgers.map { $0.compacted() }
+        )
         let collapsedLedgerCount = max(0, legacyLedgerCount - stored.monthlyLedgers.count)
         if collapsedLedgerCount > 0 {
             print("Recap month identity migration collapsed \(collapsedLedgerCount) duplicate month ledger(s)")
         }
 
-        let activeMonthStarts = Set(streams.values.compactMap { stream in
-            canonicalSnapshots(stream).last.map { calendar.startOfMonth(containing: $0.capturedAt) }
-        })
+        // Repair every stream's final month only when a comparable observation
+        // survives. A stale device's lone historical baseline is not evidence and
+        // must never replace a durable recap.
+        let streams = recapCandidateStreams(from: stored.snapshots.sortedForSyncPayloads())
+        let repairableFinalMonthByStream = streams.map { stream -> (source: Date, persisted: Date)? in
+            let ordered = canonicalSnapshots(stream)
+            guard let latest = ordered.last else { return nil }
+            let monthInterval = calendar.recapMonthInterval(containing: latest.capturedAt)
+            let inMonthCount = ordered.filter { monthInterval.contains($0.capturedAt) }.count
+            let hasPriorBaseline = ordered.contains { $0.capturedAt < monthInterval.start }
+            guard inMonthCount >= 2 || hasPriorBaseline else { return nil }
+            let sourceMonthStart = calendar.startOfMonth(containing: latest.capturedAt)
+            let candidate = recapCandidateForDeviceStream(
+                for: sourceMonthStart,
+                snapshots: stream,
+                sourceSongs: [],
+                sourceAlbums: [],
+                sourceArtists: []
+            ).recap
+            // Historical capture timestamps are absolute instants, but the month
+            // they represented was defined in the timezone active when saved.
+            // Only an existing durable ledger can supply that persisted identity.
+            // Without this match, travel could reinterpret an August capture as
+            // July and append a duplicate rather than repairing August in place.
+            guard let persistedMonthStart = stored.monthlyLedgers.first(where: {
+                abs($0.generatedAt.timeIntervalSince(candidate.generatedAt)) < 0.001
+            })?.monthStart,
+                  persistedMonthStart == sourceMonthStart else {
+                // The evidence was grouped under another timezone when saved.
+                // Its original local boundary is unknowable in this legacy
+                // schema, so preserving the durable ledger is safer than a
+                // speculative repair or an adjacent-month duplicate.
+                return nil
+            }
+            return (sourceMonthStart, persistedMonthStart)
+        }
+        let repairableMonthStarts = Set(repairableFinalMonthByStream.compactMap { $0?.persisted })
 
-        for monthStart in activeMonthStarts {
-            let rebuiltRecap = snapshotRecap(for: monthStart, snapshots: stored.snapshots)
-            guard rebuiltRecap.snapshotCount > 0 else { continue }
-            let full = SyncedMonthlyRecap(recap: rebuiltRecap, preservingAllRankings: true)
-            stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
-            stored.monthlyLedgers.append(full)
-            stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
-            stored.syncedRecaps.append(full.compacted())
+        for monthStart in repairableMonthStarts.sorted() {
+            let rankedCandidates = streams.enumerated().compactMap { index, stream -> RecapCandidate? in
+                guard let repair = repairableFinalMonthByStream[index],
+                      repair.persisted == monthStart else {
+                    return nil
+                }
+                return recapCandidateForDeviceStream(
+                    for: repair.source,
+                    snapshots: stream,
+                    sourceSongs: [],
+                    sourceAlbums: [],
+                    sourceArtists: []
+                )
+            }.sorted { isHigherPriorityCandidate($0, than: $1) }
+            guard let winner = rankedCandidates.first else {
+                continue
+            }
+            let rebuiltRecap = winner.recap
+            let existing = stored.monthlyLedgers.first { $0.monthStart == monthStart }
+            let wouldErasePopulatedHistory = (existing?.totalPlayDelta ?? 0) > 0 && rebuiltRecap.totalPlayDelta == 0
+            let wouldDegradeExistingEvidence = existing.map { existing in
+                let existingRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+                let matchingWinnerEvidence = abs(
+                    existingRecap.generatedAt.timeIntervalSince(rebuiltRecap.generatedAt)
+                ) < 0.001 && hasMatchingRankingEvidence(existingRecap, rebuiltRecap)
+                return (rebuiltRecap.totalPlayDelta < existingRecap.totalPlayDelta && !matchingWinnerEvidence) ||
+                    (rebuiltRecap.totalPlayDelta == existingRecap.totalPlayDelta &&
+                        isHigherPriorityDisplayRecap(existingRecap, than: rebuiltRecap))
+            } ?? false
+            if rebuiltRecap.snapshotCount > 0 && !wouldErasePopulatedHistory && !wouldDegradeExistingEvidence {
+                let full = Self.normalizedSyncedRecap(
+                    SyncedMonthlyRecap(recap: rebuiltRecap, preservingAllRankings: true),
+                    monthStart: monthStart,
+                    reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                    preservingAllRankings: true
+                )
+                stored.monthlyLedgers.removeAll { $0.monthStart == monthStart }
+                stored.monthlyLedgers.append(full)
+                stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
+                stored.syncedRecaps.append(full.compacted())
+            }
         }
 
         stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
-        let affectedYears = Set(stored.monthlyLedgers.map { calendar.recapYear(containing: $0.monthStart) })
+        let allMonthlyEvidence = Self.mergedSyncedRecaps(stored.monthlyLedgers + stored.syncedRecaps)
+        let affectedYears = Set(allMonthlyEvidence.map { calendar.recapYear(containing: $0.monthStart) })
         let rebuiltYears = yearlyRecaps(
-            from: stored.monthlyLedgers,
+            from: allMonthlyEvidence,
             unattributedIntervals: stored.unattributedIntervals
         ).filter { affectedYears.contains($0.year) }
         stored.syncedYearlyRecaps.removeAll { affectedYears.contains($0.year) }
@@ -5107,26 +5558,133 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
+    private func hasMatchingRankingEvidence(_ lhs: MonthlyRecap, _ rhs: MonthlyRecap) -> Bool {
+        let lhsSongs = Set(lhs.topSongs.map { $0.recordingIdentity ?? "id:\($0.id)" })
+        let rhsSongs = Set(rhs.topSongs.map { $0.recordingIdentity ?? "id:\($0.id)" })
+        guard !lhsSongs.isEmpty, !rhsSongs.isEmpty else { return false }
+        return !lhsSongs.isDisjoint(with: rhsSongs)
+    }
+
     private func loadLocked() -> StoredSnapshots {
-        if let loadedSnapshots {
+        if let loadedSnapshots, !ledgerLoadRetryPending, !legacyArchiveReadRetryPending {
             return loadedSnapshots
         }
 
         let ledger = LedgerDatabase(url: ledgerURL)
-        if var stored = try? ledger.load() {
-            var didMigrate = migrateGapPolicyIfNeeded(in: &stored)
-            if migrateCounterReliabilityPolicyIfNeeded(in: &stored) {
-                didMigrate = true
+        do {
+            guard persistenceReadAllowed() else {
+                throw CocoaError(.fileReadUnknown)
             }
-            if migrateListenedArtistCountsIfNeeded(in: &stored) {
-                didMigrate = true
+            if var stored = try ledger.load() {
+                ledgerReadUnavailable = false
+                ledgerLoadRetryPending = false
+                persistenceSavePending = false
+                var didMigrate = migrateGapPolicyIfNeeded(in: &stored)
+                if migrateCounterReliabilityPolicyIfNeeded(in: &stored) {
+                    didMigrate = true
+                }
+                if migrateListenedArtistCountsIfNeeded(in: &stored) {
+                    didMigrate = true
+                }
+                if didMigrate {
+                    do {
+                        guard persistenceWriteAllowed() else {
+                            throw CocoaError(.fileWriteUnknown)
+                        }
+                        try ledger.save(stored)
+                        try writeSummaryCache(for: stored)
+                    } catch {
+                        // The full ledger was read successfully. Retain this state
+                        // and retry on a later capture instead of degrading to a
+                        // summary-only cache or requiring an app relaunch.
+                        persistenceSavePending = true
+                        loadedSnapshots = stored
+                        #if DEBUG
+                        print("Recap ledger migration save deferred: \(error)")
+                        #endif
+                        return stored
+                    }
+                } else if !isPrimarySummaryCacheCurrent(for: stored) {
+                    // The ledger is authoritative and healthy. Repair a missing
+                    // or corrupt presentation cache so a later UI read does not
+                    // remain empty for the rest of the session.
+                    do {
+                        try writeSummaryCache(for: stored)
+                    } catch {
+                        persistenceSavePending = true
+                        #if DEBUG
+                        print("Recap summary cache repair deferred: \(error)")
+                        #endif
+                    }
+                }
+                if !FileManager.default.fileExists(atPath: ledgerAuthorityMarkerURL.path),
+                   !FileManager.default.fileExists(atPath: fileURL.path) {
+                    do {
+                        // Backfill the marker for healthy SQLite-only installs so
+                        // later file loss cannot silently create writable empty
+                        // history while durable summaries still survive.
+                        try markLedgerAuthoritative()
+                    } catch {
+                        persistenceSavePending = true
+                        #if DEBUG
+                        print("Recap ledger authority marker backfill deferred: \(error)")
+                        #endif
+                    }
+                }
+                if FileManager.default.fileExists(atPath: ledgerAuthorityMarkerURL.path),
+                   FileManager.default.fileExists(atPath: fileURL.path) {
+                    do {
+                        let retired = try retireLegacyArchiveIfPresent()
+                        if let retired { try? FileManager.default.removeItem(at: retired) }
+                    } catch {
+                        #if DEBUG
+                        print("Recap stale legacy archive cleanup deferred: \(error)")
+                        #endif
+                    }
+                }
+                loadedSnapshots = stored
+                return stored
             }
-            if didMigrate {
-                try? ledger.save(stored)
-                writeSummaryCache(for: stored)
+        } catch {
+            if ledger.exists {
+                if FileManager.default.fileExists(atPath: fileURL.path),
+                   !FileManager.default.fileExists(atPath: ledgerAuthorityMarkerURL.path) {
+                    // The JSON archive remains authoritative until conversion is
+                    // verified and the archive is removed. Fall through and retry
+                    // it even if an earlier attempt created a partial SQLite file.
+                    ledgerReadUnavailable = false
+                    ledgerLoadRetryPending = false
+                    persistenceSavePending = true
+                } else {
+                    let fallback = summaryCacheFallback()
+                    if LedgerDatabase.isDefinitiveCorruption(error) {
+                        ledgerReadUnavailable = true
+                        ledgerLoadRetryPending = false
+                    } else {
+                        // Busy, I/O, protection, and other transient failures are
+                        // retried. Summary-only state is never allowed to overwrite
+                        // the authoritative ledger while that retry is pending.
+                        ledgerLoadRetryPending = true
+                        persistenceSavePending = true
+                    }
+                    loadedSnapshots = fallback
+                    #if DEBUG
+                    print("Recap ledger load failed; using protected summary cache: \(error)")
+                    #endif
+                    return fallback
+                }
             }
-            loadedSnapshots = stored
-            return stored
+        }
+
+        if FileManager.default.fileExists(atPath: ledgerAuthorityMarkerURL.path), !ledger.exists {
+            // A verified ledger once superseded the JSON. A partial restore or
+            // file loss must never make that stale source authoritative again.
+            ledgerReadUnavailable = true
+            ledgerLoadRetryPending = false
+            persistenceSavePending = true
+            let fallback = summaryCacheFallback()
+            loadedSnapshots = fallback
+            return fallback
         }
 
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -5140,9 +5698,18 @@ final class MonthlyRecapSnapshotStore {
         }
 
         do {
+            guard legacyArchiveReadAllowed() else {
+                throw CocoaError(.fileReadUnknown)
+            }
             let legacy = try streamedLegacyArchive()
+            legacyArchiveReadRetryPending = false
 
             do {
+                guard persistenceWriteAllowed() else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                let quarantinedLedgerURLs = try quarantineIncompleteLedgerForLegacyRetry()
+                quarantinedLedgerURLsPendingCleanup.append(contentsOf: quarantinedLedgerURLs)
                 try ledger.save(legacy)
                 guard let verified = try ledger.load(),
                       verified.snapshots.map(\.syncIdentifier) == legacy.snapshots.map(\.syncIdentifier),
@@ -5153,25 +5720,72 @@ final class MonthlyRecapSnapshotStore {
                     throw CocoaError(.fileReadCorruptFile)
                 }
 
-                writeSummaryCache(for: verified)
-                try? FileManager.default.removeItem(at: fileURL)
+                try writeSummaryCache(for: verified)
+                try markLedgerAuthoritative()
+                let retiredLegacyArchive = try retireLegacyArchiveIfPresent()
+                cleanUpQuarantinedLedgerFiles()
+                if let retiredLegacyArchive {
+                    try? FileManager.default.removeItem(at: retiredLegacyArchive)
+                }
+                ledgerReadUnavailable = false
+                ledgerLoadRetryPending = false
+                persistenceSavePending = false
                 loadedSnapshots = verified
                 return verified
             } catch {
                 // Migration is intentionally fail-open: the verified legacy
                 // archive remains authoritative until a later attempt succeeds.
+                persistenceSavePending = true
                 loadedSnapshots = legacy
                 return legacy
             }
         } catch {
-            let empty = StoredSnapshots(
-                schemaVersion: 3,
-                counterReliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
-                snapshots: []
-            )
-            loadedSnapshots = empty
-            return empty
+            // The legacy archive is still authoritative. A protection or I/O
+            // failure must never be converted into a new writable empty ledger.
+            legacyArchiveReadRetryPending = true
+            persistenceSavePending = true
+            let fallback = summaryCacheFallback()
+            loadedSnapshots = fallback
+            #if DEBUG
+            print("Recap legacy archive read deferred; using protected summary cache: \(error)")
+            #endif
+            return fallback
         }
+    }
+
+    private func quarantineIncompleteLedgerForLegacyRetry() throws -> [URL] {
+        let suffix = ".incomplete-\(UUID().uuidString)"
+        var quarantined: [URL] = []
+        // Move the main database last. If moving a sidecar fails, the next retry
+        // still sees the database and remains on the legacy-authoritative path.
+        for source in [
+            URL(fileURLWithPath: ledgerURL.path + "-wal"),
+            URL(fileURLWithPath: ledgerURL.path + "-shm"),
+            ledgerURL
+        ] where FileManager.default.fileExists(atPath: source.path) {
+            let destination = URL(fileURLWithPath: source.path + suffix)
+            try FileManager.default.moveItem(
+                at: source,
+                to: destination
+            )
+            quarantined.append(destination)
+        }
+        return quarantined
+    }
+
+    private func retireLegacyArchiveIfPresent() throws -> URL? {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        guard legacyArchiveRetirementAllowed() else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let retiredURL = fileURL.appendingPathExtension("migrated-\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: fileURL, to: retiredURL)
+        return retiredURL
+    }
+
+    private func cleanUpQuarantinedLedgerFiles() {
+        quarantinedLedgerURLsPendingCleanup.forEach { try? FileManager.default.removeItem(at: $0) }
+        quarantinedLedgerURLsPendingCleanup.removeAll()
     }
 
     /// Reads the old JSON archive one snapshot at a time. A real archive can be
@@ -5231,9 +5845,31 @@ final class MonthlyRecapSnapshotStore {
             unattributedIntervals: stored.unattributedIntervals
         )
 
+        // Raw snapshots may already have aged out of the legacy JSON. Preserve
+        // its compact top-level ledgers directly, then merge any validated cache
+        // copy. The array extractor streams the file instead of loading a large
+        // historical archive into memory.
+        let legacyArrays = try streamedLegacyTopLevelArrays(keys: [
+            "monthlyLedgers",
+            "syncedRecaps",
+            "syncedYearlyRecaps",
+            "unattributedIntervals"
+        ])
+        func decodePresentArray<Element: Decodable>(_ key: String, as: Element.Type) throws -> [Element] {
+            guard let data = legacyArrays[key] else { return [] }
+            return try JSONDecoder.playCount.decode([Element].self, from: data)
+        }
+        let legacyMonthlyLedgers = try decodePresentArray("monthlyLedgers", as: SyncedMonthlyRecap.self)
+        let legacySyncedRecaps = try decodePresentArray("syncedRecaps", as: SyncedMonthlyRecap.self)
+        let legacyYearlyRecaps = try decodePresentArray("syncedYearlyRecaps", as: SyncedYearlyRecap.self)
+        let legacyIntervals = try decodePresentArray("unattributedIntervals", as: UnattributedRecapInterval.self)
+        stored.monthlyLedgers = Self.mergedSyncedRecaps(stored.monthlyLedgers + legacyMonthlyLedgers)
+        stored.syncedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + legacySyncedRecaps + legacyMonthlyLedgers)
+        stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(stored.syncedYearlyRecaps + legacyYearlyRecaps)
+        stored.unattributedIntervals = Self.mergedUnattributedIntervals(stored.unattributedIntervals + legacyIntervals)
+
         // Preserve any higher-quality Cloud summary that was already cached.
-        if let data = try? Data(contentsOf: summaryFileURL),
-           let summaries = try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data) {
+        if let summaries = resolvedSummaryCache() {
             stored.monthlyLedgers = Self.mergedSyncedRecaps(
                 stored.monthlyLedgers + summaries.monthlyRecaps
             )
@@ -5245,6 +5881,119 @@ final class MonthlyRecapSnapshotStore {
             )
         }
         return stored
+    }
+
+    private func streamedLegacyTopLevelArrays(keys: Set<String>) throws -> [String: Data] {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var results: [String: Data] = [:]
+        var objectDepth = 0
+        var arrayDepth = 0
+        var inString = false
+        var escaped = false
+        var keyBuffer = Data()
+        var pendingKey: String?
+        var awaitingValueForKey: String?
+        var captureKey: String?
+        var captureData = Data()
+        var captureArrayDepth = 0
+        var captureInString = false
+        var captureEscaped = false
+        var encounteredTargetKeys = Set<String>()
+
+        while let chunk = try handle.read(upToCount: 256 * 1_024), !chunk.isEmpty {
+            for byte in chunk {
+                if let activeKey = captureKey {
+                    captureData.append(byte)
+                    if captureInString {
+                        if captureEscaped {
+                            captureEscaped = false
+                        } else if byte == 0x5C {
+                            captureEscaped = true
+                        } else if byte == 0x22 {
+                            captureInString = false
+                        }
+                    } else if byte == 0x22 {
+                        captureInString = true
+                    } else if byte == 0x5B {
+                        captureArrayDepth += 1
+                    } else if byte == 0x5D {
+                        captureArrayDepth -= 1
+                        if captureArrayDepth == 0 {
+                            results[activeKey] = captureData
+                            captureKey = nil
+                            captureData = Data()
+                        }
+                    }
+                    continue
+                }
+
+                if inString {
+                    if escaped {
+                        escaped = false
+                        if objectDepth == 1 && arrayDepth == 0 { keyBuffer.append(byte) }
+                    } else if byte == 0x5C {
+                        escaped = true
+                        if objectDepth == 1 && arrayDepth == 0 { keyBuffer.append(byte) }
+                    } else if byte == 0x22 {
+                        inString = false
+                        if objectDepth == 1 && arrayDepth == 0 {
+                            pendingKey = String(data: keyBuffer, encoding: .utf8)
+                        }
+                        keyBuffer = Data()
+                    } else if objectDepth == 1 && arrayDepth == 0 {
+                        keyBuffer.append(byte)
+                    }
+                    continue
+                }
+
+                if let key = awaitingValueForKey, keys.contains(key),
+                   ![0x20, 0x09, 0x0A, 0x0D].contains(byte), byte != 0x5B {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+
+                if byte == 0x22 {
+                    inString = true
+                    keyBuffer = Data()
+                } else if byte == 0x7B {
+                    objectDepth += 1
+                } else if byte == 0x7D {
+                    objectDepth -= 1
+                } else if byte == 0x5B {
+                    if let key = awaitingValueForKey, keys.contains(key) {
+                        captureKey = key
+                        captureData = Data([byte])
+                        captureArrayDepth = 1
+                        captureInString = false
+                        captureEscaped = false
+                        awaitingValueForKey = nil
+                    } else {
+                        arrayDepth += 1
+                    }
+                } else if byte == 0x5D {
+                    arrayDepth -= 1
+                } else if byte == 0x3A, objectDepth == 1, arrayDepth == 0 {
+                    awaitingValueForKey = pendingKey
+                    if let pendingKey, keys.contains(pendingKey) {
+                        encounteredTargetKeys.insert(pendingKey)
+                    }
+                    pendingKey = nil
+                } else if ![0x20, 0x09, 0x0A, 0x0D].contains(byte),
+                          let key = awaitingValueForKey {
+                    awaitingValueForKey = nil
+                    if keys.contains(key) {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                }
+            }
+            if Set(results.keys).isSuperset(of: keys) { break }
+        }
+        guard captureKey == nil else { throw CocoaError(.fileReadCorruptFile) }
+        guard Set(results.keys).isSuperset(of: encounteredTargetKeys) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return results
     }
 
     private func forEachLegacySnapshot(
@@ -5379,38 +6128,118 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
-    private func saveLocked(_ stored: StoredSnapshots) {
+    @discardableResult
+    private func saveLocked(_ stored: StoredSnapshots) -> Bool {
+        guard !ledgerReadUnavailable, !ledgerLoadRetryPending, !legacyArchiveReadRetryPending else {
+            #if DEBUG
+            print("Skipped recap save because the existing ledger could not be loaded")
+            #endif
+            return false
+        }
         do {
             var ledgerStored = stored
             ledgerStored.schemaVersion = 3
+            guard persistenceWriteAllowed() else {
+                throw CocoaError(.fileWriteUnknown)
+            }
             let ledger = LedgerDatabase(url: ledgerURL)
             try ledger.save(ledgerStored)
-            writeSummaryCache(for: ledgerStored)
-            if FileManager.default.fileExists(atPath: fileURL.path),
-               let verified = try ledger.load(),
-               verified.snapshots.map(\.syncIdentifier) == ledgerStored.snapshots.map(\.syncIdentifier),
-               verified.monthlyLedgers == ledgerStored.monthlyLedgers,
-               verified.syncedRecaps == ledgerStored.syncedRecaps,
-               verified.syncedYearlyRecaps == ledgerStored.syncedYearlyRecaps {
-                try? FileManager.default.removeItem(at: fileURL)
+            try writeSummaryCache(for: ledgerStored)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                guard let verified = try ledger.load(),
+                      verified.snapshots.map(\.syncIdentifier) == ledgerStored.snapshots.map(\.syncIdentifier),
+                      verified.monthlyLedgers == ledgerStored.monthlyLedgers,
+                      verified.syncedRecaps == ledgerStored.syncedRecaps,
+                      verified.syncedYearlyRecaps == ledgerStored.syncedYearlyRecaps else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                try markLedgerAuthoritative()
+                let retiredLegacyArchive = try retireLegacyArchiveIfPresent()
+                if let retiredLegacyArchive {
+                    try? FileManager.default.removeItem(at: retiredLegacyArchive)
+                }
+            } else {
+                try markLedgerAuthoritative()
             }
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                cleanUpQuarantinedLedgerFiles()
+            }
+            persistenceSavePending = false
             loadedSnapshots = ledgerStored
+            return true
         } catch {
+            // A failed merge/save must also close the Cloud upload gate. Otherwise
+            // sync could prune the only remote copy of data that never reached disk.
+            persistenceSavePending = true
+            loadedSnapshots = stored
             #if DEBUG
             print("Failed to save monthly recap ledger: \(error)")
             #endif
-            assertionFailure("Failed to save monthly recap ledger: \(error)")
+            return false
         }
     }
 
-    private func writeSummaryCache(for stored: StoredSnapshots) {
+    private func writeSummaryCache(for stored: StoredSnapshots) throws {
         let summaries = SyncedRecapSummaries(
             monthlyRecaps: stored.syncedRecaps,
             yearlyRecaps: stored.syncedYearlyRecaps
         )
-        if let summaryData = try? JSONEncoder.playCount.encode(summaries) {
-            try? summaryData.write(to: summaryFileURL, options: [.atomic])
+        let summaryData = try JSONEncoder.playCount.encode(summaries)
+        if let currentData = try? Data(contentsOf: summaryFileURL),
+           (try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: currentData)) != nil {
+            // Rotate only a validated primary. Atomic replacement preserves
+            // the last good backup if this write itself fails.
+            try currentData.write(to: summaryBackupFileURL, options: [.atomic])
         }
+        try summaryData.write(to: summaryFileURL, options: [.atomic])
+    }
+
+    private func markLedgerAuthoritative() throws {
+        try Data("v1".utf8).write(to: ledgerAuthorityMarkerURL, options: [.atomic])
+    }
+
+    private func isPrimarySummaryCacheCurrent(for stored: StoredSnapshots) -> Bool {
+        guard let data = try? Data(contentsOf: summaryFileURL) else { return false }
+        let expected = SyncedRecapSummaries(
+            monthlyRecaps: stored.syncedRecaps,
+            yearlyRecaps: stored.syncedYearlyRecaps
+        )
+        return (try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data)) == expected
+    }
+
+    private func resolvedSummaryCache() -> SyncedRecapSummaries? {
+        func decoded(at url: URL) -> SyncedRecapSummaries? {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder.playCount.decode(SyncedRecapSummaries.self, from: data)
+        }
+        let current = decoded(at: summaryFileURL)
+        let backup = decoded(at: summaryBackupFileURL)
+        guard current != nil || backup != nil else { return nil }
+        var monthlyCandidates = current?.monthlyRecaps ?? []
+        let currentMonths = Set(monthlyCandidates.map { Self.canonicalPersistedMonthStart($0.monthStart) })
+        monthlyCandidates.append(contentsOf: (backup?.monthlyRecaps ?? []).filter {
+            !currentMonths.contains(Self.canonicalPersistedMonthStart($0.monthStart))
+        })
+        var yearly = current?.yearlyRecaps ?? []
+        let currentYears = Set(yearly.map(\.year))
+        yearly.append(contentsOf: (backup?.yearlyRecaps ?? []).filter { !currentYears.contains($0.year) })
+        return SyncedRecapSummaries(
+            monthlyRecaps: Self.mergedSyncedRecaps(monthlyCandidates),
+            yearlyRecaps: yearly.sorted { $0.year < $1.year }
+        )
+    }
+
+    private func summaryCacheFallback() -> StoredSnapshots {
+        let summaries = resolvedSummaryCache()
+        let monthly = summaries?.monthlyRecaps ?? []
+        return StoredSnapshots(
+            schemaVersion: 3,
+            counterReliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+            snapshots: [],
+            monthlyLedgers: monthly,
+            syncedRecaps: monthly.map { $0.compacted() },
+            syncedYearlyRecaps: summaries?.yearlyRecaps ?? []
+        )
     }
 
     #if DEBUG
@@ -5726,7 +6555,9 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
     }
 
     init?(syncPayload: RecapSnapshotSyncPayload) {
-        guard let snapshot = try? JSONDecoder.playCount.decode(Self.self, from: syncPayload.encodedSnapshot),
+        guard (syncPayload.reliabilityPolicyVersion ?? 0) >=
+                MonthlyRecapSnapshotStore.currentCounterReliabilityPolicyVersion,
+              let snapshot = try? JSONDecoder.playCount.decode(Self.self, from: syncPayload.encodedSnapshot),
               snapshot.syncIdentifier == syncPayload.id,
               snapshot.counterSignature == syncPayload.counterSignature else {
             return nil

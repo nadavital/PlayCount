@@ -2,6 +2,916 @@ import XCTest
 @testable import PlayCount
 
 final class MonthlyRecapSnapshotStoreTests: XCTestCase {
+    func testRestoredDefaultsDoNotReuseDeviceIdentityOnDifferentHardware() {
+        let priorID = "old-phone-device-id"
+        XCTAssertNotEqual(
+            MonthlyRecapSnapshotStore.resolvedDeviceIdentifier(
+                keychainIdentifier: nil,
+                defaultsIdentifier: priorID,
+                storedVendorIdentifier: "old-vendor-id",
+                currentVendorIdentifier: "new-vendor-id"
+            ),
+            priorID
+        )
+        XCTAssertEqual(
+            MonthlyRecapSnapshotStore.resolvedDeviceIdentifier(
+                keychainIdentifier: nil,
+                defaultsIdentifier: priorID,
+                storedVendorIdentifier: "same-vendor-id",
+                currentVendorIdentifier: "same-vendor-id"
+            ),
+            priorID
+        )
+        XCTAssertEqual(
+            MonthlyRecapSnapshotStore.resolvedDeviceIdentifier(
+                keychainIdentifier: "keychain-id",
+                defaultsIdentifier: priorID,
+                storedVendorIdentifier: "old-vendor-id",
+                currentVendorIdentifier: "new-vendor-id"
+            ),
+            "keychain-id"
+        )
+        XCTAssertNotEqual(
+            MonthlyRecapSnapshotStore.resolvedDeviceIdentifier(
+                keychainIdentifier: nil,
+                defaultsIdentifier: priorID,
+                storedVendorIdentifier: nil,
+                currentVendorIdentifier: "new-vendor-id"
+            ),
+            priorID,
+            "A legacy backup has no vendor marker, so its defaults UUID cannot safely identify the current hardware"
+        )
+        XCTAssertNil(
+            MonthlyRecapSnapshotStore.resolvedLegacyBridgeIdentifier(
+                existingBridgeIdentifier: "pending-old-phone-bridge",
+                keychainIdentifier: nil,
+                defaultsIdentifier: priorID,
+                storedVendorIdentifier: "old-vendor-id",
+                currentVendorIdentifier: "new-vendor-id",
+                resolvedDeviceIdentifier: "new-phone-id"
+            ),
+            "A definite hardware mismatch must discard any bridge marker restored from the old phone"
+        )
+    }
+
+    func testLegacyUpgradeBridgesFirstSnapshotIntoNewHardwareSafeStream() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyDeviceBridge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 8, day: 1)
+        let beforeUpgrade = date(year: 2026, month: 8, day: 3)
+        let afterUpgrade = date(year: 2026, month: 8, day: 5)
+        let later = date(year: 2026, month: 8, day: 7)
+        do {
+            let legacy = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "legacy-defaults-id"
+            )
+            _ = legacy.record(songs: [song(id: 1, title: "Continuous", playCount: 10)], at: baseline, reason: .foreground)
+            _ = legacy.record(songs: [song(id: 1, title: "Continuous", playCount: 14)], at: beforeUpgrade, reason: .foreground)
+        }
+
+        do {
+            let upgraded = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "new-keychain-id",
+                legacyDeviceIdentifierToBridge: "legacy-defaults-id"
+            )
+            XCTAssertEqual(
+                upgraded.record(
+                    songs: [song(id: 1, title: "Continuous", playCount: 18)],
+                    at: afterUpgrade,
+                    reason: .foreground
+                ).totalPlayDelta,
+                8
+            )
+        }
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "new-keychain-id",
+            legacyDeviceIdentifierToBridge: nil
+        )
+        XCTAssertEqual(
+            relaunched.record(
+                songs: [song(id: 1, title: "Continuous", playCount: 20)],
+                at: later,
+                reason: .foreground
+            ).totalPlayDelta,
+            10
+        )
+    }
+
+    func testLegacyUpgradeCoverageRebaseRetiresBridgeMarkerAfterPersistence() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyBridgeRebase-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            MonthlyRecapSnapshotStore.debugSetLegacyDeviceIdentifierToBridge(nil)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 8, day: 1, hour: 8)
+        let firstReduced = date(year: 2026, month: 8, day: 2, hour: 8)
+        let confirmedReduced = date(year: 2026, month: 8, day: 2, hour: 9)
+        let full = (1...20).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 100)
+        }
+        let reduced = Array(full.prefix(10))
+        do {
+            let legacy = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "legacy-rebase-id"
+            )
+            _ = legacy.record(songs: full, at: baseline, reason: .appLaunch)
+        }
+
+        MonthlyRecapSnapshotStore.debugSetLegacyDeviceIdentifierToBridge("legacy-rebase-id")
+        let upgraded = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "new-rebase-id",
+            legacyDeviceIdentifierToBridge: "legacy-rebase-id"
+        )
+        _ = upgraded.record(songs: reduced, at: firstReduced, reason: .libraryChanged)
+        XCTAssertEqual(
+            MonthlyRecapSnapshotStore.debugLegacyDeviceIdentifierToBridge,
+            "legacy-rebase-id"
+        )
+        _ = upgraded.record(songs: reduced, at: confirmedReduced, reason: .foreground)
+        XCTAssertNil(MonthlyRecapSnapshotStore.debugLegacyDeviceIdentifierToBridge)
+
+        let restored = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "restored-hardware-id",
+            legacyDeviceIdentifierToBridge: MonthlyRecapSnapshotStore.debugLegacyDeviceIdentifierToBridge
+        )
+        _ = restored.record(
+            songs: reduced,
+            at: date(year: 2026, month: 8, day: 3, hour: 8),
+            reason: .foreground
+        )
+        XCTAssertNil(MonthlyRecapSnapshotStore.debugLegacyDeviceIdentifierToBridge)
+    }
+
+    func testTransientLedgerLoadFailureRetriesBeforeCapturingNewCounters() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLoadRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let prior = date(year: 2026, month: 5, day: 3)
+        let latest = date(year: 2026, month: 5, day: 5)
+        do {
+            let initial = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "load-retry"
+            )
+            _ = initial.record(songs: [song(id: 1, title: "Retried", playCount: 10)], at: baseline, reason: .foreground)
+            _ = initial.record(songs: [song(id: 1, title: "Retried", playCount: 14)], at: prior, reason: .foreground)
+        }
+
+        let gate = PersistenceWriteGate()
+        gate.isAllowed = false
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "load-retry",
+            persistenceReadAllowed: { gate.isAllowed }
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: prior).totalPlayDelta, 4)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+
+        gate.isAllowed = true
+        XCTAssertEqual(
+            recovered.record(
+                songs: [song(id: 1, title: "Retried", playCount: 18)],
+                at: latest,
+                reason: .foreground
+            ).totalPlayDelta,
+            8
+        )
+        XCTAssertTrue(recovered.isPersistenceHealthyForSync)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "load-retry"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 8)
+    }
+
+    func testTransientMigrationSaveFailureRetainsFullLedgerAndRetriesWithoutRelaunch() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMigrationSaveRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let prior = date(year: 2026, month: 5, day: 3)
+        let latest = date(year: 2026, month: 5, day: 5)
+        do {
+            let legacy = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "migration-save-retry"
+            )
+            _ = legacy.record(songs: [song(id: 1, title: "Migrated", playCount: 10)], at: baseline, reason: .foreground)
+            _ = legacy.record(songs: [song(id: 1, title: "Migrated", playCount: 14)], at: prior, reason: .foreground)
+            legacy.debugInstallPreCounterReliabilityPolicyRecap(legacy.recap(forMonthContaining: prior))
+        }
+
+        let gate = PersistenceWriteGate()
+        gate.isAllowed = false
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "migration-save-retry",
+            persistenceWriteAllowed: { gate.isAllowed }
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: prior).totalPlayDelta, 4)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+
+        gate.isAllowed = true
+        XCTAssertEqual(
+            recovered.record(
+                songs: [song(id: 1, title: "Migrated", playCount: 18)],
+                at: latest,
+                reason: .foreground
+            ).totalPlayDelta,
+            8
+        )
+        XCTAssertTrue(recovered.isPersistenceHealthyForSync)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "migration-save-retry"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 8)
+        XCTAssertEqual(relaunched.debugYearlyReliabilityPolicyVersion(for: 2026), 3)
+    }
+
+    func testIncompleteSQLiteMigrationRetriesSurvivingLegacyArchiveOnRelaunch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountIncompleteSQLiteMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-migration"
+        )
+        _ = source.record(songs: [song(id: 1, title: "Preserved", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Preserved", playCount: 14)], at: latest, reason: .foreground)
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("incomplete sqlite conversion".utf8).write(to: ledgerURL, options: .atomic)
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-migration"
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 4)
+        XCTAssertTrue(recovered.isPersistenceHealthyForSync)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("monthly-recap-snapshots.json").path
+            )
+        )
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-migration"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 4)
+    }
+
+    func testTransientLegacyArchiveReadFailureRetriesWithoutCreatingEmptyLedger() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyReadRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let prior = date(year: 2026, month: 5, day: 3)
+        let latest = date(year: 2026, month: 5, day: 5)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-read-retry"
+        )
+        _ = source.record(songs: [song(id: 1, title: "Readable", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Readable", playCount: 14)], at: prior, reason: .foreground)
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let readGate = PersistenceWriteGate()
+        readGate.isAllowed = false
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-read-retry",
+            legacyArchiveReadAllowed: { readGate.isAllowed }
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: prior).totalPlayDelta, 4)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("recap-ledger.sqlite").path
+            )
+        )
+
+        readGate.isAllowed = true
+        XCTAssertEqual(
+            recovered.record(
+                songs: [song(id: 1, title: "Readable", playCount: 18)],
+                at: latest,
+                reason: .foreground
+            ).totalPlayDelta,
+            8
+        )
+        XCTAssertTrue(recovered.isPersistenceHealthyForSync)
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-read-retry"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 8)
+    }
+
+    func testLegacyMigrationPreservesTopLevelLedgersWhenSnapshotsAndCachesAreUnavailable() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyLedgerOnlyMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2024, month: 1, day: 1)
+        let latest = date(year: 2024, month: 1, day: 3)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-ledger-only"
+        )
+        _ = source.record(songs: [song(id: 1, title: "Archived", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Archived", playCount: 14)], at: latest, reason: .foreground)
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let archiveURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        let archiveData = try Data(contentsOf: archiveURL)
+        var archiveObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: archiveData) as? [String: Any]
+        )
+        archiveObject["snapshots"] = []
+        try JSONSerialization.data(withJSONObject: archiveObject, options: [.prettyPrinted, .sortedKeys])
+            .write(to: archiveURL, options: .atomic)
+        try Data("corrupt primary".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.json"),
+            options: .atomic
+        )
+        try Data("corrupt backup".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.previous.json"),
+            options: .atomic
+        )
+
+        let migrated = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-ledger-only"
+        )
+        XCTAssertEqual(migrated.recap(forMonthContaining: latest).totalPlayDelta, 4)
+        XCTAssertEqual(migrated.syncedYearlyRecap(for: 2024)?.totalPlayDelta, 4)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+    }
+
+    func testFailedLegacyArchiveRetirementCannotLaterRestoreStaleJSON() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLegacyRetirementRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let prior = date(year: 2026, month: 5, day: 3)
+        let latest = date(year: 2026, month: 5, day: 5)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-retirement"
+        )
+        _ = source.record(songs: [song(id: 1, title: "Retired", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Retired", playCount: 14)], at: prior, reason: .foreground)
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let retirementGate = PersistenceWriteGate()
+        retirementGate.isAllowed = false
+        let migrating = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-retirement",
+            legacyArchiveRetirementAllowed: { retirementGate.isAllowed }
+        )
+        XCTAssertEqual(migrating.recap(forMonthContaining: prior).totalPlayDelta, 4)
+        XCTAssertFalse(migrating.isPersistenceHealthyForSync)
+        let archiveURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
+
+        retirementGate.isAllowed = true
+        XCTAssertEqual(
+            migrating.record(
+                songs: [song(id: 1, title: "Retired", playCount: 16)],
+                at: latest,
+                reason: .foreground
+            ).totalPlayDelta,
+            6
+        )
+        XCTAssertTrue(migrating.isPersistenceHealthyForSync)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("later unreadable ledger".utf8).write(to: ledgerURL, options: .atomic)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-shm"))
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "legacy-retirement"
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 6)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+    }
+
+    func testVerifiedLedgerMarkerPreventsStaleJSONResurrectionAfterRetirementFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountLedgerAuthorityMarker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let prior = date(year: 2026, month: 5, day: 3)
+        let latest = date(year: 2026, month: 5, day: 5)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "ledger-authority-marker"
+        )
+        _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: prior, reason: .foreground)
+        try source.debugCreateLegacyArchiveForMigration()
+
+        let retirementGate = PersistenceWriteGate()
+        retirementGate.isAllowed = false
+        let migrated = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "ledger-authority-marker",
+            legacyArchiveRetirementAllowed: { retirementGate.isAllowed }
+        )
+        XCTAssertEqual(
+            migrated.record(
+                songs: [song(id: 1, title: "Saved", playCount: 16)],
+                at: latest,
+                reason: .foreground
+            ).totalPlayDelta,
+            6
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("monthly-recap-snapshots.json").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("recap-ledger.authoritative").path
+        ))
+
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("broken ledger".utf8).write(to: ledgerURL, options: .atomic)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-shm"))
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "ledger-authority-marker",
+            legacyArchiveRetirementAllowed: { false }
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 6)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+    }
+
+    func testHealthySQLiteLedgerImmediatelyCreatesAuthorityMarker() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountImmediateAuthorityMarker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "immediate-authority-marker"
+        )
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+        _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: latest, reason: .foreground)
+
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("recap-ledger.authoritative").path
+        ))
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        for url in [ledgerURL, URL(fileURLWithPath: ledgerURL.path + "-wal"), URL(fileURLWithPath: ledgerURL.path + "-shm")] {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "immediate-authority-marker"
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 4)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+    }
+
+    func testMalformedPresentLegacyLedgerArrayFailsClosedWithoutRetiringArchive() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMalformedLegacyLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "malformed-legacy-ledger"
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Saved", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        try source.debugCreateLegacyArchiveForMigration()
+        let archiveURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        var archiveObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: archiveURL)) as? [String: Any]
+        )
+        archiveObject["monthlyLedgers"] = NSNull()
+        try JSONSerialization.data(withJSONObject: archiveObject, options: [.prettyPrinted, .sortedKeys])
+            .write(to: archiveURL, options: .atomic)
+        try Data("bad".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.json"),
+            options: .atomic
+        )
+        try Data("bad".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.previous.json"),
+            options: .atomic
+        )
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "malformed-legacy-ledger"
+        )
+        recovered.prepareStorage()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+    }
+
+    func testFinalNonArrayLegacyLedgerValueFailsClosedWithoutRetiringArchive() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountFinalMalformedLegacyLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "final-malformed-legacy-ledger"
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Saved", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        try source.debugCreateLegacyArchiveForMigration()
+        let archiveURL = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        var archiveObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: archiveURL)) as? [String: Any]
+        )
+        archiveObject.removeValue(forKey: "syncedYearlyRecaps")
+        var archiveData = try JSONSerialization.data(withJSONObject: archiveObject)
+        XCTAssertEqual(archiveData.last, UInt8(ascii: "}"))
+        archiveData.removeLast()
+        archiveData.append(Data(",\"syncedYearlyRecaps\":{}}".utf8))
+        try archiveData.write(to: archiveURL, options: .atomic)
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "final-malformed-legacy-ledger"
+        )
+        recovered.prepareStorage()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archiveURL.path))
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+    }
+
+    func testAuthorityMarkerBlocksStaleJSONWhenLedgerIsMissing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMissingAuthoritativeLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "missing-authoritative-ledger"
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Stale", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        try source.debugCreateLegacyArchiveForMigration()
+        try Data("v1".utf8).write(
+            to: directory.appendingPathComponent("recap-ledger.authoritative"),
+            options: .atomic
+        )
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("recap-ledger.sqlite"))
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("recap-summaries.json"))
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("recap-summaries.previous.json"))
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "missing-authoritative-ledger"
+        )
+        recovered.prepareStorage()
+        XCTAssertTrue(recovered.cachedRecapSummaries().isEmpty)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("monthly-recap-snapshots.json").path
+        ))
+    }
+
+    func testOldPolicyRemoteSnapshotsCannotReinflateCorrectedCurrentPolicyRecap() {
+        let corrected = makeStore(named: "corrected-v3-target")
+        let stale = makeStore(named: "stale-v2-source")
+        let baseline = date(year: 2026, month: 8, day: 1)
+        let latest = date(year: 2026, month: 8, day: 3)
+        _ = corrected.record(songs: [song(id: 1, title: "Correct", playCount: 10)], at: baseline, reason: .foreground)
+        _ = corrected.record(songs: [song(id: 1, title: "Correct", playCount: 15)], at: latest, reason: .foreground)
+        _ = stale.record(songs: [song(id: 2, title: "Stale", playCount: 0)], at: baseline, reason: .foreground)
+        _ = stale.record(songs: [song(id: 2, title: "Stale", playCount: 500)], at: latest, reason: .foreground)
+        let stalePayloads = stale.syncPayloads().map {
+            RecapSnapshotSyncPayload(
+                id: $0.id,
+                capturedAt: $0.capturedAt,
+                counterSignature: $0.counterSignature,
+                reliabilityPolicyVersion: 2,
+                encodedSnapshot: $0.encodedSnapshot
+            )
+        }
+
+        XCTAssertFalse(corrected.mergeSyncPayloads(stalePayloads, now: latest))
+        XCTAssertEqual(corrected.recap(forMonthContaining: latest).totalPlayDelta, 5)
+    }
+
+    func testUnreadableLedgerFallsBackToSummaryWithoutOverwritingHistory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountUnreadableLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        do {
+            let store = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "summary-fallback"
+            )
+            _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+            _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: latest, reason: .foreground)
+            XCTAssertEqual(store.recap(forMonthContaining: latest).totalPlayDelta, 4)
+        }
+
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("not a sqlite ledger".utf8).write(to: ledgerURL, options: .atomic)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-shm"))
+        let corruptBytes = try Data(contentsOf: ledgerURL)
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-fallback"
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 4)
+        XCTAssertFalse(recovered.isPersistenceHealthyForSync)
+        _ = recovered.record(
+            songs: [song(id: 1, title: "Saved", playCount: 20)],
+            at: date(year: 2026, month: 5, day: 4),
+            reason: .foreground
+        )
+        XCTAssertEqual(try Data(contentsOf: ledgerURL), corruptBytes)
+    }
+
+    func testSummaryFallbackUsesCurrentMonthInsteadOfLargerStaleBackup() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountSummaryPriority-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        let inflatedDate = date(year: 2026, month: 5, day: 4)
+        do {
+            let store = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "summary-priority"
+            )
+            _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+            _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: latest, reason: .foreground)
+            let goodSummary = try Data(contentsOf: directory.appendingPathComponent("recap-summaries.json"))
+            _ = store.record(
+                songs: [song(id: 1, title: "Saved", playCount: 30)],
+                at: inflatedDate,
+                reason: .foreground
+            )
+            let inflatedSummary = try Data(contentsOf: directory.appendingPathComponent("recap-summaries.json"))
+            try goodSummary.write(to: directory.appendingPathComponent("recap-summaries.json"), options: .atomic)
+            try inflatedSummary.write(
+                to: directory.appendingPathComponent("recap-summaries.previous.json"),
+                options: .atomic
+            )
+        }
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("broken".utf8).write(to: ledgerURL, options: .atomic)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-shm"))
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-priority"
+        )
+        XCTAssertEqual(recovered.recap(forMonthContaining: latest).totalPlayDelta, 4)
+    }
+
+    func testCachedPresentationUsesBackupAndCorruptPrimaryCannotReplaceIt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountSummaryBackupValidation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-backup-validation"
+        )
+        _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+        _ = store.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: latest, reason: .foreground)
+
+        let primaryURL = directory.appendingPathComponent("recap-summaries.json")
+        let backupURL = directory.appendingPathComponent("recap-summaries.previous.json")
+        let lastGoodBackup = try Data(contentsOf: primaryURL)
+        try lastGoodBackup.write(to: backupURL, options: .atomic)
+        try Data("corrupt primary".utf8).write(to: primaryURL, options: .atomic)
+
+        _ = store.record(
+            songs: [song(id: 1, title: "Saved", playCount: 16)],
+            at: date(year: 2026, month: 5, day: 4),
+            reason: .foreground
+        )
+        XCTAssertEqual(try Data(contentsOf: backupURL), lastGoodBackup)
+
+        try Data("corrupt again".utf8).write(to: primaryURL, options: .atomic)
+        let coldStore = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-backup-validation"
+        )
+        XCTAssertEqual(coldStore.cachedRecapSummaries().last?.totalPlayDelta, 4)
+    }
+
+    func testPrepareStorageRegeneratesCorruptSummaryCacheFromHealthyLedger() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountSummaryRegeneration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 3)
+        do {
+            let source = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "summary-regeneration"
+            )
+            _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 10)], at: baseline, reason: .foreground)
+            _ = source.record(songs: [song(id: 1, title: "Saved", playCount: 14)], at: latest, reason: .foreground)
+        }
+        try Data("corrupt primary".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.json"),
+            options: .atomic
+        )
+        try Data("corrupt backup".utf8).write(
+            to: directory.appendingPathComponent("recap-summaries.previous.json"),
+            options: .atomic
+        )
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "summary-regeneration"
+        )
+        XCTAssertTrue(recovered.cachedRecapSummaries().isEmpty)
+        recovered.prepareStorage()
+        XCTAssertEqual(recovered.cachedRecapSummaries().last?.totalPlayDelta, 4)
+    }
+
+    func testPrepareStorageRegeneratesValidButStaleSummaryCacheFromHealthyLedger() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountStaleSummaryRegeneration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let primaryURL = directory.appendingPathComponent("recap-summaries.json")
+        do {
+            let source = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "stale-summary-regeneration"
+            )
+            _ = source.record(
+                songs: [song(id: 1, title: "Saved", playCount: 10)],
+                at: date(year: 2026, month: 5, day: 1),
+                reason: .foreground
+            )
+            _ = source.record(
+                songs: [song(id: 1, title: "Saved", playCount: 14)],
+                at: date(year: 2026, month: 5, day: 3),
+                reason: .foreground
+            )
+            let staleButValid = try Data(contentsOf: primaryURL)
+            _ = source.record(
+                songs: [song(id: 1, title: "Saved", playCount: 20)],
+                at: date(year: 2026, month: 5, day: 4),
+                reason: .foreground
+            )
+            try staleButValid.write(to: primaryURL, options: .atomic)
+        }
+
+        let recovered = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "stale-summary-regeneration"
+        )
+        XCTAssertEqual(recovered.cachedRecapSummaries().last?.totalPlayDelta, 4)
+        recovered.prepareStorage()
+        XCTAssertEqual(recovered.cachedRecapSummaries().last?.totalPlayDelta, 10)
+    }
+
+    func testTransientSaveFailureKeepsPendingSnapshotsAndRetriesWithoutRelaunch() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountSaveRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = PersistenceWriteGate()
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "save-retry",
+            persistenceWriteAllowed: { gate.isAllowed }
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Pending", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Pending", playCount: 14)],
+            at: date(year: 2026, month: 5, day: 3),
+            reason: .foreground
+        )
+
+        gate.isAllowed = false
+        let pending = store.record(
+            songs: [song(id: 1, title: "Pending", playCount: 16)],
+            at: date(year: 2026, month: 5, day: 4),
+            reason: .foreground
+        )
+        XCTAssertEqual(pending.totalPlayDelta, 6)
+        XCTAssertFalse(store.isPersistenceHealthyForSync)
+
+        gate.isAllowed = true
+        let retried = store.record(
+            songs: [song(id: 1, title: "Pending", playCount: 18)],
+            at: date(year: 2026, month: 5, day: 5),
+            reason: .foreground
+        )
+        XCTAssertEqual(retried.totalPlayDelta, 8)
+        XCTAssertTrue(store.isPersistenceHealthyForSync)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "save-retry"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: date(year: 2026, month: 5, day: 5)).totalPlayDelta, 8)
+    }
+
     func testRecordDoesNotPersistWhenCommitGateIsClosed() {
         let store = makeStore(named: "record-gated")
         _ = store.record(
@@ -60,6 +970,30 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(targetRecap.topSongs.first?.playDelta, 4)
     }
 
+    func testArchivedRecapSurvivesWhenNewestCloudSnapshotRecordIsMissing() throws {
+        let sourceStore = makeStore(named: "redundant-summary-source")
+        let baseline = date(year: 2026, month: 5, day: 1)
+        let latest = date(year: 2026, month: 5, day: 5)
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Durable", playCount: 10)],
+            at: baseline,
+            reason: .foreground
+        )
+        _ = sourceStore.record(
+            songs: [song(id: 1, title: "Durable", playCount: 18)],
+            at: latest,
+            reason: .foreground
+        )
+
+        let payloads = sourceStore.syncPayloads().sorted { $0.capturedAt < $1.capturedAt }
+        XCTAssertGreaterThan(payloads.count, 1)
+        XCTAssertEqual(payloads.filter { $0.encodedRecaps != nil }.count, 2)
+
+        let restored = makeStore(named: "redundant-summary-target")
+        XCTAssertTrue(restored.mergeSyncPayloads(Array(payloads.dropLast()), now: latest))
+        XCTAssertEqual(restored.recap(forMonthContaining: latest).totalPlayDelta, 8)
+    }
+
     func testSyncedRecapSummaryKeepsRankedListsConsistentAcrossDevices() {
         let phoneStore = makeStore(named: "summary-phone")
         let iPadStore = makeStore(named: "summary-ipad")
@@ -96,7 +1030,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
 
         let phonePayloads = phoneStore.localSyncPayloads()
         XCTAssertFalse(phonePayloads.isEmpty)
-        XCTAssertEqual(phonePayloads.filter { $0.encodedRecaps != nil }.count, 1)
+        XCTAssertEqual(phonePayloads.filter { $0.encodedRecaps != nil }.count, min(2, phonePayloads.count))
         XCTAssertTrue(iPadStore.mergeSyncPayloads(phonePayloads, now: latestDate))
 
         let recap = iPadStore.recap(forMonthContaining: latestDate)
@@ -139,7 +1073,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         // The active month needs its prior-month baseline plus its first and
         // latest observations; archived months travel as the compact summary.
         XCTAssertEqual(payloads.count, 3)
-        XCTAssertEqual(payloads.filter { $0.encodedRecaps != nil }.count, 1)
+        XCTAssertEqual(payloads.filter { $0.encodedRecaps != nil }.count, 2)
         XCTAssertTrue(targetStore.mergeSyncPayloads(payloads, now: mayLatest))
         XCTAssertEqual(targetStore.recap(forMonthContaining: aprilLatest).totalPlayDelta, 4)
         XCTAssertEqual(targetStore.recap(forMonthContaining: mayLatest).totalPlayDelta, 3)
@@ -522,7 +1456,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
         XCTAssertEqual(report.months.reduce(0) { $0 + $1.totalPlayDelta }, yearly.totalPlayDelta)
         XCTAssertEqual(report.months.first { Calendar.current.component(.month, from: $0.monthStart) == 6 }?.totalPlayDelta, 3)
-        XCTAssertTrue(report.months.allSatisfy { $0.reliabilityPolicyVersion == 2 })
+        XCTAssertTrue(report.months.allSatisfy { $0.reliabilityPolicyVersion == 3 })
         XCTAssertTrue(report.months.contains { $0.sourceDescription.hasSuffix(" local snapshots") })
         XCTAssertFalse(report.exportText.contains("Private May Song"))
         XCTAssertFalse(report.exportText.contains("Private Artist"))
@@ -534,7 +1468,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
 
         let report = store.recapDiagnosticsReport(at: date(year: 2026, month: 8, day: 25))
 
-        XCTAssertEqual(report.reliabilityPolicyVersion, 2)
+        XCTAssertEqual(report.reliabilityPolicyVersion, 3)
         XCTAssertTrue(report.hasCanonicalMonthLedger)
         XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
         XCTAssertTrue(report.months.isEmpty)
@@ -797,7 +1731,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         ])
 
         XCTAssertEqual(store.recap(forMonthContaining: latestDate).totalPlayDelta, 2)
-        XCTAssertTrue(store.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 2 })
+        XCTAssertTrue(store.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 3 })
     }
 
     func testMonthIdentityMigrationCollapsesTimezoneVariantsWithoutSummingThem() throws {
@@ -867,7 +1801,80 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 90)
         XCTAssertEqual(presentation.monthlyRecaps.count, 1)
         XCTAssertEqual(presentation.availableMonthStarts.count, 1)
-        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 2 })
+        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 3 })
+    }
+
+    func testCounterReliabilityMigrationKeepsPersistedMonthAcrossTimezoneBoundary() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountTimezoneBoundaryRepair-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var sourceCalendar = Calendar(identifier: .gregorian)
+        sourceCalendar.timeZone = TimeZone(secondsFromGMT: 14 * 60 * 60)!
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let julyLocalBaseline = utc.date(from: DateComponents(
+            timeZone: utc.timeZone,
+            year: 2026,
+            month: 7,
+            day: 31,
+            hour: 9
+        ))!
+        let augustLocalCapture = utc.date(from: DateComponents(
+            timeZone: utc.timeZone,
+            year: 2026,
+            month: 7,
+            day: 31,
+            hour: 11
+        ))!
+        let source = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: sourceCalendar,
+            deviceIdentifier: "timezone-boundary"
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Boundary", playCount: 10)],
+            at: julyLocalBaseline,
+            reason: .foreground
+        )
+        let accurateAugust = source.record(
+            songs: [song(id: 1, title: "Boundary", playCount: 15)],
+            at: augustLocalCapture,
+            reason: .foreground
+        )
+        XCTAssertEqual(accurateAugust.totalPlayDelta, 5)
+        let pollutedAugust = MonthlyRecap(
+            monthStart: accurateAugust.monthStart,
+            generatedAt: accurateAugust.generatedAt,
+            lastCaptureReason: accurateAugust.lastCaptureReason,
+            trackingStart: accurateAugust.trackingStart,
+            snapshotCount: accurateAugust.snapshotCount,
+            totalPlayDelta: 500,
+            totalSkipDelta: accurateAugust.totalSkipDelta,
+            totalListeningDuration: 500 * 180,
+            playedSongCount: accurateAugust.playedSongCount,
+            listenedArtistCount: accurateAugust.listenedArtistCount,
+            newSongCount: accurateAugust.newSongCount,
+            topSongs: accurateAugust.topSongs,
+            topArtists: accurateAugust.topArtists,
+            topAlbums: accurateAugust.topAlbums,
+            biggestGainers: accurateAugust.biggestGainers,
+            biggestAlbumGainers: accurateAugust.biggestAlbumGainers,
+            biggestArtistGainers: accurateAugust.biggestArtistGainers,
+            topNewSongs: accurateAugust.topNewSongs
+        )
+        source.debugInstallPreCounterReliabilityPolicyRecap(pollutedAugust)
+
+        var destinationCalendar = Calendar(identifier: .gregorian)
+        destinationCalendar.timeZone = TimeZone(secondsFromGMT: -8 * 60 * 60)!
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: destinationCalendar,
+            deviceIdentifier: "timezone-boundary"
+        )
+        let augustIdentity = sourceCalendar.startOfMonth(containing: augustLocalCapture)
+        XCTAssertEqual(relaunched.recap(forMonthContaining: augustIdentity).totalPlayDelta, 500)
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 500)
+        XCTAssertEqual(relaunched.cachedRecapSummaries().filter { $0.totalPlayDelta > 0 }.count, 1)
     }
 
     func testCounterReliabilityMigrationRepairsInflatedActiveMonthLedger() {
@@ -925,6 +1932,234 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(repaired.topSongs.count, 30)
         XCTAssertTrue(repaired.topSongs.allSatisfy { $0.playDelta == 1 })
         XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 30)
+    }
+
+    func testCounterReliabilityMigrationPreservesHistoricalRecapWhenStaleDeviceHasOnlyBaseline() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountStaleDeviceMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "current-phone"
+        )
+        let staleStore = makeStore(named: "stale-ipad")
+        let julyDate = date(year: 2026, month: 7, day: 20)
+        _ = staleStore.record(
+            songs: [song(id: 9, title: "Stale Baseline", playCount: 400)],
+            at: julyDate,
+            reason: .foreground
+        )
+        XCTAssertTrue(store.mergeSyncPayloads(staleStore.syncPayloads(), now: julyDate))
+
+        let augustBaseline = date(year: 2026, month: 8, day: 1)
+        let augustLatest = date(year: 2026, month: 8, day: 4)
+        _ = store.record(
+            songs: [song(id: 1, title: "Current", playCount: 100)],
+            at: augustBaseline,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Current", playCount: 110)],
+            at: augustLatest,
+            reason: .foreground
+        )
+
+        let historicalJuly = MonthlyRecap(
+            monthStart: calendar.startOfMonth(containing: julyDate),
+            generatedAt: julyDate,
+            lastCaptureReason: .foreground,
+            trackingStart: date(year: 2026, month: 7, day: 1),
+            snapshotCount: 8,
+            totalPlayDelta: 44,
+            totalSkipDelta: 0,
+            totalListeningDuration: 44 * 180,
+            playedSongCount: 1,
+            listenedArtistCount: 1,
+            newSongCount: 0,
+            topSongs: [],
+            topArtists: [],
+            topAlbums: [],
+            biggestGainers: [],
+            biggestAlbumGainers: [],
+            biggestArtistGainers: [],
+            topNewSongs: []
+        )
+        store.debugInstallPreCounterReliabilityPolicyRecap(historicalJuly)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "current-phone"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: julyDate).totalPlayDelta, 44)
+        XCTAssertEqual(relaunched.recap(forMonthContaining: augustLatest).totalPlayDelta, 10)
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 54)
+    }
+
+    func testCounterReliabilityMigrationPreservesSummaryOnlyMonthsBesidePartialLedgers() {
+        let ledgerSource = makeStore(named: "partial-policy-ledger-source")
+        let summarySource = makeStore(named: "partial-policy-summary-source")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountPartialPolicy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "partial-policy-target"
+        )
+        _ = ledgerSource.record(
+            songs: [song(id: 1, title: "August", playCount: 10)],
+            at: date(year: 2026, month: 8, day: 1),
+            reason: .foreground
+        )
+        let august = ledgerSource.record(
+            songs: [song(id: 1, title: "August", playCount: 14)],
+            at: date(year: 2026, month: 8, day: 3),
+            reason: .foreground
+        )
+        _ = summarySource.record(
+            songs: [song(id: 2, title: "May", playCount: 20)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        let may = summarySource.record(
+            songs: [song(id: 2, title: "May", playCount: 27)],
+            at: date(year: 2026, month: 5, day: 3),
+            reason: .foreground
+        )
+        target.debugInstallPreCounterReliabilityPolicyEvidence(
+            monthlyLedgerRecaps: [august],
+            summaryOnlyRecaps: [may]
+        )
+
+        let reloaded = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "partial-policy-target"
+        )
+        XCTAssertEqual(reloaded.recap(forMonthContaining: date(year: 2026, month: 5, day: 3)).totalPlayDelta, 7)
+        XCTAssertEqual(reloaded.recap(forMonthContaining: date(year: 2026, month: 8, day: 3)).totalPlayDelta, 4)
+        XCTAssertEqual(reloaded.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 11)
+    }
+
+    func testCounterReliabilityMigrationDoesNotDowngradeDurableMonthFromAnotherRepairableStream() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMixedStreamMigration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let julyBaseline = date(year: 2026, month: 7, day: 2)
+        let julyLatest = date(year: 2026, month: 7, day: 20)
+        let target = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "durable-phone"
+        )
+        _ = target.record(
+            songs: [song(id: 1, title: "Durable Baseline", playCount: 400)],
+            at: julyLatest,
+            reason: .foreground
+        )
+
+        let repairable = makeStore(named: "lower-repairable-stream")
+        _ = repairable.record(
+            songs: [song(id: 2, title: "Lower Evidence", playCount: 100)],
+            at: julyBaseline,
+            reason: .foreground
+        )
+        _ = repairable.record(
+            songs: [song(id: 2, title: "Lower Evidence", playCount: 110)],
+            at: julyLatest,
+            reason: .foreground
+        )
+        XCTAssertTrue(target.mergeSyncPayloads(repairable.syncPayloads(), now: julyLatest))
+
+        let durableSource = makeStore(named: "durable-history-source")
+        _ = durableSource.record(
+            songs: [song(id: 3, title: "Durable History", playCount: 100)],
+            at: julyBaseline,
+            reason: .foreground
+        )
+        let durableHistorical = durableSource.record(
+            songs: [song(id: 3, title: "Durable History", playCount: 144)],
+            at: julyLatest,
+            reason: .foreground
+        )
+        target.debugInstallPreCounterReliabilityPolicyRecap(durableHistorical)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "durable-phone"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: julyLatest).totalPlayDelta, 44)
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 44)
+    }
+
+    func testCounterReliabilityMigrationRepairsHistoricalStaleDeviceWhenComparableEvidenceSurvives() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountHistoricalRepair-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "current-phone"
+        )
+        let staleStore = makeStore(named: "historical-ipad")
+        let julyBaseline = date(year: 2026, month: 7, day: 2)
+        let julyLatest = date(year: 2026, month: 7, day: 20)
+        _ = staleStore.record(
+            songs: [song(id: 9, title: "Historical", playCount: 400)],
+            at: julyBaseline,
+            reason: .foreground
+        )
+        let accurateJuly = staleStore.record(
+            songs: [song(id: 9, title: "Historical", playCount: 405)],
+            at: julyLatest,
+            reason: .foreground
+        )
+        XCTAssertTrue(store.mergeSyncPayloads(staleStore.syncPayloads(), now: julyLatest))
+        _ = store.record(
+            songs: [song(id: 1, title: "Current", playCount: 100)],
+            at: date(year: 2026, month: 8, day: 1),
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Current", playCount: 110)],
+            at: date(year: 2026, month: 8, day: 4),
+            reason: .foreground
+        )
+        let polluted = MonthlyRecap(
+            monthStart: accurateJuly.monthStart,
+            generatedAt: accurateJuly.generatedAt,
+            lastCaptureReason: accurateJuly.lastCaptureReason,
+            trackingStart: accurateJuly.trackingStart,
+            snapshotCount: accurateJuly.snapshotCount,
+            totalPlayDelta: 500,
+            totalSkipDelta: accurateJuly.totalSkipDelta,
+            totalListeningDuration: 500 * 180,
+            playedSongCount: accurateJuly.playedSongCount,
+            listenedArtistCount: accurateJuly.listenedArtistCount,
+            newSongCount: accurateJuly.newSongCount,
+            topSongs: accurateJuly.topSongs,
+            topArtists: accurateJuly.topArtists,
+            topAlbums: accurateJuly.topAlbums,
+            biggestGainers: accurateJuly.biggestGainers,
+            biggestAlbumGainers: accurateJuly.biggestAlbumGainers,
+            biggestArtistGainers: accurateJuly.biggestArtistGainers,
+            topNewSongs: accurateJuly.topNewSongs
+        )
+        store.debugInstallPreCounterReliabilityPolicyRecap(polluted)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "current-phone"
+        )
+        XCTAssertEqual(relaunched.recap(forMonthContaining: julyLatest).totalPlayDelta, 5)
+        XCTAssertEqual(relaunched.recap(forMonthContaining: date(year: 2026, month: 8, day: 4)).totalPlayDelta, 10)
     }
 
     func testImplausibleLocalStreamDoesNotOverridePlausibleRemoteRecap() {
@@ -1952,6 +3187,29 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(cached.topSongs.first?.playDelta, 6)
     }
 
+    func testArchivedRecapsStillProduceManifestArchiveWhenAllSnapshotsAgeOut() {
+        let store = makeStore(named: "archive-only-after-retention")
+        let baseline = date(year: 2024, month: 1, day: 1)
+        let latest = date(year: 2024, month: 1, day: 3)
+        _ = store.record(
+            songs: [song(id: 1, title: "Archived", playCount: 10)],
+            at: baseline,
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Archived", playCount: 14)],
+            at: latest,
+            reason: .foreground
+        )
+
+        let payloads = store.syncPayloads()
+
+        XCTAssertEqual(payloads.count, 1)
+        XCTAssertTrue(payloads[0].isManifestArchiveOnly)
+        XCTAssertNotNil(payloads[0].encodedRecaps)
+        XCTAssertNotNil(payloads[0].encodedYearlyRecaps)
+    }
+
     func testDeltaLedgerStorageScalesWithChangesInsteadOfFullLibraryCopies() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlayCountDeltaLedger-\(UUID().uuidString)", isDirectory: true)
@@ -2142,7 +3400,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(yearly.unattributedPlayDelta, 30)
 
         let payloads = store.localSyncPayloads()
-        XCTAssertEqual(payloads.filter { $0.encodedUnattributedIntervals != nil }.count, 1)
+        XCTAssertEqual(payloads.filter { $0.encodedUnattributedIntervals != nil }.count, min(2, payloads.count))
         let cloudRoundTripPayloads = payloads.map {
             RecapSnapshotSyncPayload(
                 id: $0.id,
@@ -2428,4 +3686,8 @@ private final class SnapshotCommitGate: @unchecked Sendable {
             return true
         }
     }
+}
+
+private final class PersistenceWriteGate {
+    var isAllowed = true
 }

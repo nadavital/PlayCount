@@ -3,6 +3,86 @@ import CloudKit
 @testable import PlayCount
 
 final class RecapCloudSyncServiceTests: XCTestCase {
+    func testSyncNeverUploadsOrDeletesWhenLocalLedgerIsUnreadable() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountCloudCorruptLedger-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let localDate = date(year: 2026, month: 5, day: 1)
+        do {
+            let initial = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: Calendar(identifier: .gregorian),
+                deviceIdentifier: "corrupt-local"
+            )
+            _ = initial.record(
+                songs: [song(id: 1, title: "Preserved", playCount: 10)],
+                at: localDate,
+                reason: .foreground
+            )
+        }
+        let ledgerURL = directory.appendingPathComponent("recap-ledger.sqlite")
+        try Data("broken".utf8).write(to: ledgerURL, options: .atomic)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: ledgerURL.path + "-shm"))
+        let local = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "corrupt-local"
+        )
+        let remote = makeStore(named: "corrupt-ledger-remote")
+        _ = remote.record(
+            songs: [song(id: 2, title: "Remote", playCount: 20)],
+            at: localDate,
+            reason: .foreground
+        )
+        let client = FakeRecapCloudSyncClient(remotePayloads: remote.syncPayloads())
+
+        _ = await RecapCloudSyncService(client: client).sync(snapshotStore: local)
+
+        XCTAssertTrue(client.savedPayloadCalls.isEmpty)
+        XCTAssertTrue(client.deletedPayloadIDs.isEmpty)
+    }
+
+    func testTransientReadFailureCannotReopenPruningGateAfterSkippedRemoteMergeSave() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountCloudReadRetry-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let localDate = date(year: 2026, month: 5, day: 1)
+        do {
+            let initial = MonthlyRecapSnapshotStore(
+                directoryURL: directory,
+                calendar: calendar,
+                deviceIdentifier: "read-retry-local"
+            )
+            _ = initial.record(
+                songs: [song(id: 1, title: "Local", playCount: 10)],
+                at: localDate,
+                reason: .foreground
+            )
+        }
+        let remote = makeStore(named: "read-retry-remote")
+        _ = remote.record(
+            songs: [song(id: 2, title: "Remote Only", playCount: 20)],
+            at: date(year: 2026, month: 5, day: 2),
+            reason: .foreground
+        )
+        let readGate = FailOncePersistenceReadGate()
+        let local = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "read-retry-local",
+            persistenceReadAllowed: { readGate.isAllowed }
+        )
+        let client = FakeRecapCloudSyncClient(remotePayloads: remote.syncPayloads())
+
+        let didMerge = await RecapCloudSyncService(client: client).sync(snapshotStore: local)
+        XCTAssertFalse(didMerge)
+        XCTAssertTrue(client.savedPayloadCalls.isEmpty)
+        XCTAssertTrue(client.deletedPayloadIDs.isEmpty)
+        XCTAssertFalse(local.isPersistenceHealthyForSync)
+    }
+
     func testSyncMergesRemoteSnapshotsAndUploadsMergedLocalPayloads() async {
         let remoteStore = makeStore(named: "remote")
         let localStore = makeStore(named: "local")
@@ -34,7 +114,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertTrue(didMerge)
         XCTAssertEqual(localStore.syncPayloads().count, 3)
         XCTAssertEqual(client.savedPayloads.count, 3)
-        XCTAssertEqual(client.savedPayloads.filter { $0.encodedRecaps != nil }.count, 1)
+        XCTAssertEqual(client.savedPayloads.filter { $0.encodedRecaps != nil }.count, min(2, client.savedPayloads.count))
         XCTAssertEqual(localStore.recap(forMonthContaining: remoteDate).totalPlayDelta, 4)
     }
 
@@ -87,6 +167,58 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertTrue(client.savedPayloads.isEmpty)
     }
 
+    func testSyncNeverDeletesRemotePayloadsWhenCommitGateCloses() async {
+        let remoteStore = makeStore(named: "remote-commit-gated")
+        let localStore = makeStore(named: "local-commit-gated")
+        _ = remoteStore.record(
+            songs: [song(id: 1, title: "Remote", playCount: 5)],
+            at: date(year: 2026, month: 5, day: 3),
+            reason: .foreground
+        )
+        let client = FakeRecapCloudSyncClient(remotePayloads: remoteStore.syncPayloads())
+
+        let didMerge = await RecapCloudSyncService(client: client).sync(
+            snapshotStore: localStore,
+            shouldCommit: { false }
+        )
+
+        XCTAssertFalse(didMerge)
+        XCTAssertTrue(client.savedPayloadCalls.isEmpty)
+        XCTAssertTrue(client.deletedPayloadIDs.isEmpty)
+    }
+
+    func testPayloadPreparationSaveFailureNeverDeletesRemoteArchive() async {
+        let gate = CloudPersistenceGate()
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("PlayCountCloudSaveFailure-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: Calendar(identifier: .gregorian),
+            deviceIdentifier: "payload-save-failure",
+            persistenceWriteAllowed: { gate.isAllowed }
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Old", playCount: 10)],
+            at: date(year: 2024, month: 1, day: 1),
+            reason: .foreground
+        )
+        _ = store.record(
+            songs: [song(id: 1, title: "Old", playCount: 14)],
+            at: date(year: 2024, month: 1, day: 3),
+            reason: .foreground
+        )
+        gate.isAllowed = false
+        let client = FakeRecapCloudSyncClient(remotePayloads: [payload(id: "remote-only")])
+
+        let didMerge = await RecapCloudSyncService(client: client).sync(snapshotStore: store)
+
+        XCTAssertFalse(didMerge)
+        XCTAssertTrue(client.savedPayloadCalls.isEmpty)
+        XCTAssertTrue(client.deletedPayloadIDs.isEmpty)
+        XCTAssertFalse(store.isPersistenceHealthyForSync)
+    }
+
     func testBothDevicesCanUploadWithoutReplacingManifestWithLocalOnlySnapshots() async {
         let phoneStore = makeStore(named: "phone-uploader")
         let iPadStore = makeStore(named: "ipad-uploader")
@@ -122,7 +254,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         let iPadClient = FakeRecapCloudSyncClient(remotePayloads: phoneInitialClient.savedPayloads)
         _ = await RecapCloudSyncService(client: iPadClient).sync(snapshotStore: iPadStore)
         XCTAssertEqual(iPadClient.savedPayloads.count, 4)
-        XCTAssertEqual(iPadClient.savedPayloads.filter { $0.encodedRecaps != nil }.count, 1)
+        XCTAssertEqual(iPadClient.savedPayloads.filter { $0.encodedRecaps != nil }.count, min(2, iPadClient.savedPayloads.count))
 
         let phoneSecondClient = FakeRecapCloudSyncClient(remotePayloads: iPadClient.savedPayloads)
         _ = await RecapCloudSyncService(client: phoneSecondClient).sync(snapshotStore: phoneStore)
@@ -226,7 +358,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertTrue(client.savedPayloads.isEmpty)
     }
 
-    func testSyncTreatsMissingCloudKitRecordTypeAsEmptyRemoteStore() async {
+    func testSyncTreatsMissingCloudKitZoneAsEmptyRemoteStore() async {
         let store = makeStore(named: "empty-cloudkit")
         _ = store.record(
             songs: [song(id: 1, title: "Local", playCount: 3)],
@@ -287,6 +419,343 @@ final class RecapCloudSyncServiceTests: XCTestCase {
             ),
             ["older-a", "newer-phone", "ipad-local"]
         )
+    }
+
+    func testConflictManifestMergeKeepsConcurrentUploadsButExcludesPrunedRecords() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.mergedManifestPayloadIDs(
+                existingPayloadIDs: ["stale", "other-device-new"],
+                uploadPayloadIDs: ["this-device-new"],
+                excludingPayloadIDs: ["stale"]
+            ),
+            ["other-device-new", "this-device-new"]
+        )
+    }
+
+    func testManifestMergePreservesOtherDeviceCommitThatArrivedBeforeManifestFetch() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.mergedManifestPayloadIDs(
+                existingPayloadIDs: ["remote-seen-at-sync-start", "other-device-just-committed"],
+                uploadPayloadIDs: ["this-device-upload"],
+                excludingPayloadIDs: ["remote-seen-at-sync-start"]
+            ),
+            ["other-device-just-committed", "this-device-upload"]
+        )
+    }
+
+    func testManifestRepairExcludesDanglingMissingPayloadIDsAlongsidePrunedIDs() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.manifestExclusions(
+                deletingPayloadIDs: ["compacted-away"],
+                missingPayloadIDs: ["dangling-record"]
+            ),
+            ["compacted-away", "dangling-record"]
+        )
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.mergedManifestPayloadIDs(
+                existingPayloadIDs: ["survivor", "dangling-record", "compacted-away"],
+                uploadPayloadIDs: ["new-local"],
+                excludingPayloadIDs: CloudKitRecapSyncClient.manifestExclusions(
+                    deletingPayloadIDs: ["compacted-away"],
+                    missingPayloadIDs: ["dangling-record"]
+                )
+            ),
+            ["survivor", "new-local"]
+        )
+    }
+
+    func testConcurrentInitialManifestCreationUsesConflictDetection() {
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.manifestRecordSavePolicy,
+            .ifServerRecordUnchanged,
+            "A second device creating the same initial manifest must conflict and merge, never overwrite the first manifest"
+        )
+    }
+
+    func testManifestArchivePrefersCorrectedPolicyOverNewerStalePayloadSummary() {
+        let stale = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: date(year: 2026, month: 8, day: 20),
+            reliabilityPolicyVersion: 2,
+            encodedRecaps: Data("inflated".utf8),
+            encodedYearlyRecaps: nil,
+            encodedUnattributedIntervals: nil
+        )
+        let corrected = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: date(year: 2026, month: 8, day: 10),
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: Data("corrected-lower".utf8),
+            encodedYearlyRecaps: nil,
+            encodedUnattributedIntervals: nil
+        )
+
+        let correctedLocal = CloudKitRecapSyncClient.preferredManifestArchive(existing: stale, local: corrected)
+        let correctedExisting = CloudKitRecapSyncClient.preferredManifestArchive(existing: corrected, local: stale)
+        XCTAssertEqual(correctedLocal?.encodedRecaps, corrected.encodedRecaps)
+        XCTAssertEqual(correctedExisting?.encodedRecaps, corrected.encodedRecaps)
+        XCTAssertEqual(correctedLocal?.reliabilityPolicyVersion, 3)
+        XCTAssertEqual(correctedExisting?.reliabilityPolicyVersion, 3)
+        XCTAssertEqual(correctedLocal?.capturedAt, stale.capturedAt)
+        XCTAssertEqual(correctedExisting?.capturedAt, stale.capturedAt)
+    }
+
+    func testManifestArchiveUsesLatestCaptureWithinSameReliabilityPolicy() {
+        let earlier = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: date(year: 2026, month: 8, day: 10),
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: Data("earlier".utf8),
+            encodedYearlyRecaps: nil,
+            encodedUnattributedIntervals: nil
+        )
+        let later = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: date(year: 2026, month: 8, day: 20),
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: Data("later".utf8),
+            encodedYearlyRecaps: nil,
+            encodedUnattributedIntervals: nil
+        )
+
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.preferredManifestArchive(existing: earlier, local: later),
+            later
+        )
+    }
+
+    func testManifestArchiveOverridesMutablePayloadSummaryCopies() {
+        let earlier = RecapSnapshotSyncPayload(
+            id: "earlier",
+            capturedAt: date(year: 2026, month: 8, day: 10),
+            counterSignature: "earlier",
+            reliabilityPolicyVersion: 2,
+            encodedSnapshot: Data("snapshot-a".utf8),
+            encodedRecaps: Data("stale-a".utf8)
+        )
+        let later = RecapSnapshotSyncPayload(
+            id: "later",
+            capturedAt: date(year: 2026, month: 8, day: 20),
+            counterSignature: "later",
+            reliabilityPolicyVersion: 2,
+            encodedSnapshot: Data("snapshot-b".utf8),
+            encodedRecaps: Data("stale-b".utf8)
+        )
+        let archive = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: later.capturedAt,
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: Data("corrected".utf8),
+            encodedYearlyRecaps: Data("year".utf8),
+            encodedUnattributedIntervals: Data("gaps".utf8)
+        )
+
+        let resolved = CloudKitRecapSyncClient.applyingManifestArchive(archive, to: [earlier, later])
+        XCTAssertNil(resolved[0].encodedRecaps)
+        XCTAssertEqual(resolved[1].encodedRecaps, Data("corrected".utf8))
+        XCTAssertEqual(resolved[1].encodedYearlyRecaps, Data("year".utf8))
+        XCTAssertEqual(resolved[1].encodedUnattributedIntervals, Data("gaps".utf8))
+        XCTAssertEqual(resolved[1].reliabilityPolicyVersion, 2)
+        XCTAssertEqual(resolved[1].archiveReliabilityPolicyVersion, 3)
+    }
+
+    func testPartialManifestArchivePreservesComplementaryPayloadEvidence() throws {
+        let source = makeStore(named: "partial-manifest-source")
+        _ = source.record(
+            songs: [song(id: 1, title: "May", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "May", playCount: 14)],
+            at: date(year: 2026, month: 5, day: 3),
+            reason: .foreground
+        )
+        let sourcePayload = try XCTUnwrap(source.syncPayloads().first { $0.encodedRecaps != nil })
+        let payload = RecapSnapshotSyncPayload(
+            id: "raw-v2",
+            capturedAt: sourcePayload.capturedAt,
+            counterSignature: "raw-v2",
+            reliabilityPolicyVersion: 2,
+            archiveReliabilityPolicyVersion: 2,
+            encodedSnapshot: Data("old-raw-snapshot".utf8),
+            encodedRecaps: sourcePayload.encodedRecaps
+        )
+        let manifest = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: sourcePayload.capturedAt.addingTimeInterval(60),
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: nil,
+            encodedYearlyRecaps: sourcePayload.encodedYearlyRecaps,
+            encodedUnattributedIntervals: nil
+        )
+
+        let resolved = try XCTUnwrap(
+            CloudKitRecapSyncClient.applyingManifestArchive(manifest, to: [payload]).first
+        )
+        XCTAssertEqual(resolved.reliabilityPolicyVersion, 2)
+        XCTAssertEqual(resolved.archiveReliabilityPolicyVersion, 3)
+        XCTAssertNotNil(resolved.encodedRecaps)
+        XCTAssertNotNil(resolved.encodedYearlyRecaps)
+    }
+
+    func testEmptyManifestCanRestoreItsArchiveWithoutResurrectingZonePayloads() {
+        let archive = CloudKitRecapSyncClient.ManifestArchive(
+            capturedAt: date(year: 2026, month: 8, day: 20),
+            reliabilityPolicyVersion: 3,
+            encodedRecaps: Data("months".utf8),
+            encodedYearlyRecaps: Data("years".utf8),
+            encodedUnattributedIntervals: Data("gaps".utf8)
+        )
+
+        let restored = CloudKitRecapSyncClient.applyingManifestArchive(archive, to: [])
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertTrue(restored[0].isManifestArchiveOnly)
+        XCTAssertEqual(restored[0].encodedRecaps, Data("months".utf8))
+        XCTAssertEqual(restored[0].encodedYearlyRecaps, Data("years".utf8))
+        XCTAssertEqual(restored[0].encodedUnattributedIntervals, Data("gaps".utf8))
+    }
+
+    func testManifestArchiveMergesUniqueMonthsAcrossMixedPolicyDevices() throws {
+        let older = makeStore(named: "archive-merge-older")
+        let mixed = makeStore(named: "archive-merge-mixed")
+        let target = makeStore(named: "archive-merge-target")
+
+        _ = older.record(
+            songs: [song(id: 1, title: "May", playCount: 10)],
+            at: date(year: 2026, month: 5, day: 1),
+            reason: .foreground
+        )
+        _ = older.record(
+            songs: [song(id: 1, title: "May", playCount: 14)],
+            at: date(year: 2026, month: 5, day: 3),
+            reason: .foreground
+        )
+
+        let julySource = makeStore(named: "archive-merge-july-source")
+        _ = julySource.record(
+            songs: [song(id: 2, title: "July", playCount: 20)],
+            at: date(year: 2026, month: 7, day: 1),
+            reason: .foreground
+        )
+        let july = julySource.record(
+            songs: [song(id: 2, title: "July", playCount: 25)],
+            at: date(year: 2026, month: 7, day: 3),
+            reason: .foreground
+        )
+        _ = mixed.record(
+            songs: [song(id: 3, title: "August", playCount: 30)],
+            at: date(year: 2026, month: 8, day: 1),
+            reason: .foreground
+        )
+        _ = mixed.record(
+            songs: [song(id: 3, title: "August", playCount: 36)],
+            at: date(year: 2026, month: 8, day: 3),
+            reason: .foreground
+        )
+        mixed.debugInstallSyncedRecapCandidates([(july, 2)])
+
+        func archive(from store: MonthlyRecapSnapshotStore) throws -> CloudKitRecapSyncClient.ManifestArchive {
+            let payload = try XCTUnwrap(store.syncPayloads().first { $0.encodedRecaps != nil })
+            return CloudKitRecapSyncClient.ManifestArchive(
+                capturedAt: payload.capturedAt,
+                reliabilityPolicyVersion: payload.archiveReliabilityPolicyVersion ?? 0,
+                encodedRecaps: payload.encodedRecaps,
+                encodedYearlyRecaps: payload.encodedYearlyRecaps,
+                encodedUnattributedIntervals: payload.encodedUnattributedIntervals
+            )
+        }
+
+        let merged = try XCTUnwrap(CloudKitRecapSyncClient.preferredManifestArchive(
+            existing: archive(from: older),
+            local: archive(from: mixed)
+        ))
+        XCTAssertEqual(merged.reliabilityPolicyVersion, 2)
+        XCTAssertTrue(target.mergeSyncPayloads(
+            CloudKitRecapSyncClient.applyingManifestArchive(merged, to: []),
+            now: date(year: 2026, month: 8, day: 4)
+        ))
+        XCTAssertEqual(target.recap(forMonthContaining: date(year: 2026, month: 5, day: 3)).totalPlayDelta, 4)
+        XCTAssertEqual(target.recap(forMonthContaining: date(year: 2026, month: 7, day: 3)).totalPlayDelta, 5)
+        XCTAssertEqual(target.recap(forMonthContaining: date(year: 2026, month: 8, day: 3)).totalPlayDelta, 6)
+    }
+
+    func testMissingManifestRecordErrorsAreRecoverableButNetworkErrorsAreNot() {
+        let recordID = CKRecord.ID(
+            recordName: "missing",
+            zoneID: CKRecordZone.ID(zoneName: "test-zone", ownerName: CKCurrentUserDefaultName)
+        )
+        let partialMissing = CKError(
+            .partialFailure,
+            userInfo: [CKPartialErrorsByItemIDKey: [recordID: CKError(.unknownItem)]]
+        )
+        XCTAssertTrue(CloudKitRecapSyncClient.isOnlyMissingRecordError(partialMissing))
+        XCTAssertFalse(CloudKitRecapSyncClient.isOnlyMissingRecordError(CKError(.networkFailure)))
+    }
+
+    func testMalformedManifestPayloadIDsFailClosedInsteadOfBecomingEmpty() {
+        XCTAssertThrowsError(
+            try CloudKitRecapSyncClient.decodedManifestPayloadIDs(Data("not-json".utf8))
+        )
+        XCTAssertThrowsError(
+            try CloudKitRecapSyncClient.decodedManifestPayloadIDs(Data("{\"payloadIDs\":[]}".utf8))
+        )
+        XCTAssertEqual(
+            try CloudKitRecapSyncClient.decodedManifestPayloadIDs(Data("[]".utf8)),
+            []
+        )
+    }
+
+    func testMalformedManifestArchiveEvidenceIsRejectedWithoutStrippingPayloadCopies() {
+        XCTAssertFalse(MonthlyRecapSnapshotStore.isValidArchiveEvidence(
+            encodedRecaps: Data("corrupt".utf8),
+            encodedYearlyRecaps: nil,
+            encodedUnattributedIntervals: nil
+        ))
+        let payloadWithValidCopy = RecapSnapshotSyncPayload(
+            id: "payload",
+            capturedAt: date(year: 2026, month: 8, day: 20),
+            counterSignature: "payload",
+            reliabilityPolicyVersion: 3,
+            encodedSnapshot: Data("snapshot".utf8),
+            encodedRecaps: Data("valid-copy-placeholder".utf8)
+        )
+        XCTAssertEqual(
+            CloudKitRecapSyncClient.applyingManifestArchive(nil, to: [payloadWithValidCopy]),
+            [payloadWithValidCopy]
+        )
+        XCTAssertFalse(MonthlyRecapSnapshotStore.isValidMonthlyArchiveEvidence(Data("corrupt".utf8)))
+        XCTAssertTrue(MonthlyRecapSnapshotStore.isValidYearlyArchiveEvidence(nil))
+        XCTAssertTrue(MonthlyRecapSnapshotStore.isValidUnattributedArchiveEvidence(nil))
+    }
+
+    func testYearOnlyArchiveSurvivesMergeWithoutMonthlyLedgers() throws {
+        let source = makeStore(named: "year-only-source")
+        let target = makeStore(named: "year-only-target")
+        _ = source.record(
+            songs: [song(id: 1, title: "Year", playCount: 10)],
+            at: date(year: 2025, month: 5, day: 1),
+            reason: .foreground
+        )
+        _ = source.record(
+            songs: [song(id: 1, title: "Year", playCount: 14)],
+            at: date(year: 2025, month: 5, day: 3),
+            reason: .foreground
+        )
+        let sourcePayload = try XCTUnwrap(source.syncPayloads().first { $0.encodedYearlyRecaps != nil })
+        let yearOnly = RecapSnapshotSyncPayload(
+            id: RecapSnapshotSyncPayload.manifestArchiveOnlyID,
+            capturedAt: sourcePayload.capturedAt,
+            counterSignature: "",
+            reliabilityPolicyVersion: 3,
+            archiveReliabilityPolicyVersion: 3,
+            encodedSnapshot: Data(),
+            encodedYearlyRecaps: sourcePayload.encodedYearlyRecaps
+        )
+
+        XCTAssertTrue(target.mergeSyncPayloads([yearOnly], now: date(year: 2026, month: 8, day: 1)))
+        XCTAssertEqual(target.syncedYearlyRecap(for: 2025)?.totalPlayDelta, 4)
+
+        _ = target.record(
+            songs: [song(id: 2, title: "Current", playCount: 20)],
+            at: date(year: 2025, month: 8, day: 2),
+            reason: .foreground
+        )
+        XCTAssertEqual(target.syncedYearlyRecap(for: 2025)?.totalPlayDelta, 4)
     }
 
     func testCurrentManifestPayloadIDsReplaceRemoteManifestEntries() {
@@ -452,5 +921,36 @@ private actor SyncContinuationGate {
         guard remainingAllowedChecks > 0 else { return false }
         remainingAllowedChecks -= 1
         return true
+    }
+}
+
+private final class FailOncePersistenceReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remainingFailures = 1
+
+    var isAllowed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard remainingFailures > 0 else { return true }
+        remainingFailures -= 1
+        return false
+    }
+}
+
+private final class CloudPersistenceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = true
+
+    var isAllowed: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        set {
+            lock.lock()
+            storage = newValue
+            lock.unlock()
+        }
     }
 }
