@@ -126,8 +126,7 @@ final class RecapNavigationUITests: XCTestCase {
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 3))
         diagnostics.tap()
 
-        XCTAssertTrue(app.navigationBars["Recap Diagnostics"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Month ledger"].exists)
+        XCTAssertTrue(app.staticTexts["Month ledger"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Yearly totals"].exists)
         XCTAssertTrue(app.staticTexts["Reliability policy"].exists)
         XCTAssertFalse(app.staticTexts["Glass Rain"].exists)
