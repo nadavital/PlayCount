@@ -561,6 +561,13 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func refreshForRecapSequence(reason: RecapSnapshotReason) {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            loadScreenshotFixture()
+            return
+        }
+        #endif
+
         guard revalidateAuthorizationStatus() else { return }
 
         switch reason {
