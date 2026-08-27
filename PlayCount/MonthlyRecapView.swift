@@ -349,6 +349,14 @@ struct MonthlyRecapView: View {
         ].joined(separator: "|")
     }
 
+    /// Recap summaries can be restored before MediaPlayer has hydrated the
+    /// matching library items. In that state the recap IDs are stable while
+    /// every resolved artwork is temporarily nil. Include the resolved count
+    /// so the hero and its palette are rebuilt as soon as artwork arrives.
+    private var artworkCacheRefreshSignature: String {
+        "\(artworkHighlightsSignature)|resolved:\(artworkHighlights.count)"
+    }
+
     private var recapBackgroundPalette: RecapBackgroundPalette {
         if let cachedRecapBackgroundPalette {
             return cachedRecapBackgroundPalette
@@ -368,7 +376,7 @@ struct MonthlyRecapView: View {
     }
 
     private func updateCachedArtworkHighlightsIfNeeded() {
-        let signature = artworkHighlightsSignature
+        let signature = artworkCacheRefreshSignature
         guard signature != cachedArtworkHighlightsSignature || cachedRecapBackgroundPalette == nil else { return }
         let highlights = artworkHighlights
         cachedArtworkHighlights = highlights
@@ -592,7 +600,7 @@ struct MonthlyRecapView: View {
                 recapShareButton
             }
         }
-        .task(id: artworkHighlightsSignature) {
+        .task(id: artworkCacheRefreshSignature) {
             updateCachedArtworkHighlightsIfNeeded()
         }
         .onAppear {
