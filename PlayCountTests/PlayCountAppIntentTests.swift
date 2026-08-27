@@ -137,29 +137,6 @@ final class PlayCountAppIntentTests: XCTestCase {
         XCTAssertEqual(counter.value, 1)
     }
 
-    @available(iOS 27.0, *)
-    func testCompilationAlbumUsesResolvableAlbumArtistIdentity() {
-        let song = makeSong(
-            id: 1,
-            title: "Duet",
-            artist: "Guest Artist",
-            albumArtist: "Various Artists"
-        )
-        let album = SiriAIAlbumEntity(song: song)
-        let expectedArtist = SiriAIArtistEntity(persistentID: 0, name: "Various Artists")
-
-        XCTAssertEqual(album.artistName, "Various Artists")
-        XCTAssertEqual(album.artists.map(\.id), [expectedArtist.id])
-    }
-
-    @available(iOS 27.0, *)
-    func testAlbumArtistIdentityIgnoresCaseDifferences() {
-        let song = makeSong(id: 1, title: "Song", artist: "The Artist", albumArtist: "the artist")
-        let album = SiriAIAlbumEntity(song: song)
-
-        XCTAssertEqual(album.artists.map(\.id), [String(song.artistPersistentID)])
-    }
-
     private func makeSong(
         id: UInt64,
         title: String,

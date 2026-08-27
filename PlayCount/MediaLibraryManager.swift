@@ -2431,9 +2431,6 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 self.nowPlayingProgress.reset()
                 if self.nowPlayingState != nil {
                     self.nowPlayingState = nil
-                    if #available(iOS 27.0, *) {
-                        Task { await PlayCountSiriIntegration.updateNowPlayingRelevance(song: nil) }
-                    }
                 }
             }
             stopProgressUpdates()
@@ -2500,9 +2497,6 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
                 return
             }
             self.nowPlayingState = state
-            if #available(iOS 27.0, *) {
-                Task { await PlayCountSiriIntegration.updateNowPlayingRelevance(song: state.song) }
-            }
         }
 
         if playbackState == .playing {

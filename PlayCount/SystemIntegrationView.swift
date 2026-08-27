@@ -32,13 +32,6 @@ struct SystemIntegrationView: View {
                 )
 
                 statusRow(
-                    title: "iOS 27 Entity Support",
-                    detail: intelligenceEntityDetail,
-                    systemImage: "apple.intelligence",
-                    isReady: intelligenceEntitiesAreReady
-                )
-
-                statusRow(
                     title: "Recap Reliability",
                     detail: recapReliabilityDetail,
                     systemImage: manager.recapReliabilityStatus.isUsingLastReliableUpdate
@@ -118,18 +111,6 @@ struct SystemIntegrationView: View {
         case .failed(let message):
             return "Needs attention: \(message)"
         }
-    }
-
-    private var intelligenceEntityDetail: String {
-        if #available(iOS 27.0, *) {
-            return "Audio entities and now-playing relevance are supported"
-        }
-        return "Available after updating to iOS 27"
-    }
-
-    private var intelligenceEntitiesAreReady: Bool {
-        if #available(iOS 27.0, *) { return true }
-        return false
     }
 
     private var recapReliabilityDetail: String {
