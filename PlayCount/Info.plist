@@ -28,6 +28,8 @@
 	<string>public.app-category.music</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>PlayCount requires access to your Apple Music Listening history to present your favorite music</string>
 	<key>UIApplicationSceneManifest</key>
