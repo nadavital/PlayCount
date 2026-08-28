@@ -122,6 +122,7 @@ struct LibrarySearchView: View {
                 message: "Find songs, albums, and artists from one place."
             )
         } else {
+            #if DEBUG
             if selectedDomain == .all {
                 Section("System Integration") {
                     NavigationLink {
@@ -131,6 +132,7 @@ struct LibrarySearchView: View {
                     }
                 }
             }
+            #endif
 
             if selectedDomain == .all || selectedDomain == .songs {
                 Section("Recently Played") {
