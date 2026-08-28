@@ -52,3 +52,12 @@ fastlane/test_output
 
 # macOS
 .DS_Store
+
+# Local visual QA and release artifacts
+AppStoreScreenshots/
+PlayCount App Store Screenshots/
+audit-screenshots/
+design-audit-*/
+IconVariants/
+*.xcresult
+*.xcarchive
