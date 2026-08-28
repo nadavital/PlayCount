@@ -2,6 +2,7 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
+#if DEBUG
 struct SystemIntegrationView: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.openURL) private var openURL
@@ -316,3 +317,4 @@ private struct RecapDiagnosticMonthRow: View {
         .accessibilityElement(children: .combine)
     }
 }
+#endif
