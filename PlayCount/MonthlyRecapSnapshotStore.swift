@@ -3377,7 +3377,7 @@ final class MonthlyRecapSnapshotStore {
         let monthInterval = calendar.recapMonthInterval(containing: current.capturedAt)
         let calculationMonthStart = monthInterval.start
         let monthEnd = monthInterval.end
-        let existing = stored.monthlyLedgers
+        var existing = stored.monthlyLedgers
             .filter { $0.monthStart == monthStart }
             .sorted(by: Self.isHigherPrioritySyncedRecap)
             .first
@@ -3385,11 +3385,63 @@ final class MonthlyRecapSnapshotStore {
             previous?.deviceIdentifier == legacyDeviceIdentifierToBridge &&
             current.deviceIdentifier == deviceIdentifier
 
-        guard let existing,
+        guard existing != nil,
               let previous,
               previous.isSameDevice(as: current) || bridgesLegacyUpgrade,
-              abs(existing.generatedAt.timeIntervalSince(previous.capturedAt)) < 0.001,
               hasComparableCoverage(previous, latest: current) else {
+            _ = updateSyncedRecaps(
+                in: &stored,
+                snapshots: stored.snapshots,
+                affectedMonthStarts: Set([monthStart])
+            )
+            return
+        }
+
+        if let disconnected = existing,
+           abs(disconnected.generatedAt.timeIntervalSince(previous.capturedAt)) >= 0.001 {
+            let disconnectedRecap = disconnected.monthlyRecap(
+                artworkLookup: ArtworkLookup(sourceSongs: [])
+            )
+            let rebuiltRecap = snapshotRecap(for: monthStart, snapshots: stored.snapshots)
+            guard current.capturedAt > disconnected.generatedAt else {
+                _ = updateSyncedRecaps(
+                    in: &stored,
+                    snapshots: stored.snapshots,
+                    affectedMonthStarts: Set([monthStart])
+                )
+                return
+            }
+            guard isHigherPriorityDisplayRecap(disconnectedRecap, than: rebuiltRecap) else {
+                _ = updateSyncedRecaps(
+                    in: &stored,
+                    snapshots: stored.snapshots,
+                    affectedMonthStarts: Set([monthStart])
+                )
+                return
+            }
+
+            // A current-policy Cloud summary can legitimately outrank the raw
+            // snapshots on this device while still being disconnected from their
+            // capture chain. Rebuilding and merging repeats that same winner on
+            // every refresh, leaving the recap frozen forever. Preserve the
+            // durable total, but reconnect it only to a trustworthy comparable
+            // local observation. If that observation follows the archive, its
+            // next interval is safe to count; otherwise establish a fresh anchor
+            // and wait for the next proven delta rather than risking overlap.
+            if previous.capturedAt > disconnected.generatedAt,
+               monthInterval.contains(previous.capturedAt) {
+                rebaseMonthlyLedger(in: &stored, current: previous, rebuildYearly: false)
+                existing = stored.monthlyLedgers
+                    .filter { $0.monthStart == monthStart }
+                    .sorted(by: Self.isHigherPrioritySyncedRecap)
+                    .first
+            } else {
+                rebaseMonthlyLedger(in: &stored, current: current, rebuildYearly: rebuildYearly)
+                return
+            }
+        }
+
+        guard let existing else {
             _ = updateSyncedRecaps(
                 in: &stored,
                 snapshots: stored.snapshots,
@@ -3714,7 +3766,8 @@ final class MonthlyRecapSnapshotStore {
     /// deltas.
     private func rebaseMonthlyLedger(
         in stored: inout StoredSnapshots,
-        current: LibrarySnapshot
+        current: LibrarySnapshot,
+        rebuildYearly: Bool = true
     ) {
         let monthStart = calendar.startOfMonth(containing: current.capturedAt)
         guard let existing = stored.monthlyLedgers
@@ -3735,12 +3788,14 @@ final class MonthlyRecapSnapshotStore {
         stored.syncedRecaps.removeAll { $0.monthStart == monthStart }
         stored.syncedRecaps.append(ledger.compacted())
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
-        stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
-            stored.syncedYearlyRecaps + yearlyRecaps(
-                from: stored.monthlyLedgers,
-                unattributedIntervals: stored.unattributedIntervals
+        if rebuildYearly {
+            stored.syncedYearlyRecaps = Self.mergedSyncedYearlyRecaps(
+                stored.syncedYearlyRecaps + yearlyRecaps(
+                    from: stored.monthlyLedgers,
+                    unattributedIntervals: stored.unattributedIntervals
+                )
             )
-        )
+        }
     }
 
     private func unattributedInterval(
