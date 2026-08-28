@@ -2032,6 +2032,49 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 375)
     }
 
+    func testDisconnectedLedgerDoesNotOverrideStrongerRawReconstruction() {
+        let target = makeStore(named: "stronger-raw-reconstruction")
+        let staleSource = makeStore(named: "lower-disconnected-ledger")
+        let baseline = date(year: 2026, month: 8, day: 1)
+        let staleCapture = date(year: 2026, month: 8, day: 2)
+        let trustedCapture = date(year: 2026, month: 8, day: 3)
+        let latestCapture = date(year: 2026, month: 8, day: 4)
+
+        _ = staleSource.record(
+            songs: [song(id: 1, title: "Reconstructed", playCount: 100)],
+            at: baseline,
+            reason: .appLaunch
+        )
+        let stale = staleSource.record(
+            songs: [song(id: 1, title: "Reconstructed", playCount: 101)],
+            at: staleCapture,
+            reason: .foreground
+        )
+
+        _ = target.record(
+            songs: [song(id: 1, title: "Reconstructed", playCount: 100)],
+            at: baseline,
+            reason: .appLaunch
+        )
+        _ = target.record(
+            songs: [song(id: 1, title: "Reconstructed", playCount: 105)],
+            at: trustedCapture,
+            reason: .foreground
+        )
+        target.debugInstallSyncedRecapCandidates([
+            (recap: stale, reliabilityPolicyVersion: 3)
+        ])
+
+        let rebuilt = target.record(
+            songs: [song(id: 1, title: "Reconstructed", playCount: 106)],
+            at: latestCapture,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(rebuilt.totalPlayDelta, 6)
+        XCTAssertEqual(rebuilt.topSongs.first?.playDelta, 6)
+    }
+
     func testMonthIdentityMigrationCollapsesTimezoneVariantsWithoutSummingThem() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlayCountMonthIdentityRepair-\(UUID().uuidString)", isDirectory: true)
