@@ -9,6 +9,10 @@ struct TopSongsView: View {
 
     var body: some View {
         List {
+            if let categorySelection {
+                LibraryCategoryPickerRow(selection: categorySelection)
+            }
+
             if songs.isEmpty {
                 if !hasLoadedInitialSnapshot {
                     LoadingListSection(title: manager.loadingStage.message ?? "Loading your top songs…")
@@ -64,14 +68,6 @@ struct TopSongsView: View {
         }
         .listStyle(.insetGrouped)
         .scrollIndicators(.hidden)
-        .playCountSoftTopScrollEdge()
-        .safeAreaBar(edge: .top, spacing: 0) {
-            if let categorySelection {
-                LibraryCategoryPicker(selection: categorySelection)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-            }
-        }
         .refreshable {
             manager.refreshTopItems()
         }

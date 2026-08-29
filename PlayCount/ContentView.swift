@@ -170,7 +170,6 @@ private struct AuthorizedLibraryView: View {
                 }
             }
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
         .modifier(
             NowPlayingAccessoryModifier(
                 manager: manager,
@@ -325,7 +324,19 @@ struct LibraryCategoryPicker: View {
         .pickerStyle(.segmented)
         .frame(maxWidth: .infinity)
         .frame(height: 32)
+        .accessibilityIdentifier("library-category-picker")
         .accessibilityHint("Switches the library ranking")
+    }
+}
+
+struct LibraryCategoryPickerRow: View {
+    @Binding var selection: LibraryCategory
+
+    var body: some View {
+        LibraryCategoryPicker(selection: $selection)
+            .listRowInsets(.init(top: 8, leading: 16, bottom: 4, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 }
 
