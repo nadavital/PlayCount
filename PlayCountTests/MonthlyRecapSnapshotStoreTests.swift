@@ -254,7 +254,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             deviceIdentifier: "migration-save-retry"
         )
         XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 8)
-        XCTAssertEqual(relaunched.debugYearlyReliabilityPolicyVersion(for: 2026), 3)
+        XCTAssertEqual(relaunched.debugYearlyReliabilityPolicyVersion(for: 2026), 4)
     }
 
     func testIncompleteSQLiteMigrationRetriesSurvivingLegacyArchiveOnRelaunch() throws {
@@ -1498,7 +1498,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
         XCTAssertEqual(report.months.reduce(0) { $0 + $1.totalPlayDelta }, yearly.totalPlayDelta)
         XCTAssertEqual(report.months.first { Calendar.current.component(.month, from: $0.monthStart) == 6 }?.totalPlayDelta, 3)
-        XCTAssertTrue(report.months.allSatisfy { $0.reliabilityPolicyVersion == 3 })
+        XCTAssertTrue(report.months.allSatisfy { $0.reliabilityPolicyVersion == 4 })
         XCTAssertTrue(report.months.contains { $0.sourceDescription.hasSuffix(" local snapshots") })
         XCTAssertFalse(report.exportText.contains("Private May Song"))
         XCTAssertFalse(report.exportText.contains("Private Artist"))
@@ -1510,7 +1510,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
 
         let report = store.recapDiagnosticsReport(at: date(year: 2026, month: 8, day: 25))
 
-        XCTAssertEqual(report.reliabilityPolicyVersion, 3)
+        XCTAssertEqual(report.reliabilityPolicyVersion, 4)
         XCTAssertTrue(report.hasCanonicalMonthLedger)
         XCTAssertTrue(report.yearlyTotalsMatchMonthlyLedgers)
         XCTAssertTrue(report.months.isEmpty)
@@ -1773,7 +1773,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         ])
 
         XCTAssertEqual(store.recap(forMonthContaining: latestDate).totalPlayDelta, 2)
-        XCTAssertTrue(store.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 3 })
+        XCTAssertTrue(store.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 4 })
     }
 
     func testSparseCurrentPolicyCloudSummaryCannotReplaceDurableLegacyAccumulator() {
@@ -2062,7 +2062,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             reason: .foreground
         )
         target.debugInstallSyncedRecapCandidates([
-            (recap: stale, reliabilityPolicyVersion: 3)
+            (recap: stale, reliabilityPolicyVersion: 4)
         ])
 
         let rebuilt = target.record(
@@ -2142,7 +2142,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.totalPlayDelta, 90)
         XCTAssertEqual(presentation.monthlyRecaps.count, 1)
         XCTAssertEqual(presentation.availableMonthStarts.count, 1)
-        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 3 })
+        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 4 })
     }
 
     func testCounterReliabilityMigrationKeepsPersistedMonthAcrossTimezoneBoundary() {
@@ -3257,6 +3257,167 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(recap.generatedAt, latest)
     }
 
+    func testDeletedAndReaddedSongPreservesBiggestGainerAcrossPersistentIDReplacement() {
+        let store = makeStore(named: "readded-gainer-new-id")
+        let baselineDate = date(year: 2026, month: 7, day: 1, hour: 8)
+        let deleted = date(year: 2026, month: 7, day: 2, hour: 10)
+        let readded = date(year: 2026, month: 7, day: 2, hour: 12)
+        let originalDateAdded = date(year: 2026, month: 5, day: 1)
+
+        _ = store.record(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Readded Climber",
+                    playCount: 100,
+                    dateAdded: originalDateAdded,
+                    playbackStoreID: "catalog-climber"
+                ),
+                song(id: 99, title: "Stable Leader", playCount: 200)
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        _ = store.record(
+            songs: [song(id: 99, title: "Stable Leader", playCount: 200)],
+            at: deleted,
+            reason: .libraryChanged
+        )
+        let recap = store.record(
+            songs: [
+                song(
+                    id: 2,
+                    title: "Readded Climber",
+                    playCount: 250,
+                    dateAdded: deleted,
+                    playbackStoreID: "catalog-climber"
+                ),
+                song(id: 99, title: "Stable Leader", playCount: 200)
+            ],
+            at: readded,
+            reason: .appLaunch
+        )
+
+        XCTAssertEqual(recap.topSongs.first?.title, "Readded Climber")
+        XCTAssertEqual(recap.biggestGainers.first?.title, "Readded Climber")
+        XCTAssertEqual(recap.biggestGainers.first?.previousRank, 2)
+        XCTAssertEqual(recap.biggestGainers.first?.currentRank, 1)
+    }
+
+    func testBiggestGainerUsesSameRecencyTieBreakerAsLibraryRanking() {
+        let store = makeStore(named: "gainer-library-tie-breaker")
+        let baselineDate = date(year: 2026, month: 8, day: 1, hour: 8)
+        let latestDate = date(year: 2026, month: 8, day: 2, hour: 8)
+
+        _ = store.record(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Alphabetical Leader",
+                    playCount: 10,
+                    lastPlayedDate: baselineDate.addingTimeInterval(-3_600)
+                ),
+                song(
+                    id: 2,
+                    title: "Recently Played Climber",
+                    playCount: 9,
+                    lastPlayedDate: baselineDate.addingTimeInterval(-7_200)
+                )
+            ],
+            at: baselineDate,
+            reason: .manualRefresh
+        )
+        let recap = store.record(
+            songs: [
+                song(
+                    id: 1,
+                    title: "Alphabetical Leader",
+                    playCount: 10,
+                    lastPlayedDate: baselineDate.addingTimeInterval(-3_600)
+                ),
+                song(
+                    id: 2,
+                    title: "Recently Played Climber",
+                    playCount: 10,
+                    lastPlayedDate: latestDate
+                )
+            ],
+            at: latestDate,
+            reason: .foreground
+        )
+
+        XCTAssertEqual(recap.topSongs.first?.title, "Recently Played Climber")
+        XCTAssertEqual(recap.biggestGainers.first?.title, "Recently Played Climber")
+        XCTAssertEqual(recap.biggestGainers.first?.previousRank, 2)
+        XCTAssertEqual(recap.biggestGainers.first?.currentRank, 1)
+    }
+
+    func testMovementPolicyMigrationRepairsHistoricalMissingGainerAfterRawSnapshotsCompact() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlayCountMovementRepair-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let calendar = Calendar(identifier: .gregorian)
+        let store = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "movement-repair"
+        )
+        let augustBaseline = date(year: 2026, month: 8, day: 1, hour: 8)
+        let augustLatest = date(year: 2026, month: 8, day: 2, hour: 8)
+        let septemberCapture = date(year: 2026, month: 9, day: 1, hour: 8)
+        let baselineSongs = [
+            song(id: 1, title: "Alphabetical Leader", playCount: 10, lastPlayedDate: augustBaseline),
+            song(
+                id: 2,
+                title: "Recently Played Climber",
+                playCount: 9,
+                lastPlayedDate: augustBaseline.addingTimeInterval(-3_600)
+            )
+        ]
+        let latestSongs = [
+            song(id: 1, title: "Alphabetical Leader", playCount: 10, lastPlayedDate: augustBaseline),
+            song(id: 2, title: "Recently Played Climber", playCount: 10, lastPlayedDate: augustLatest)
+        ]
+
+        _ = store.record(songs: baselineSongs, at: augustBaseline, reason: .manualRefresh)
+        let accurateAugust = store.record(songs: latestSongs, at: augustLatest, reason: .foreground)
+        XCTAssertEqual(accurateAugust.biggestGainers.first?.title, "Recently Played Climber")
+        _ = store.record(songs: latestSongs, at: septemberCapture, reason: .appLaunch)
+
+        let staleAugust = MonthlyRecap(
+            monthStart: accurateAugust.monthStart,
+            generatedAt: accurateAugust.generatedAt,
+            lastCaptureReason: accurateAugust.lastCaptureReason,
+            trackingStart: accurateAugust.trackingStart,
+            snapshotCount: accurateAugust.snapshotCount,
+            totalPlayDelta: accurateAugust.totalPlayDelta,
+            totalSkipDelta: accurateAugust.totalSkipDelta,
+            totalListeningDuration: accurateAugust.totalListeningDuration,
+            playedSongCount: accurateAugust.playedSongCount,
+            listenedArtistCount: accurateAugust.listenedArtistCount,
+            newSongCount: accurateAugust.newSongCount,
+            topSongs: accurateAugust.topSongs,
+            topArtists: accurateAugust.topArtists,
+            topAlbums: accurateAugust.topAlbums,
+            biggestGainers: [],
+            biggestAlbumGainers: accurateAugust.biggestAlbumGainers,
+            biggestArtistGainers: accurateAugust.biggestArtistGainers,
+            topNewSongs: accurateAugust.topNewSongs
+        )
+        store.debugInstallPreCounterReliabilityPolicyRecap(staleAugust)
+
+        let relaunched = MonthlyRecapSnapshotStore(
+            directoryURL: directory,
+            calendar: calendar,
+            deviceIdentifier: "movement-repair"
+        )
+        let repairedAugust = relaunched.recap(forMonthContaining: augustLatest)
+
+        XCTAssertEqual(repairedAugust.totalPlayDelta, staleAugust.totalPlayDelta)
+        XCTAssertEqual(repairedAugust.biggestGainers.first?.title, "Recently Played Climber")
+        XCTAssertEqual(relaunched.syncedYearlyRecap(for: 2026)?.biggestGainers.first?.title, "Recently Played Climber")
+    }
+
     func testSamePersistentIDCounterResetStartsANewEpochWhenDateAddedAdvances() {
         let store = makeStore(named: "readded-same-id")
         let baselineDate = date(year: 2026, month: 6, day: 29)
@@ -4042,6 +4203,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         albumTitle: String = "Album",
         playCount: Int,
         dateAdded: Date? = nil,
+        lastPlayedDate: Date? = nil,
         albumPersistentID: UInt64 = 10,
         artistPersistentID: UInt64 = 20,
         playbackStoreID: String = ""
@@ -4056,7 +4218,7 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
             skipCount: 0,
             totalPlayDuration: TimeInterval(playCount * 180),
             playbackDuration: 180,
-            lastPlayedDate: nil,
+            lastPlayedDate: lastPlayedDate,
             dateAdded: dateAdded,
             artwork: nil,
             albumPersistentID: albumPersistentID,

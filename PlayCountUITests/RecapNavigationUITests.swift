@@ -136,6 +136,11 @@ final class RecapNavigationUITests: XCTestCase {
             categoryPicker.frame.minY + 1,
             "The Library category picker must not cover the navigation title"
         )
+        XCTAssertLessThanOrEqual(
+            categoryPicker.frame.minY - navigationBar.frame.maxY,
+            32,
+            "The Library category picker must not leave an excessive gap below the navigation title"
+        )
 
         let initialAccessoryFrame = nowPlayingAccessory.frame
         let initialTabBarFrame = tabBar.frame
@@ -156,6 +161,7 @@ final class RecapNavigationUITests: XCTestCase {
 
         XCTAssertTrue(categoryPicker.waitForExistence(timeout: 3))
         XCTAssertLessThanOrEqual(navigationBar.frame.maxY, categoryPicker.frame.minY + 1)
+        XCTAssertLessThanOrEqual(categoryPicker.frame.minY - navigationBar.frame.maxY, 32)
     }
 
     func testRecapDiagnosticsExposeAggregateIntegrityWithoutMediaNames() throws {

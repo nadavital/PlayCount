@@ -260,6 +260,35 @@ struct MonthlyRecap: Equatable, @unchecked Sendable {
         )
     }
 
+    fileprivate func replacingMovementEvidence(
+        biggestGainers: [MovementSong],
+        biggestAlbumGainers: [MovementGroup]? = nil,
+        biggestArtistGainers: [MovementGroup]? = nil
+    ) -> MonthlyRecap {
+        MonthlyRecap(
+            monthStart: monthStart,
+            generatedAt: generatedAt,
+            lastCaptureReason: lastCaptureReason,
+            trackingStart: trackingStart,
+            snapshotCount: snapshotCount,
+            totalPlayDelta: totalPlayDelta,
+            totalSkipDelta: totalSkipDelta,
+            totalListeningDuration: totalListeningDuration,
+            playedSongCount: playedSongCount,
+            listenedArtistCount: listenedArtistCount,
+            newSongCount: newSongCount,
+            topSongs: topSongs,
+            topArtists: topArtists,
+            topAlbums: topAlbums,
+            biggestGainers: biggestGainers,
+            biggestAlbumGainers: biggestAlbumGainers ?? self.biggestAlbumGainers,
+            biggestArtistGainers: biggestArtistGainers ?? self.biggestArtistGainers,
+            topNewSongs: topNewSongs,
+            unattributedPlayDelta: unattributedPlayDelta,
+            unattributedListeningDuration: unattributedListeningDuration
+        )
+    }
+
     var hasActivity: Bool {
         totalPlayDelta > 0 || newSongCount > 0
     }
@@ -845,8 +874,8 @@ final class MonthlyRecapSnapshotStore {
     fileprivate static let minSyncedSongCount = 100
     private static let currentGapPolicyVersion = 1
     // Version 3 makes the CAS-protected Cloud manifest authoritative for recap
-    // summaries. That lets corrected lower totals outrank stale v2 archives.
-    fileprivate static let currentCounterReliabilityPolicyVersion = 3
+    // summaries. Version 4 also repairs movement rankings when retained evidence proves them.
+    fileprivate static let currentCounterReliabilityPolicyVersion = 4
     fileprivate static let maxPrioritySyncedSongCount = 120
     fileprivate static let maxSyncedRecapRankedSongCount = 250
     fileprivate static let maxSyncedRecapRankedGroupCount = 100
@@ -5296,15 +5325,17 @@ final class MonthlyRecapSnapshotStore {
         latest: LibrarySnapshot,
         artworkLookup: ArtworkLookup
     ) -> [MonthlyRecap.MovementSong] {
-        let baselineRanks = rankByPlayCount(for: baseline.songs)
-        let latestRanks = rankByPlayCount(for: latest.songs)
+        let identityResolver = RecordingIdentityResolver(snapshots: [baseline, latest])
+        let baselineRanks = rankByPlayCount(for: baseline.songs, identityResolver: identityResolver)
+        let latestRanks = rankByPlayCount(for: latest.songs, identityResolver: identityResolver)
 
         return deltas.compactMap { delta in
-            guard let currentRank = latestRanks[delta.latest.id] else {
+            let identity = identityResolver.identity(for: delta.latest)
+            guard let currentRank = latestRanks[identity] else {
                 return nil
             }
 
-            guard let previousRank = baselineRanks[delta.latest.id] else {
+            guard let previousRank = baselineRanks[identity] else {
                 return nil
             }
             let rankChange = max(0, previousRank - currentRank)
@@ -5336,20 +5367,29 @@ final class MonthlyRecapSnapshotStore {
         .map { $0 }
     }
 
-    private func rankByPlayCount(for songs: [SongSnapshot]) -> [UInt64: Int] {
+    private func rankByPlayCount(
+        for songs: [SongSnapshot],
+        identityResolver: RecordingIdentityResolver
+    ) -> [String: Int] {
         let ranked = songs.sorted {
-            if $0.playCount == $1.playCount {
-                if $0.playbackDuration == $1.playbackDuration {
-                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-                }
-                return $0.playbackDuration > $1.playbackDuration
-            }
-            return $0.playCount > $1.playCount
+            SongPlayCountRanking.ranksHigher(
+                playCount: $0.playCount,
+                totalPlayDuration: TimeInterval($0.playCount) * $0.playbackDuration,
+                lastPlayedDate: $0.lastPlayedDate,
+                thanPlayCount: $1.playCount,
+                totalPlayDuration: TimeInterval($1.playCount) * $1.playbackDuration,
+                lastPlayedDate: $1.lastPlayedDate
+            )
         }
 
-        return Dictionary(uniqueKeysWithValues: ranked.enumerated().map { index, song in
-            (song.id, index + 1)
-        })
+        var ranks: [String: Int] = [:]
+        for (index, song) in ranked.enumerated() {
+            let identity = identityResolver.identity(for: song)
+            if ranks[identity] == nil {
+                ranks[identity] = index + 1
+            }
+        }
+        return ranks
     }
 
     private func movementGroups(
@@ -5657,6 +5697,8 @@ final class MonthlyRecapSnapshotStore {
             }
         }
 
+        repairMovementEvidenceIfPossible(in: &stored, streams: streams)
+
         stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
         stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
         let allMonthlyEvidence = Self.mergedSyncedRecaps(stored.monthlyLedgers + stored.syncedRecaps)
@@ -5672,11 +5714,236 @@ final class MonthlyRecapSnapshotStore {
         return true
     }
 
+    private func repairMovementEvidenceIfPossible(
+        in stored: inout StoredSnapshots,
+        streams: [[LibrarySnapshot]]
+    ) {
+        let retainedSnapshots = streams.flatMap(canonicalSnapshots)
+        let candidates = streams.flatMap { stream -> [MonthlyRecap] in
+            let ordered = canonicalSnapshots(stream)
+            let monthStarts = Set(ordered.map { calendar.startOfMonth(containing: $0.capturedAt) })
+
+            return monthStarts.compactMap { monthStart in
+                let interval = calendar.recapMonthInterval(containing: monthStart)
+                let inMonthCount = ordered.filter { interval.contains($0.capturedAt) }.count
+                let hasPriorBaseline = ordered.contains { $0.capturedAt < interval.start }
+                guard inMonthCount >= 2 || hasPriorBaseline else { return nil }
+                return recapCandidateForDeviceStream(
+                    for: monthStart,
+                    snapshots: stream,
+                    sourceSongs: [],
+                    sourceAlbums: [],
+                    sourceArtists: []
+                ).recap
+            }
+        }
+
+        var repairedCount = 0
+        for ledger in Array(stored.monthlyLedgers) {
+            let existing = ledger.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+            var repairedRecap = existing
+            let matchingCandidates = candidates.filter { candidate in
+                candidate.monthStart == existing.monthStart &&
+                    abs(candidate.generatedAt.timeIntervalSince(existing.generatedAt)) < 0.001 &&
+                    candidate.totalPlayDelta == existing.totalPlayDelta &&
+                    hasMatchingRankingEvidence(existing, candidate)
+            }
+            if let candidate = matchingCandidates.max(by: {
+                movementEvidenceCount(in: $0) < movementEvidenceCount(in: $1)
+            }), movementEvidenceCount(in: candidate) > movementEvidenceCount(in: repairedRecap) {
+                repairedRecap = repairedRecap.replacingMovementEvidence(
+                    biggestGainers: candidate.biggestGainers,
+                    biggestAlbumGainers: candidate.biggestAlbumGainers,
+                    biggestArtistGainers: candidate.biggestArtistGainers
+                )
+            }
+
+            if let retainedLatest = retainedSnapshots.first(where: {
+                    abs($0.capturedAt.timeIntervalSince(existing.generatedAt)) < 0.001 &&
+                        hasMatchingRankingEvidence(existing, $0)
+                }) {
+                let reconstructedSongs = historicalMovementSongs(
+                    in: existing,
+                    latest: retainedLatest
+                )
+                if reconstructedSongs.count > repairedRecap.biggestGainers.count {
+                    repairedRecap = repairedRecap.replacingMovementEvidence(
+                        biggestGainers: reconstructedSongs
+                    )
+                }
+            }
+
+            guard movementEvidenceCount(in: repairedRecap) > movementEvidenceCount(in: existing) else {
+                continue
+            }
+
+            let repairedLedger = Self.normalizedSyncedRecap(
+                SyncedMonthlyRecap(recap: repairedRecap, preservingAllRankings: true),
+                monthStart: ledger.monthStart,
+                reliabilityPolicyVersion: Self.currentCounterReliabilityPolicyVersion,
+                preservingAllRankings: true
+            )
+            stored.monthlyLedgers.removeAll { $0.monthStart == ledger.monthStart }
+            stored.monthlyLedgers.append(repairedLedger)
+            stored.syncedRecaps.removeAll { $0.monthStart == ledger.monthStart }
+            stored.syncedRecaps.append(repairedLedger.compacted())
+            repairedCount += 1
+        }
+
+        if repairedCount > 0 {
+            print("Recap reliability policy recovered movement evidence for \(repairedCount) month(s)")
+        }
+    }
+
+    private func historicalMovementSongs(
+        in recap: MonthlyRecap,
+        latest: LibrarySnapshot
+    ) -> [MonthlyRecap.MovementSong] {
+        // Reconstructing a baseline is only safe when the durable song-level
+        // evidence accounts for every play in the monthly total. Aggregate-only
+        // or removed-song deltas cannot prove historical rank movement.
+        guard recap.topSongs.reduce(0, { $0 + $1.playDelta }) == recap.totalPlayDelta else {
+            return []
+        }
+
+        let monthInterval = calendar.recapMonthInterval(containing: recap.monthStart)
+        let resolver = RecordingIdentityResolver(snapshots: [latest])
+        var latestByIdentity: [String: SongSnapshot] = [:]
+        for song in latest.songs {
+            let identity = resolver.identity(for: song)
+            if latestByIdentity[identity] == nil {
+                latestByIdentity[identity] = song
+            }
+        }
+        let latestRanks = rankByPlayCount(for: latest.songs, identityResolver: resolver)
+        let latestByLegacyIdentity = Dictionary(
+            grouping: latest.songs,
+            by: {
+                legacyRecapRecordingIdentity(
+                    title: $0.title,
+                    artist: $0.artist,
+                    albumTitle: $0.albumTitle
+                )
+            }
+        )
+
+        func resolvedIdentity(for ranked: MonthlyRecap.RankedSong) -> String? {
+            if let identity = ranked.recordingIdentity, latestByIdentity[identity] != nil {
+                return identity
+            }
+            if let playbackStoreID = ranked.playbackStoreID {
+                let identity = "store:\(playbackStoreID)"
+                if latestByIdentity[identity] != nil { return identity }
+            }
+            let legacyIdentity = legacyRecapRecordingIdentity(
+                title: ranked.title,
+                artist: ranked.artist,
+                albumTitle: ranked.albumTitle
+            )
+            guard let matches = latestByLegacyIdentity[legacyIdentity], matches.count == 1,
+                  let match = matches.first else {
+                return nil
+            }
+            return resolver.identity(for: match)
+        }
+
+        var deltasByIdentity: [String: MonthlyRecap.RankedSong] = [:]
+        for ranked in recap.topSongs where ranked.playDelta > 0 {
+            guard let identity = resolvedIdentity(for: ranked) else { continue }
+            deltasByIdentity[identity] = ranked
+        }
+
+        var baselineValues: [String: (song: SongSnapshot, playCount: Int, totalDuration: TimeInterval)] = [:]
+        for song in latest.songs {
+            if let dateAdded = song.dateAdded, monthInterval.contains(dateAdded) {
+                continue
+            }
+            let identity = resolver.identity(for: song)
+            let playDelta = deltasByIdentity[identity]?.playDelta ?? 0
+            guard playDelta <= song.playCount else { continue }
+            let baselinePlayCount = song.playCount - playDelta
+            baselineValues[identity] = (
+                song,
+                baselinePlayCount,
+                TimeInterval(baselinePlayCount) * song.playbackDuration
+            )
+        }
+
+        return deltasByIdentity.compactMap { identity, ranked in
+            guard let latestSong = latestByIdentity[identity],
+                  let baseline = baselineValues[identity],
+                  let currentRank = latestRanks[identity] else {
+                return nil
+            }
+            let definitelyHigherCount = baselineValues.reduce(into: 0) { count, element in
+                guard element.key != identity else { return }
+                let other = element.value
+                if other.playCount > baseline.playCount ||
+                    (other.playCount == baseline.playCount &&
+                        other.totalDuration > baseline.totalDuration) {
+                    count += 1
+                }
+            }
+            let previousRank = definitelyHigherCount + 1
+            let rankChange = previousRank - currentRank
+            guard rankChange > 0 else { return nil }
+
+            return MonthlyRecap.MovementSong(
+                id: latestSong.id,
+                title: latestSong.title,
+                artist: latestSong.artist,
+                playDelta: ranked.playDelta,
+                rankChange: rankChange,
+                currentRank: currentRank,
+                previousRank: previousRank,
+                artwork: nil
+            )
+        }
+        .sorted {
+            if $0.rankChange != $1.rankChange { return $0.rankChange > $1.rankChange }
+            if $0.playDelta != $1.playDelta { return $0.playDelta > $1.playDelta }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+    }
+
+    private func movementEvidenceCount(in recap: MonthlyRecap) -> Int {
+        recap.biggestGainers.count +
+            recap.biggestAlbumGainers.count +
+            recap.biggestArtistGainers.count
+    }
+
     private func hasMatchingRankingEvidence(_ lhs: MonthlyRecap, _ rhs: MonthlyRecap) -> Bool {
         let lhsSongs = Set(lhs.topSongs.map { $0.recordingIdentity ?? "id:\($0.id)" })
         let rhsSongs = Set(rhs.topSongs.map { $0.recordingIdentity ?? "id:\($0.id)" })
         guard !lhsSongs.isEmpty, !rhsSongs.isEmpty else { return false }
         return !lhsSongs.isDisjoint(with: rhsSongs)
+    }
+
+    private func hasMatchingRankingEvidence(_ recap: MonthlyRecap, _ snapshot: LibrarySnapshot) -> Bool {
+        guard !recap.topSongs.isEmpty, !snapshot.songs.isEmpty else { return false }
+        let resolver = RecordingIdentityResolver(snapshots: [snapshot])
+        let snapshotIdentities = Set(snapshot.songs.map(resolver.identity(for:)))
+        return recap.topSongs.contains { ranked in
+            if let recordingIdentity = ranked.recordingIdentity,
+               snapshotIdentities.contains(recordingIdentity) {
+                return true
+            }
+            if let playbackStoreID = ranked.playbackStoreID,
+               snapshotIdentities.contains("store:\(playbackStoreID)") {
+                return true
+            }
+            return snapshot.songs.contains {
+                legacyRecapRecordingIdentity(
+                    title: ranked.title,
+                    artist: ranked.artist,
+                    albumTitle: ranked.albumTitle
+                ) == legacyRecapRecordingIdentity(
+                    title: $0.title,
+                    artist: $0.artist,
+                    albumTitle: $0.albumTitle
+                )
+            }
+        }
     }
 
     private func loadLocked() -> StoredSnapshots {

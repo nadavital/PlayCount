@@ -4,6 +4,25 @@ import Combine
 import AppIntents
 import UIKit
 
+enum SongPlayCountRanking {
+    static func ranksHigher(
+        playCount lhsPlayCount: Int,
+        totalPlayDuration lhsTotalPlayDuration: TimeInterval,
+        lastPlayedDate lhsLastPlayedDate: Date?,
+        thanPlayCount rhsPlayCount: Int,
+        totalPlayDuration rhsTotalPlayDuration: TimeInterval,
+        lastPlayedDate rhsLastPlayedDate: Date?
+    ) -> Bool {
+        if lhsPlayCount != rhsPlayCount {
+            return lhsPlayCount > rhsPlayCount
+        }
+        if lhsTotalPlayDuration != rhsTotalPlayDuration {
+            return lhsTotalPlayDuration > rhsTotalPlayDuration
+        }
+        return (lhsLastPlayedDate ?? .distantPast) > (rhsLastPlayedDate ?? .distantPast)
+    }
+}
+
 struct TopSong: Identifiable {
     let id: UInt64
     let title: String
@@ -2340,13 +2359,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private static func isHigherPlayCountSong(_ lhs: TopSong, _ rhs: TopSong) -> Bool {
-        if lhs.playCount == rhs.playCount {
-            if lhs.totalPlayDuration == rhs.totalPlayDuration {
-                return (lhs.lastPlayedDate ?? .distantPast) > (rhs.lastPlayedDate ?? .distantPast)
-            }
-            return lhs.totalPlayDuration > rhs.totalPlayDuration
-        }
-        return lhs.playCount > rhs.playCount
+        SongPlayCountRanking.ranksHigher(
+            playCount: lhs.playCount,
+            totalPlayDuration: lhs.totalPlayDuration,
+            lastPlayedDate: lhs.lastPlayedDate,
+            thanPlayCount: rhs.playCount,
+            totalPlayDuration: rhs.totalPlayDuration,
+            lastPlayedDate: rhs.lastPlayedDate
+        )
     }
 
     private static func isHigherListenTimeSong(_ lhs: TopSong, _ rhs: TopSong) -> Bool {
