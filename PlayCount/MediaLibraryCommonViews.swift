@@ -190,15 +190,8 @@ struct ArtworkView: View {
     }
 
     var body: some View {
-        Group {
-            if max(size.width, size.height) > 128 {
-                DeferredArtworkImage(artwork: artwork, size: size)
-            } else if let artwork,
-                      let image = ArtworkImageCache.image(for: artwork, size: size) {
-                artworkImage(image)
-            } else {
-                artworkPlaceholder
-            }
+        DeferredArtworkImage(artwork: artwork, size: size) {
+            artworkPlaceholder
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -206,12 +199,6 @@ struct ArtworkView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.05))
         }
-    }
-
-    private func artworkImage(_ image: UIImage) -> some View {
-        Image(uiImage: image)
-            .resizable()
-            .scaledToFill()
     }
 
     private var artworkPlaceholder: some View {
@@ -224,10 +211,21 @@ struct ArtworkView: View {
     }
 }
 
-private struct DeferredArtworkImage: View {
+private struct DeferredArtworkImage<Placeholder: View>: View {
     let artwork: MPMediaItemArtwork?
     let size: CGSize
+    private let placeholder: Placeholder
     @State private var image: UIImage?
+
+    init(
+        artwork: MPMediaItemArtwork?,
+        size: CGSize,
+        @ViewBuilder placeholder: () -> Placeholder
+    ) {
+        self.artwork = artwork
+        self.size = size
+        self.placeholder = placeholder()
+    }
 
     var body: some View {
         Group {
@@ -236,15 +234,10 @@ private struct DeferredArtworkImage: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                ZStack {
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.12))
-                    Image(systemName: "music.note")
-                        .foregroundStyle(.secondary)
-                }
+                placeholder
             }
         }
-        .task(id: artwork.map(ObjectIdentifier.init)) {
+        .task(id: requestID) {
             guard let artwork else {
                 image = nil
                 return
@@ -254,12 +247,19 @@ private struct DeferredArtworkImage: View {
                 return
             }
             image = nil
-            let rendered = await Task.detached(priority: .userInitiated) {
+            let rendered = await Task.detached(priority: .utility) {
                 ArtworkImageCache.image(for: artwork, size: size)
             }.value
             guard !Task.isCancelled else { return }
             image = rendered
         }
+    }
+
+    private var requestID: String {
+        guard let artwork else {
+            return "none-\(Int(size.width))-\(Int(size.height))"
+        }
+        return "\(ObjectIdentifier(artwork))-\(Int(size.width))-\(Int(size.height))"
     }
 }
 
@@ -289,19 +289,12 @@ struct ArtistArtworkView: View {
 
     var body: some View {
         Group {
-            if let artwork,
-               let image = ArtworkImageCache.image(for: artwork, size: renderSize) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                ZStack {
-                    Circle()
-                        .fill(PlayCountBrand.accent.opacity(0.15))
-                    Text(initials)
-                        .font(initials == "🎤" ? .system(size: diameter / 2.2) : .system(size: diameter / 2.2, weight: .semibold))
-                        .foregroundStyle(PlayCountBrand.accent)
+            if artwork != nil {
+                DeferredArtworkImage(artwork: artwork, size: renderSize) {
+                    artworkPlaceholder
                 }
+            } else {
+                artworkPlaceholder
             }
         }
         .frame(width: diameter, height: diameter)
@@ -309,6 +302,16 @@ struct ArtistArtworkView: View {
         .overlay {
             Circle()
                 .strokeBorder(Color.primary.opacity(0.05))
+        }
+    }
+
+    private var artworkPlaceholder: some View {
+        ZStack {
+            Circle()
+                .fill(PlayCountBrand.accent.opacity(0.15))
+            Text(initials)
+                .font(initials == "🎤" ? .system(size: diameter / 2.2) : .system(size: diameter / 2.2, weight: .semibold))
+                .foregroundStyle(PlayCountBrand.accent)
         }
     }
 }
@@ -564,75 +567,41 @@ struct LoadingListSection: View {
     let title: String
 
     var body: some View {
-        Group {
-            Section {
-                HStack(spacing: 10) {
-                    PlayCountLoadingMark(size: 24)
-
-                    Text(title)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
-                .accessibilityElement(children: .combine)
-            }
-
-            Section {
-                ForEach(0..<5, id: \.self) { index in
-                    LoadingMediaRow(index: index)
-                        .accessibilityHidden(true)
-                }
-            }
+        Section {
+            PlayCountLoadingPanel(
+                title: "Getting your library ready",
+                detail: title,
+                markSize: 38
+            )
+            .listRowInsets(.init(top: 34, leading: 20, bottom: 34, trailing: 20))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
         }
     }
 }
 
-private struct LoadingMediaRow: View {
-    let index: Int
+struct PlayCountLoadingPanel: View {
+    let title: String
+    let detail: String
+    var markSize: CGFloat = 42
 
     var body: some View {
-        GeometryReader { proxy in
-            row
-                .frame(width: proxy.size.width, alignment: .leading)
-        }
-        .frame(height: 72)
-    }
+        VStack(spacing: 14) {
+            PlayCountLoadingMark(size: markSize)
 
-    private var row: some View {
-        HStack(spacing: 12) {
-            Circle().fill(.secondary.opacity(0.13)).frame(width: 34, height: 34)
-            loadingArtwork
-            VStack(alignment: .leading, spacing: 7) {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.14))
-                    .frame(width: titleWidth, height: 13)
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(.secondary.opacity(0.1))
-                    .frame(width: subtitleWidth, height: 10)
+            VStack(spacing: 5) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: 64)
-        .padding(.vertical, 4)
-        .redacted(reason: .placeholder)
-    }
-
-    private var loadingArtwork: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        return shape
-            .fill(.secondary.opacity(0.1))
-            .overlay { shape.strokeBorder(PlayCountBrand.burgundy.opacity(0.82), lineWidth: 0.75) }
-            .frame(width: 56, height: 56)
-    }
-
-    private var titleWidth: CGFloat {
-        [152, 188, 132, 174, 145][index % 5]
-    }
-
-    private var subtitleWidth: CGFloat {
-        [96, 124, 108, 88, 116][index % 5]
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 

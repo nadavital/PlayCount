@@ -1285,167 +1285,18 @@ struct MonthlyRecapView: View {
 
 private struct RecapLoadingShell: View {
     let stageMessage: String
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var pausesAnimation: Bool {
-        reduceMotion || ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") ||
-            ProcessInfo.processInfo.environment["PLAYCOUNT_SCREENSHOT_MODE"] == "1"
-    }
 
     var body: some View {
-        PhaseAnimator(pausesAnimation ? [false] : [false, true]) { highlighted in
-            VStack(alignment: .leading, spacing: 16) {
-                periodPlaceholder
-                artworkPlaceholder(highlighted: highlighted)
-                summaryPlaceholder
-                rankingPlaceholder(highlighted: highlighted)
-            }
-        } animation: { _ in
-            .easeInOut(duration: 1.05)
-        }
+        PlayCountLoadingPanel(
+            title: "Building your recap",
+            detail: stageMessage,
+            markSize: 48
+        )
+        .padding(.top, 92)
+        .padding(.bottom, 180)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Recap loading. \(stageMessage)")
         .accessibilityIdentifier("recap-loading-shell")
-    }
-
-    private var periodPlaceholder: some View {
-        HStack(spacing: 8) {
-            loadingCapsule(width: 96)
-            loadingCapsule(width: 54)
-            loadingCapsule(width: 54)
-            loadingCapsule(width: 54)
-            Spacer(minLength: 0)
-        }
-        .frame(height: 34)
-        .accessibilityHidden(true)
-    }
-
-    private func artworkPlaceholder(highlighted: Bool) -> some View {
-        VStack(spacing: 12) {
-            loadingArtworkStack(highlighted: highlighted)
-            Text(stageMessage)
-                .font(.callout.weight(.semibold))
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(maxWidth: .infinity, minHeight: 228)
-        .accessibilityHidden(true)
-    }
-
-    private func loadingArtworkStack(highlighted: Bool) -> some View {
-        ZStack {
-            loadingArtworkTile(
-                size: 174,
-                cornerRadius: 27,
-                colors: highlighted
-                    ? [PlayCountBrand.burgundy, PlayCountBrand.burgundy.opacity(0.88)]
-                    : [PlayCountBrand.burgundy.opacity(0.96), PlayCountBrand.burgundy.opacity(0.84)]
-            )
-            .overlay {
-                PlayCountLoadingMark(size: 54)
-            }
-            .shadow(color: .black.opacity(0.08), radius: 18, y: 10)
-        }
-        .frame(height: 180)
-    }
-
-    @ViewBuilder
-    private func loadingArtworkTile(
-        size: CGFloat,
-        cornerRadius: CGFloat,
-        colors: [Color]
-    ) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
-            shape.fill(
-                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-            if #available(iOS 26.0, *) {
-                Color.clear
-                    .glassEffect(
-                        .clear.tint(PlayCountBrand.burgundy.opacity(0.28)),
-                        in: .rect(cornerRadius: cornerRadius)
-                    )
-            } else {
-                shape
-                    .fill(.ultraThinMaterial)
-                    .overlay { shape.strokeBorder(.white.opacity(0.25), lineWidth: 0.75) }
-            }
-        }
-        .frame(width: size, height: size)
-    }
-
-    private var summaryPlaceholder: some View {
-        HStack(spacing: 0) {
-            loadingMetric(icon: "play.fill", width: 42)
-            Divider().padding(.vertical, 8)
-            loadingMetric(icon: "clock.fill", width: 58)
-            Divider().padding(.vertical, 8)
-            loadingMetric(icon: "music.note", width: 36)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .playCountCardSurface(cornerRadius: 16)
-        .accessibilityHidden(true)
-    }
-
-    private func rankingPlaceholder(highlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(.secondary.opacity(0.16))
-                .frame(width: 104, height: 20)
-
-            RecapSurface {
-                VStack(spacing: 0) {
-                    ForEach(0..<3, id: \.self) { index in
-                        HStack(spacing: 12) {
-                            Text("\(index + 1)")
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(.secondary.opacity(0.55))
-                                .frame(width: 18)
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(.secondary.opacity(highlighted && index == 0 ? 0.18 : 0.11))
-                                .frame(width: 48, height: 48)
-                            VStack(alignment: .leading, spacing: 7) {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(.secondary.opacity(0.14))
-                                    .frame(width: [148, 178, 132][index], height: 12)
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(.secondary.opacity(0.09))
-                                    .frame(width: [92, 118, 104][index], height: 9)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 8)
-
-                        if index < 2 { Divider() }
-                    }
-                }
-            }
-        }
-        .redacted(reason: .placeholder)
-        .accessibilityHidden(true)
-    }
-
-    private func loadingMetric(icon: String, width: CGFloat) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(PlayCountBrand.burgundy)
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(.secondary.opacity(0.14))
-                .frame(width: width, height: 14)
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(.secondary.opacity(0.09))
-                .frame(width: 34, height: 8)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func loadingCapsule(width: CGFloat) -> some View {
-        Capsule()
-            .fill(.secondary.opacity(0.12))
-            .frame(width: width, height: 34)
     }
 }
 

@@ -93,7 +93,7 @@ final class RecapNavigationUITests: XCTestCase {
         ]
         app.launch()
 
-        let recapLoader = app.otherElements["recap-loading-shell"]
+        let recapLoader = app.descendants(matching: .any)["recap-loading-shell"]
         XCTAssertTrue(recapLoader.waitForExistence(timeout: 8))
         XCTAssertTrue(recapLoader.label.contains("Loading library"))
         attach(app, named: "Recap stable loading shell")
@@ -108,6 +108,54 @@ final class RecapNavigationUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Loading library…"].waitForExistence(timeout: 8))
         attach(app, named: "Library branded loading state")
+    }
+
+    func testLibraryHeaderAndBottomChromeRemainStableWhileScrolling() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-PlayCountScreenshotMode",
+            "-PlayCountScreenshotTab", "library"
+        ]
+        app.launch()
+
+        let navigationBar = app.navigationBars["Library"]
+        let categoryPicker = app.descendants(matching: .any)
+            .matching(identifier: "library-category-picker")
+            .firstMatch
+        let nowPlayingAccessory = app.buttons
+            .matching(identifier: "now-playing-accessory")
+            .firstMatch
+        let tabBar = app.tabBars.firstMatch
+
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 8))
+        XCTAssertTrue(categoryPicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(nowPlayingAccessory.waitForExistence(timeout: 3))
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(
+            navigationBar.frame.maxY,
+            categoryPicker.frame.minY + 1,
+            "The Library category picker must not cover the navigation title"
+        )
+
+        let initialAccessoryFrame = nowPlayingAccessory.frame
+        let initialTabBarFrame = tabBar.frame
+        attach(app, named: "Library header before scrolling")
+
+        app.swipeUp()
+        app.swipeUp()
+        waitForAnimationsToSettle()
+
+        XCTAssertTrue(navigationBar.exists)
+        assertFrame(nowPlayingAccessory.frame, remainsAt: initialAccessoryFrame, name: "Now Playing accessory")
+        assertFrame(tabBar.frame, remainsAt: initialTabBarFrame, name: "Tab bar")
+        attach(app, named: "Library chrome after scrolling")
+
+        app.swipeDown()
+        app.swipeDown()
+        waitForAnimationsToSettle()
+
+        XCTAssertTrue(categoryPicker.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(navigationBar.frame.maxY, categoryPicker.frame.minY + 1)
     }
 
     func testRecapDiagnosticsExposeAggregateIntegrityWithoutMediaNames() throws {
