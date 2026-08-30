@@ -2345,8 +2345,8 @@ final class MonthlyRecapSnapshotStoreTests: XCTestCase {
         )
         XCTAssertEqual(relaunched.recap(forMonthContaining: latest).totalPlayDelta, 1_023)
         XCTAssertEqual(relaunched.recap(forMonthContaining: latest).snapshotCount, 11)
-        XCTAssertEqual(relaunched.debugYearlyReliabilityPolicyVersion(for: 2026), 3)
-        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 3 })
+        XCTAssertEqual(relaunched.debugYearlyReliabilityPolicyVersion(for: 2026), 4)
+        XCTAssertTrue(relaunched.localSyncPayloads().allSatisfy { $0.reliabilityPolicyVersion == 4 })
     }
 
     func testCounterReliabilityMigrationPreservesHistoricalRecapWhenStaleDeviceHasOnlyBaseline() {
