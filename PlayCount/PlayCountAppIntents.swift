@@ -239,8 +239,6 @@ struct ArtistEntity: IndexedEntity {
 }
 
 struct SongEntityQuery: EntityStringQuery, EnumerableEntityQuery {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     private let library = PlayCountIntentLibrary()
 
     func entities(for identifiers: [SongEntity.ID]) async throws -> [SongEntity] {
@@ -267,8 +265,6 @@ struct SongEntityQuery: EntityStringQuery, EnumerableEntityQuery {
 }
 
 struct AlbumEntityQuery: EntityStringQuery, EnumerableEntityQuery {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     private let library = PlayCountIntentLibrary()
 
     func entities(for identifiers: [AlbumEntity.ID]) async throws -> [AlbumEntity] {
@@ -294,8 +290,6 @@ struct AlbumEntityQuery: EntityStringQuery, EnumerableEntityQuery {
 }
 
 struct ArtistEntityQuery: EntityStringQuery, EnumerableEntityQuery {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     private let library = PlayCountIntentLibrary()
 
     func entities(for identifiers: [ArtistEntity.ID]) async throws -> [ArtistEntity] {
@@ -394,8 +388,6 @@ enum PlayCountIntentRanking {
 }
 
 struct TopSongsIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Top Songs"
     static let description = IntentDescription("Gets your highest-ranked songs from your media library.", categoryName: "Listening Stats")
 
@@ -418,8 +410,6 @@ struct TopSongsIntent: AppIntent {
 }
 
 struct TopAlbumsIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Top Albums"
     static let description = IntentDescription("Gets your highest-ranked albums from your media library.", categoryName: "Listening Stats")
 
@@ -448,8 +438,6 @@ struct TopAlbumsIntent: AppIntent {
 }
 
 struct TopArtistsIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Top Artists"
     static let description = IntentDescription("Gets your highest-ranked artists from your media library.", categoryName: "Listening Stats")
 
@@ -478,8 +466,6 @@ struct TopArtistsIntent: AppIntent {
 }
 
 struct SongPlayCountIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Song Play Count"
     static let description = IntentDescription("Gets the number of times you have played a song.", categoryName: "Listening Stats")
 
@@ -497,8 +483,6 @@ struct SongPlayCountIntent: AppIntent {
 }
 
 struct CurrentSongStatsIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Current Song Stats"
     static let description = IntentDescription("Gets listening statistics for the song currently playing.", categoryName: "Listening Stats")
 
@@ -509,8 +493,6 @@ struct CurrentSongStatsIntent: AppIntent {
 }
 
 struct LatestRecapIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Latest Recap"
     static let description = IntentDescription("Summarizes your latest PlayCount listening recap.", categoryName: "Recaps")
 
@@ -533,8 +515,6 @@ struct LatestRecapIntent: AppIntent {
 }
 
 struct BiggestGainerIntent: AppIntent {
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     static let title: LocalizedStringResource = "Get Biggest Gainer"
     static let description = IntentDescription("Gets the song that climbed the most in your latest recap.", categoryName: "Recaps")
 
@@ -584,9 +564,6 @@ struct TopSongsThisMonthIntent: AppIntent {
 
     static var parameterSummary: some ParameterSummary { Summary("Get the top \(\.$limit) songs this month") }
 
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
-
     func perform() async throws -> some IntentResult & ReturnsValue<[String]> & ProvidesDialog {
         try PlayCountIntentAuthorization.requireMediaLibraryAccess()
         let recaps = await manager.storedRecapsForIntents()
@@ -607,9 +584,6 @@ struct TopArtistThisYearIntent: AppIntent {
 
     @Dependency private var manager: MediaLibraryManager
 
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
-
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         try PlayCountIntentAuthorization.requireMediaLibraryAccess()
         let year = Calendar.current.component(.year, from: Date())
@@ -629,9 +603,6 @@ struct OpenLatestRecapIntent: AppIntent {
     static let openAppWhenRun = true
 
     @Dependency private var manager: MediaLibraryManager
-
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     func perform() async throws -> some IntentResult {
         try PlayCountIntentAuthorization.requireMediaLibraryAccess()
