@@ -1,8 +1,4 @@
 {
-  "features" : [
-    "refractivity",
-    "specular-location"
-  ],
   "fill" : "system-light",
   "groups" : [
     {
@@ -44,7 +40,6 @@
         "kind" : "neutral",
         "opacity" : 0.26
       },
-      "specular" : "outside",
       "translucency" : {
         "enabled" : false,
         "value" : 0
@@ -85,11 +80,6 @@
         }
       ],
       "name" : "02_copper_glass_cutout",
-      "refractivity" : {
-        "depth" : 0.7831640625,
-        "enabled" : true,
-        "strength" : 0.9583984375
-      },
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.6
@@ -135,16 +125,10 @@
       ],
       "lighting" : "combined",
       "name" : "02_glass_outer_medal",
-      "refractivity" : {
-        "depth" : 0.15,
-        "enabled" : true,
-        "strength" : 0.34
-      },
       "shadow" : {
         "kind" : "layer-color",
         "opacity" : 0.32
       },
-      "specular" : "inside",
       "translucency" : {
         "enabled" : true,
         "value" : 0.24
@@ -216,16 +200,10 @@
       ],
       "lighting" : "combined",
       "name" : "00_striped_ribbons",
-      "refractivity" : {
-        "depth" : 0.08,
-        "enabled" : true,
-        "strength" : 0.16
-      },
       "shadow" : {
         "kind" : "layer-color",
         "opacity" : 0.42
       },
-      "specular" : "inside",
       "translucency" : {
         "enabled" : true,
         "value" : 0.12
