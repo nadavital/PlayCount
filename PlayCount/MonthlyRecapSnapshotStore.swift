@@ -1663,8 +1663,8 @@ final class MonthlyRecapSnapshotStore {
             sequence: Int,
             into database: OpaquePointer
         ) throws {
-            let previousSongs = Dictionary(uniqueKeysWithValues: (previous?.songs ?? []).map { ($0.id, $0) })
-            let currentSongs = Dictionary(uniqueKeysWithValues: snapshot.songs.map { ($0.id, $0) })
+            let previousSongs = Dictionary((previous?.songs ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let currentSongs = Dictionary(snapshot.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             var changes = currentSongs.compactMap { id, song -> SongChange? in
                 previousSongs[id] == song ? nil : SongChange(id: id, song: song)
             }
@@ -2283,6 +2283,14 @@ final class MonthlyRecapSnapshotStore {
             // This helper intentionally recreates a pre-SQLite installation.
             try? FileManager.default.removeItem(at: ledgerAuthorityMarkerURL)
             loadedSnapshots = nil
+        }
+    }
+
+    func debugLegacySnapshotCount() throws -> Int {
+        try accessQueue.sync {
+            var count = 0
+            try forEachLegacySnapshot { _ in count += 1 }
+            return count
         }
     }
 
@@ -3077,7 +3085,7 @@ final class MonthlyRecapSnapshotStore {
         _ snapshot: LibrarySnapshot,
         after previous: LibrarySnapshot
     ) -> CounterRegressionAssessment {
-        let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+        let previousByID = Dictionary(previous.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var comparableItemCount = 0
         var regressedItemCount = 0
         var previousComparablePlayCount = 0
@@ -3481,7 +3489,7 @@ final class MonthlyRecapSnapshotStore {
 
         let priorRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
         let resolver = RecordingIdentityResolver(snapshots: [previous, current])
-        let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+        let previousByID = Dictionary(previous.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let previousRecordingIdentities = Set(previous.songs.map { resolver.identity(for: $0) })
 
         var existingSongsByIdentity: [String: MonthlyRecap.RankedSong] = [:]
@@ -3618,8 +3626,8 @@ final class MonthlyRecapSnapshotStore {
             return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
 
-        var artists = Dictionary(uniqueKeysWithValues: priorRecap.topArtists.map { ($0.id, $0) })
-        var albums = Dictionary(uniqueKeysWithValues: priorRecap.topAlbums.map { ($0.id, $0) })
+        var artists = Dictionary(priorRecap.topArtists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var albums = Dictionary(priorRecap.topAlbums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for delta in intervalDeltas where delta.playDelta > 0 {
             let artistID = artistGroupID(for: delta)
             let oldArtist = artists[artistID]
@@ -4417,7 +4425,7 @@ final class MonthlyRecapSnapshotStore {
                 let monthInterval = calendar.recapMonthInterval(containing: baseline.capturedAt)
                 let monthStart = monthInterval.start
                 let monthEnd = monthInterval.end
-                let baselineSongsByID = Dictionary(uniqueKeysWithValues: baseline.songs.map { ($0.id, $0) })
+                let baselineSongsByID = Dictionary(baseline.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 var changedSongScores: [UInt64: (playDelta: Int, listeningDuration: TimeInterval)] = [:]
 
                 for snapshot in orderedMonthSnapshots.dropFirst() {
@@ -4792,7 +4800,7 @@ final class MonthlyRecapSnapshotStore {
         }
 
         for snapshot in eligibleInMonth where snapshot.capturedAt > baseline.capturedAt {
-            let currentSongsByID = Dictionary(uniqueKeysWithValues: snapshot.songs.map { ($0.id, $0) })
+            let currentSongsByID = Dictionary(snapshot.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             var currentIdentityCounts: [String: Int] = [:]
             for song in snapshot.songs {
                 currentIdentityCounts[identityResolver.identity(for: song), default: 0] += 1
@@ -6482,27 +6490,29 @@ final class MonthlyRecapSnapshotStore {
         let objectSeparator = Data(",\n    {".utf8)
         let arrayTerminator = Data("\n    }\n  ]".utf8)
         var objectStart = markerRange.upperBound - 1
+        // Search the tail once, not once per snapshot (quadratic archive reads).
+        guard let terminatorRange = data.range(of: arrayTerminator, in: objectStart..<data.endIndex) else {
+            throw LegacyStreamError.truncatedSnapshot
+        }
 
         while objectStart < data.endIndex {
-            let searchRange = objectStart..<data.endIndex
+            let searchRange = objectStart..<terminatorRange.lowerBound
             let separatorRange = data.range(of: objectSeparator, options: [], in: searchRange)
-            let terminatorRange = data.range(of: arrayTerminator, options: [], in: searchRange)
 
             let objectEnd: Data.Index
             let nextStart: Data.Index?
-            if let separatorRange,
-               terminatorRange.map({ separatorRange.lowerBound < $0.lowerBound }) ?? true {
+            if let separatorRange {
                 objectEnd = separatorRange.lowerBound
                 nextStart = separatorRange.upperBound - 1
-            } else if let terminatorRange {
+            } else {
                 objectEnd = terminatorRange.lowerBound + Data("\n    }".utf8).count
                 nextStart = nil
-            } else {
-                throw LegacyStreamError.truncatedSnapshot
             }
 
-            let snapshotData = data.subdata(in: objectStart..<objectEnd)
-            try body(JSONDecoder.playCount.decode(LibrarySnapshot.self, from: snapshotData))
+            try autoreleasepool {
+                let snapshotData = data.subdata(in: objectStart..<objectEnd)
+                try body(JSONDecoder.playCount.decode(LibrarySnapshot.self, from: snapshotData))
+            }
             guard let nextStart else { break }
             objectStart = nextStart
         }

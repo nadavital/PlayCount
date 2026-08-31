@@ -2,6 +2,52 @@ import XCTest
 @testable import PlayCount
 
 final class MonthlyRecapSnapshotStoreTests: XCTestCase {
+    func testLargePrettyPrintedAndCompactLegacyReadersPreserveEverySnapshot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LegacyReaderStress-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MonthlyRecapSnapshotStore(directoryURL: directory)
+        _ = store.record(songs: (1...100).map {
+            song(id: UInt64($0), title: "Song \($0)", playCount: 10)
+        }, at: date(year: 2026, month: 8, day: 1), reason: .appLaunch)
+        try store.debugCreateLegacyArchiveForMigration()
+        let url = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        var archive = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let snapshots = try XCTUnwrap(archive["snapshots"] as? [[String: Any]])
+        let snapshot = try XCTUnwrap(snapshots.first)
+        archive["snapshots"] = Array(repeating: snapshot, count: 500)
+        let pretty = try JSONSerialization.data(withJSONObject: archive, options: [.prettyPrinted, .sortedKeys])
+        try pretty.write(to: url)
+        let started = Date()
+        XCTAssertEqual(try store.debugLegacySnapshotCount(), 500)
+        print("MIGRATION_STRESS \(pretty.count) bytes, 500 snapshots read in \(Date().timeIntervalSince(started))s")
+        try JSONSerialization.data(withJSONObject: archive, options: [.sortedKeys]).write(to: url)
+        XCTAssertEqual(try store.debugLegacySnapshotCount(), 500)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "Reader validation cannot retire history")
+    }
+
+    func testDuplicateLegacyPersistentIDsDoNotCrashSQLiteMigration() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DuplicateLegacyReader-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = MonthlyRecapSnapshotStore(directoryURL: directory)
+        let baseline = date(year: 2026, month: 8, day: 1)
+        _ = source.record(songs: [song(id: 1, title: "Duplicated", playCount: 10)], at: baseline, reason: .appLaunch)
+        try source.debugCreateLegacyArchiveForMigration()
+        let url = directory.appendingPathComponent("monthly-recap-snapshots.json")
+        var archive = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var snapshots = try XCTUnwrap(archive["snapshots"] as? [[String: Any]])
+        let songs = try XCTUnwrap(snapshots[0]["songs"] as? [[String: Any]])
+        snapshots[0]["songs"] = songs + songs
+        archive["snapshots"] = snapshots
+        try JSONSerialization.data(withJSONObject: archive, options: [.prettyPrinted, .sortedKeys]).write(to: url)
+        let restored = MonthlyRecapSnapshotStore(directoryURL: directory)
+        restored.prepareStorage()
+        let recap = restored.record(songs: [song(id: 1, title: "Duplicated", playCount: 11)],
+                                    at: baseline.addingTimeInterval(3_600), reason: .foreground)
+        XCTAssertEqual(recap.totalPlayDelta, 1)
+    }
+
     func testRestoredDefaultsDoNotReuseDeviceIdentityOnDifferentHardware() {
         let priorID = "old-phone-device-id"
         XCTAssertNotEqual(

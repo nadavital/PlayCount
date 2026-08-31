@@ -312,6 +312,12 @@ final class MediaMilestoneLedger: @unchecked Sendable {
         self.fileURL = fileURL ?? Self.defaultFileURL
     }
 
+    #if DEBUG
+    func debugWithExclusiveDatabaseAccess(_ body: () -> Void) {
+        databaseQueue.sync(execute: body)
+    }
+    #endif
+
     func hydrateCache() {
         let values = databaseQueue.sync { () -> [String: HighestObservedValues] in
             guard let database = openDatabase() else { return [:] }
@@ -1095,13 +1101,13 @@ final class WeeklyRecapInsightStore: @unchecked Sendable {
     }
 
     private func songObservation(from recap: MonthlyRecap) -> [String: StoredSong] {
-        Dictionary(uniqueKeysWithValues: recap.topSongs.map { song in
+        Dictionary(recap.topSongs.map { song in
             let identity = song.recordingIdentity ?? "legacy:\(song.title.lowercased())|\(song.artist.lowercased())|\(song.albumTitle.lowercased())"
             return (
                 identity,
                 StoredSong(id: song.id, title: song.title, artist: song.artist, playDelta: song.playDelta)
             )
-        })
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     private func comparison(from stored: StoredInsights, at date: Date) -> WeeklyRecapComparison {

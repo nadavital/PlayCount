@@ -30,6 +30,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
         let artistPersistentID: UInt64
         let discNumber: Int?
         let trackNumber: Int
+        let playbackStoreID: String?
 
         init(song: TopSong) {
             id = song.id
@@ -47,6 +48,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
             artistPersistentID = song.artistPersistentID
             discNumber = song.discNumber
             trackNumber = song.trackNumber
+            playbackStoreID = song.playbackStoreID
         }
 
         var topSong: TopSong {
@@ -66,17 +68,20 @@ final class LibraryPresentationCache: @unchecked Sendable {
                 albumPersistentID: albumPersistentID,
                 artistPersistentID: artistPersistentID,
                 discNumber: discNumber ?? 0,
-                trackNumber: trackNumber
+                trackNumber: trackNumber,
+                playbackStoreID: playbackStoreID ?? ""
             )
         }
     }
 
     private let fileURL: URL
     private let fileManager: FileManager
+    private let maximumCacheBytes: Int
     private let lock = NSLock()
 
-    init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
+    init(fileManager: FileManager = .default, directoryURL: URL? = nil, maximumCacheBytes: Int = 32 * 1_024 * 1_024) {
         self.fileManager = fileManager
+        self.maximumCacheBytes = max(1, min(maximumCacheBytes, Int.max - 1))
         let directory = directoryURL
             ?? (fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
                 ?? fileManager.temporaryDirectory)
@@ -94,11 +99,29 @@ final class LibraryPresentationCache: @unchecked Sendable {
     private func loadLocked() -> LibraryPresentationSnapshot? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let data = try? Data(contentsOf: fileURL),
+        // This is disposable presentation data, never recap history. A corrupt
+        // or unusually large cache must fall back to Music, not exhaust memory.
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maximumCacheBytes + 1),
+              data.count <= maximumCacheBytes,
               let stored = try? decoder.decode(StoredSnapshot.self, from: data),
               stored.schemaVersion == 1,
-              !stored.songs.isEmpty else {
+              !stored.songs.isEmpty,
+              stored.songs.allSatisfy({
+                  $0.playCount >= 0 && $0.skipCount >= 0 &&
+                  $0.playbackDuration.isFinite && $0.playbackDuration >= 0 &&
+                  $0.totalPlayDuration.isFinite && $0.totalPlayDuration >= 0
+              }) else {
             return nil
+        }
+        var totalPlays = 0
+        var totalDuration: TimeInterval = 0
+        for song in stored.songs {
+            let sum = totalPlays.addingReportingOverflow(song.playCount)
+            totalDuration += song.totalPlayDuration
+            guard !sum.overflow, totalDuration.isFinite else { return nil }
+            totalPlays = sum.partialValue
         }
         return LibraryPresentationSnapshot(
             capturedAt: stored.capturedAt,
@@ -133,7 +156,7 @@ final class LibraryPresentationCache: @unchecked Sendable {
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(stored) else { return }
+        guard let data = try? encoder.encode(stored), data.count <= maximumCacheBytes else { return }
         lock.lock()
         defer { lock.unlock() }
         guard shouldCommit() else { return }

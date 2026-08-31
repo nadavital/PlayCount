@@ -797,7 +797,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             albumPersistentID: 84,
             artistPersistentID: 126,
             discNumber: 2,
-            trackNumber: 7
+            trackNumber: 7,
+            playbackStoreID: "catalog-42"
         )
 
         cache.save(songs: [source], capturedAt: capturedAt)
@@ -810,6 +811,7 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(loaded.songs.first?.totalPlayDuration, 4_320)
         XCTAssertEqual(loaded.songs.first?.discNumber, 2)
         XCTAssertEqual(loaded.songs.first?.trackNumber, 7)
+        XCTAssertEqual(loaded.songs.first?.playbackStoreID, "catalog-42")
         XCTAssertNil(loaded.songs.first?.artwork)
         XCTAssertNotNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(59)))
         XCTAssertNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(61)))
@@ -934,6 +936,9 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             recapCloudSyncService: nil,
             startsAutomatically: false
         )
+        // Production publishes this asynchronously; view getters no longer
+        // synchronously load storage while a migration might hold its queue.
+        manager.seedRecapCaches(from: targetStore.cachedRecapPresentation(through: latestDate))
         let yearlyRecap = manager.yearlyRecap(for: 2026)
 
         XCTAssertEqual(yearlyRecap.topSongs.count, 250)
@@ -1074,7 +1079,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         albumPersistentID: UInt64 = 1,
         artistPersistentID: UInt64 = 0,
         discNumber: Int = 0,
-        trackNumber: Int = 1
+        trackNumber: Int = 1,
+        playbackStoreID: String = ""
     ) -> TopSong {
         TopSong(
             id: id,
@@ -1092,7 +1098,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             albumPersistentID: albumPersistentID,
             artistPersistentID: artistPersistentID,
             discNumber: discNumber,
-            trackNumber: trackNumber
+            trackNumber: trackNumber,
+            playbackStoreID: playbackStoreID
         )
     }
 

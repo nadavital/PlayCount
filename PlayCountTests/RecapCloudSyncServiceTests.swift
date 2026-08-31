@@ -588,7 +588,9 @@ final class RecapCloudSyncServiceTests: XCTestCase {
             CloudKitRecapSyncClient.applyingManifestArchive(manifest, to: [payload]).first
         )
         XCTAssertEqual(resolved.reliabilityPolicyVersion, 2)
-        XCTAssertEqual(resolved.archiveReliabilityPolicyVersion, 3)
+        // The retained monthly archive now carries policy 4. A partial policy-3
+        // manifest must not downgrade that complementary monthly evidence.
+        XCTAssertEqual(resolved.archiveReliabilityPolicyVersion, sourcePayload.archiveReliabilityPolicyVersion)
         XCTAssertNotNil(resolved.encodedRecaps)
         XCTAssertNotNil(resolved.encodedYearlyRecaps)
     }
