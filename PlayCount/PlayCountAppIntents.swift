@@ -94,31 +94,30 @@ final class PlayCountIntentLibraryCache: @unchecked Sendable {
 
 struct PlayCountIntentLibrary: Sendable {
     private let cache: PlayCountIntentLibraryCache
+    private let authorize: @Sendable () throws -> Void
 
-    init(cache: PlayCountIntentLibraryCache = .shared) {
+    init(
+        cache: PlayCountIntentLibraryCache = .shared,
+        authorize: @escaping @Sendable () throws -> Void = { try PlayCountIntentAuthorization.requireMediaLibraryAccess() }
+    ) {
         self.cache = cache
+        self.authorize = authorize
     }
 
     func songs() throws -> [TopSong] {
-        try requireAuthorization()
-        let songs = cache.snapshot().songs
-        try requireAuthorization()
+        let songs = try snapshot().songs
         guard !songs.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return songs
     }
 
     func albums() throws -> [TopAlbum] {
-        try requireAuthorization()
-        let albums = cache.snapshot().albums
-        try requireAuthorization()
+        let albums = try snapshot().albums
         guard !albums.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return albums
     }
 
     func artists() throws -> [TopArtist] {
-        try requireAuthorization()
-        let artists = cache.snapshot().artists
-        try requireAuthorization()
+        let artists = try snapshot().artists
         guard !artists.isEmpty else { throw PlayCountIntentError.emptyLibrary }
         return artists
     }
@@ -137,7 +136,22 @@ struct PlayCountIntentLibrary: Sendable {
     }
 
     private func requireAuthorization() throws {
-        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+        try authorize()
+    }
+
+    func snapshot() throws -> PlayCountIntentLibrarySnapshot {
+        #if DEBUG && targetEnvironment(simulator)
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-PlayCountSiriIntegrationTests"), arguments.contains("-PlayCountScreenshotMode") {
+            // Cross-process integration tests use only synthetic media. This
+            // branch cannot read a person's library or ship in a release build.
+            return MediaLibraryManager.screenshotIntentSnapshot
+        }
+        #endif
+        try requireAuthorization()
+        let snapshot = cache.snapshot()
+        try requireAuthorization()
+        return snapshot
     }
 }
 

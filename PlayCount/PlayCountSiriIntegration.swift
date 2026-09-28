@@ -29,6 +29,29 @@ enum PlayCountSiriIntegration {
         await searchIndexer.update(songs: songs, albums: albums, artists: artists)
     }
 
+    static func reindexSearchEntities(
+        library: PlayCountIntentLibrary,
+        purge: @Sendable () async -> Void = { await purgeSearchIndex() }
+    ) async throws {
+        let snapshot: PlayCountIntentLibrarySnapshot
+        do {
+            snapshot = try library.snapshot()
+        } catch {
+            await purge()
+            throw error
+        }
+        let status = await rebuildSearchIndex(songs: snapshot.songs, albums: snapshot.albums, artists: snapshot.artists)
+        if case let .failed(message) = status.state {
+            throw SpotlightReindexError.failed(message)
+        }
+        // Permission may be revoked while the asynchronous index write runs.
+        try PlayCountIntentAuthorization.requireMediaLibraryAccess()
+    }
+
+    private enum SpotlightReindexError: Error {
+        case failed(String)
+    }
+
     static func purgeSearchIndex() async {
         await searchIndexer.purge()
         if #available(iOS 27.0, *) {
@@ -278,12 +301,15 @@ enum PlayCountSearchFingerprint {
         func field(_ value: String) -> String { "\(value.utf8.count):\(value)" }
 
         let songPart = songs.prefix(250).map {
-            [String($0.id), $0.title, $0.artist, $0.albumTitle, String($0.playCount), String($0.totalPlayDuration)]
+            [String($0.id), $0.title, $0.artist, $0.albumTitle, $0.albumArtist,
+             String($0.albumPersistentID), String($0.artistPersistentID),
+             String($0.playCount), String($0.totalPlayDuration)]
                 .map(field)
                 .joined(separator: "|")
         }.joined(separator: ",")
         let albumPart = albums.prefix(100).map {
-            [String($0.id), $0.title, $0.artist, String($0.playCount), String($0.totalPlayDuration)]
+            [String($0.id), $0.title, $0.artist, String($0.artistPersistentID),
+             String($0.playCount), String($0.totalPlayDuration)]
                 .map(field)
                 .joined(separator: "|")
         }.joined(separator: ",")
@@ -377,7 +403,7 @@ struct SiriAIAlbumEntity: IndexedEntity {
     var artistName: String
 
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(title)", image: .init(systemName: "square.stack"))
+        DisplayRepresentation(title: "\(title)", subtitle: "\(artistName)", image: .init(systemName: "square.stack"))
     }
 
     init(song: TopSong) {
@@ -409,31 +435,75 @@ struct SiriAIAlbumEntity: IndexedEntity {
 }
 
 @available(iOS 27.0, *)
-struct SiriAISongEntityQuery: EntityStringQuery {
+struct SiriAISongEntityQuery: EntityStringQuery, IndexedEntityQuery {
+    private let library: PlayCountIntentLibrary
+
+    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
+        guard !identifiers.isEmpty else { return }
+        // A bounded full rebuild also removes deleted entities and keeps all
+        // entity types consistent with the ordinary app-driven index updates.
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    init() { library = PlayCountIntentLibrary() }
+    init(library: PlayCountIntentLibrary) { self.library = library }
+
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
     func entities(for identifiers: [SiriAISongEntity.ID]) async throws -> [SiriAISongEntity] {
         let requested = Set(identifiers.compactMap(UInt64.init))
-        return try PlayCountIntentLibrary().songs().filter { requested.contains($0.id) }.map(SiriAISongEntity.init)
+        return try library.songs().filter { requested.contains($0.id) }.map(SiriAISongEntity.init)
     }
 
     func entities(matching string: String) async throws -> [SiriAISongEntity] {
-        try PlayCountIntentLibrary().songs()
-            .filter { $0.title.localizedStandardContains(string) || $0.artist.localizedStandardContains(string) }
-            .sorted { $0.playCount > $1.playCount }
-            .prefix(25)
-            .map(SiriAISongEntity.init)
+        try PlayCountIntentRanking.matchingSongs(library.songs(), search: string).map(SiriAISongEntity.init)
     }
 
     func suggestedEntities() async throws -> [SiriAISongEntity] {
-        try PlayCountIntentLibrary().songs().sorted { $0.playCount > $1.playCount }.prefix(20).map(SiriAISongEntity.init)
+        try library.songs().sorted { $0.playCount > $1.playCount }.prefix(20).map(SiriAISongEntity.init)
     }
 }
 
 @available(iOS 27.0, *)
-struct SiriAIArtistEntityQuery: EntityQuery {
+struct SiriAIArtistEntityQuery: EntityStringQuery, IndexedEntityQuery {
+    private let library: PlayCountIntentLibrary
+
+    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
+        guard !identifiers.isEmpty else { return }
+        // A bounded full rebuild also removes deleted entities and keeps all
+        // entity types consistent with the ordinary app-driven index updates.
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    init() { library = PlayCountIntentLibrary() }
+    init(library: PlayCountIntentLibrary) { self.library = library }
+
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+
     func entities(for identifiers: [SiriAIArtistEntity.ID]) async throws -> [SiriAIArtistEntity] {
-        let requested = Set(identifiers)
-        let library = PlayCountIntentLibrary()
-        let songArtists = try library.songs().flatMap { song in
+        let byID = Dictionary(uniqueKeysWithValues: try allArtists().map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0] }
+    }
+
+    func entities(matching string: String) async throws -> [SiriAIArtistEntity] {
+        let query = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Array(try allArtists().filter { query.isEmpty || $0.name.localizedStandardContains(query) }.prefix(25))
+    }
+
+    func suggestedEntities() async throws -> [SiriAIArtistEntity] {
+        Array(try allArtists().prefix(20))
+    }
+
+    private func allArtists() throws -> [SiriAIArtistEntity] {
+        let snapshot = try library.snapshot()
+        let songArtists = snapshot.songs.flatMap { song in
             let albumArtistID = song.albumArtist.localizedCaseInsensitiveCompare(song.artist) == .orderedSame
                 ? song.artistPersistentID
                 : 0
@@ -442,21 +512,54 @@ struct SiriAIArtistEntityQuery: EntityQuery {
                 SiriAIArtistEntity(persistentID: albumArtistID, name: song.albumArtist)
             ]
         }
-        let groupedArtists = try library.artists().map(SiriAIArtistEntity.init)
+        let groupedArtists = snapshot.artists.map(SiriAIArtistEntity.init)
         return (songArtists + groupedArtists)
             .reduce(into: [String: SiriAIArtistEntity]()) { $0[$1.id] = $1 }
             .values
-            .filter { requested.contains($0.id) }
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { $0.name == $1.name ? $0.id < $1.id : $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }
 
 @available(iOS 27.0, *)
-struct SiriAIAlbumEntityQuery: EntityQuery {
+struct SiriAIAlbumEntityQuery: EntityStringQuery, IndexedEntityQuery {
+    private let library: PlayCountIntentLibrary
+
+    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
+        guard !identifiers.isEmpty else { return }
+        // A bounded full rebuild also removes deleted entities and keeps all
+        // entity types consistent with the ordinary app-driven index updates.
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        try await PlayCountSiriIntegration.reindexSearchEntities(library: library)
+    }
+
+    init() { library = PlayCountIntentLibrary() }
+    init(library: PlayCountIntentLibrary) { self.library = library }
+
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+
     func entities(for identifiers: [SiriAIAlbumEntity.ID]) async throws -> [SiriAIAlbumEntity] {
-        let requested = Set(identifiers.compactMap(UInt64.init))
-        return try PlayCountIntentLibrary().songs()
-            .filter { requested.contains($0.albumPersistentID) }
-            .reduce(into: [UInt64: TopSong]()) { $0[$1.albumPersistentID] = $1 }
-            .values.map(SiriAIAlbumEntity.init)
+        let byID = Dictionary(uniqueKeysWithValues: try allAlbums().map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0] }
+    }
+
+    func entities(matching string: String) async throws -> [SiriAIAlbumEntity] {
+        let query = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Array(try allAlbums().filter {
+            query.isEmpty || $0.title.localizedStandardContains(query) || $0.artistName.localizedStandardContains(query)
+        }.prefix(25))
+    }
+
+    func suggestedEntities() async throws -> [SiriAIAlbumEntity] {
+        Array(try allAlbums().prefix(20))
+    }
+
+    private func allAlbums() throws -> [SiriAIAlbumEntity] {
+        let snapshot = try library.snapshot()
+        return PlayCountIntentRanking.topAlbums(from: snapshot.albums, metric: .plays, limit: snapshot.albums.count)
+            .map(SiriAIAlbumEntity.init)
     }
 }

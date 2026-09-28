@@ -2,6 +2,90 @@ import XCTest
 @testable import PlayCount
 
 final class PlayCountAppIntentTests: XCTestCase {
+    func testSearchFingerprintChangesWhenSiriRelationshipsChange() {
+        let original = makeSong(id: 1, title: "Track", artistID: 20)
+        let reassigned = makeSong(id: 1, title: "Track", artistID: 21)
+        let compilation = makeSong(id: 1, title: "Track", albumArtist: "Various Artists", artistID: 20)
+        let baseline = PlayCountSearchFingerprint.make(songs: [original], albums: [], artists: [])
+        XCTAssertNotEqual(baseline, PlayCountSearchFingerprint.make(songs: [reassigned], albums: [], artists: []))
+        XCTAssertNotEqual(baseline, PlayCountSearchFingerprint.make(songs: [compilation], albums: [], artists: []))
+    }
+
+    @available(iOS 27.0, *)
+    func testSiriAudioSongQueryMatchesAlbumMetadata() async throws {
+        let library = siriLibrary(songs: [makeSong(id: 1, title: "Track", artist: "Artist", album: "Quiet Motion", plays: 8)])
+        let results = try await SiriAISongEntityQuery(library: library).entities(matching: "  quiet motion  ")
+        XCTAssertEqual(results.map(\.title), ["Track"])
+        XCTAssertEqual(results.map(\.id), ["1"])
+    }
+
+    @available(iOS 27.0, *)
+    func testSiriAlbumSearchMatchesArtistAndPreservesRequestedIDOrder() async throws {
+        let albums = [makeAlbum(id: 20, title: "Quiet Motion", plays: 4, listeningTime: 720), makeAlbum(id: 21, title: "Loud Motion", plays: 8, listeningTime: 1440)]
+        let query = SiriAIAlbumEntityQuery(library: siriLibrary(albums: albums))
+        let matches = try await query.entities(matching: " motion ")
+        XCTAssertEqual(matches.map(\.id), ["21", "20"])
+        let byArtist = try await query.entities(matching: albums[0].artist)
+        XCTAssertEqual(byArtist.count, 2)
+        let resolved = try await query.entities(for: ["20", "21", "missing"])
+        XCTAssertEqual(resolved.map(\.id), ["20", "21"])
+        let absent = try await query.entities(matching: "Absent")
+        XCTAssertTrue(absent.isEmpty)
+    }
+
+    @available(iOS 27.0, *)
+    func testSiriArtistSearchWorksWithoutPersistentArtistIDs() async throws {
+        let songs = [makeSong(id: 1, title: "First", artist: "Björk", artistID: 0), makeSong(id: 2, title: "Second", artist: "Björk", artistID: 0)]
+        let query = SiriAIArtistEntityQuery(library: siriLibrary(songs: songs))
+        let results = try await query.entities(matching: "  bjork  ")
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.name, "Björk")
+        let resolved = try await query.entities(for: results.map(\.id))
+        XCTAssertEqual(resolved.map(\.id), results.map(\.id))
+    }
+
+    @available(iOS 27.0, *)
+    func testSiriSearchChecksAuthorizationBeforeLoadingLibrary() async throws {
+        let counter = LockedCounter()
+        let cache = PlayCountIntentLibraryCache {
+            counter.increment()
+            return PlayCountIntentLibrarySnapshot(songs: [], albums: [], artists: [])
+        }
+        let library = PlayCountIntentLibrary(cache: cache, authorize: { throw PlayCountIntentError.mediaLibraryPermissionRequired })
+        do {
+            _ = try await SiriAIAlbumEntityQuery(library: library).entities(matching: "Album")
+            XCTFail("Unauthorized queries must fail")
+        } catch PlayCountIntentError.mediaLibraryPermissionRequired {
+            // Expected: no library or cached data was read.
+        }
+        XCTAssertEqual(counter.value, 0)
+    }
+
+    func testSpotlightRebuildRejectsUnauthorizedLibraryBeforeLoading() async throws {
+        let counter = LockedCounter()
+        let library = PlayCountIntentLibrary(
+            cache: PlayCountIntentLibraryCache {
+                counter.increment()
+                return PlayCountIntentLibrarySnapshot(songs: [], albums: [], artists: [])
+            },
+            authorize: { throw PlayCountIntentError.mediaLibraryPermissionRequired }
+        )
+        do {
+            try await PlayCountSiriIntegration.reindexSearchEntities(library: library, purge: { counter.increment() })
+            XCTFail("Spotlight must not rebuild from an unauthorized library")
+        } catch PlayCountIntentError.mediaLibraryPermissionRequired {
+            // Expected even if stale index entries had previously existed.
+        }
+        XCTAssertEqual(counter.value, 1, "Purges stale search data without reading the library")
+    }
+
+    private func siriLibrary(songs: [TopSong] = [], albums: [TopAlbum] = [], artists: [TopArtist] = []) -> PlayCountIntentLibrary {
+        let cache = PlayCountIntentLibraryCache {
+            PlayCountIntentLibrarySnapshot(songs: songs, albums: albums, artists: artists)
+        }
+        return PlayCountIntentLibrary(cache: cache, authorize: {})
+    }
+
     func testSongEntityPreservesStableIdentityAndStatistics() {
         let song = makeSong(id: 42, title: "Holocene", artist: "Bon Iver", album: "Bon Iver", plays: 17, duration: 238)
         let entity = SongEntity(song: song)
@@ -167,7 +251,8 @@ final class PlayCountAppIntentTests: XCTestCase {
         albumArtist: String? = nil,
         album: String = "Album",
         plays: Int = 1,
-        duration: TimeInterval = 180
+        duration: TimeInterval = 180,
+        artistID: UInt64? = nil
     ) -> TopSong {
         TopSong(
             id: id,
@@ -183,7 +268,7 @@ final class PlayCountAppIntentTests: XCTestCase {
             dateAdded: nil,
             artwork: nil,
             albumPersistentID: id + 100,
-            artistPersistentID: id + 200,
+            artistPersistentID: artistID ?? id + 200,
             trackNumber: 1
         )
     }

@@ -5,6 +5,122 @@ final class RecapNavigationUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testSearchSelectionUpdatesDetailAndPreservesQuery() throws {
+        verifySearchSelection(domain: "all")
+    }
+
+    func testScopedSongSearchUsesAdaptiveDetailAndPreservesQuery() throws {
+        verifySearchSelection(domain: "songs")
+    }
+
+    func testRecapSeeAllSongsOpensDetailAndReturns() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PlayCountScreenshotMode", "-PlayCountScreenshotTab", "recap"]
+        app.launch()
+        let seeAll = app.buttons["See All"].firstMatch
+        for _ in 0..<5 {
+            if seeAll.exists && seeAll.isHittable && seeAll.frame.maxY < app.windows.firstMatch.frame.maxY - 150 { break }
+            let scroll = app.scrollViews.firstMatch
+            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+                .press(forDuration: 0.05, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        }
+        XCTAssertTrue(seeAll.isHittable, app.debugDescription)
+        seeAll.tap()
+        XCTAssertTrue(app.navigationBars["Top Songs"].waitForExistence(timeout: 8), app.debugDescription)
+        let song = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", Glass Rain, ")).firstMatch
+        XCTAssertTrue(song.waitForExistence(timeout: 8), app.debugDescription)
+        attach(app, named: "Recap See All songs")
+        song.tap()
+        XCTAssertTrue(app.scrollViews.staticTexts["Glass Rain"].firstMatch.waitForExistence(timeout: 8), app.debugDescription)
+        attach(app, named: "Recap ranked song detail")
+        let back = app.buttons["BackButton"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 3), app.debugDescription)
+        back.tap()
+        XCTAssertTrue(app.navigationBars["Top Songs"].waitForExistence(timeout: 8), app.debugDescription)
+        attach(app, named: "Recap See All restored")
+    }
+
+    func testRelatedSongsFitInsideSearchDetailColumn() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-PlayCountScreenshotMode", "-PlayCountScreenshotTab", "search",
+            "-PlayCountScreenshotSearchQuery", "a", "-PlayCountScreenshotSearchDomain", "songs",
+            "-PlayCountScreenshotSearchSelection", "-PlayCountScreenshotSongRelated"
+        ]
+        app.launch()
+        let detail = app.scrollViews["song-detail"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 8))
+        let albumHeading = detail.staticTexts["On This Album"].firstMatch
+        XCTAssertTrue(albumHeading.waitForExistence(timeout: 8))
+        let artistHeading = detail.staticTexts["More by Nova Lane"].firstMatch
+        XCTAssertTrue(artistHeading.waitForExistence(timeout: 8))
+        for heading in [albumHeading, artistHeading] {
+            XCTAssertGreaterThanOrEqual(heading.frame.minX, detail.frame.minX)
+            XCTAssertLessThanOrEqual(heading.frame.maxX, detail.frame.maxX)
+        }
+        if detail.frame.width < 656 {
+            XCTAssertGreaterThan(artistHeading.frame.minY, albumHeading.frame.maxY,
+                                 "Narrow details must stack related sections")
+        }
+        attach(app, named: "Related songs contained within detail")
+    }
+
+    private func verifySearchSelection(domain: String) {
+        let app = XCUIApplication()
+        let query = "a"
+        app.launchArguments = [
+            "-PlayCountScreenshotMode",
+            "-PlayCountScreenshotTab", "search",
+            "-PlayCountScreenshotSearchQuery", query,
+            "-PlayCountScreenshotSearchDomain", domain
+        ]
+        app.launch()
+
+        let firstResult = searchResult("Afterglow Drive", in: app)
+        guard requireSearchElement(firstResult, in: app, named: "First \(domain) result") else { return }
+        for title in ["Afterglow Drive", "Afterglow Drive", "City Lights"] {
+            let result = searchResult(title, in: app)
+            guard requireSearchElement(result, in: app, named: "\(domain) result \(title)") else { return }
+            XCTAssertTrue(result.isHittable, "Search result must remain reachable. \(app.debugDescription)")
+            result.tap()
+
+            guard requireSearchElement(app.scrollViews.staticTexts[title].firstMatch, in: app, named: "\(title) detail heading") else { return }
+            let back = app.buttons["search-back"].firstMatch
+            if back.exists {
+                attach(app, named: "\(domain) compact detail \(title)")
+                back.tap()
+                guard requireSearchElement(searchResult(title, in: app), in: app, named: "Restored \(title) result") else { return }
+            } else {
+                XCTAssertTrue(searchResult("Afterglow Drive", in: app).isHittable,
+                              "The results column must remain usable alongside detail")
+                let field = app.searchFields.firstMatch
+                guard requireSearchElement(field, in: app, named: "Column search field") else { return }
+                XCTAssertLessThan(field.frame.width, app.windows.firstMatch.frame.width * 0.65,
+                                  "The search field must stay in the results column")
+                attach(app, named: "\(domain) split detail \(title)")
+            }
+
+            let searchField = app.searchFields.firstMatch
+            guard requireSearchElement(searchField, in: app, named: "Preserved search field") else { return }
+            XCTAssertEqual(searchField.value as? String, query,
+                           "Selecting or returning from a result must preserve the query")
+        }
+        attach(app, named: "\(domain) search query preserved after repeated selections")
+    }
+
+    private func searchResult(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title + ", ")).firstMatch
+    }
+
+    private func requireSearchElement(_ element: XCUIElement, in app: XCUIApplication, named name: String) -> Bool {
+        guard element.waitForExistence(timeout: 8) else {
+            attach(app, named: "Missing \(name)")
+            XCTFail("Missing \(name). Hierarchy: \(app.debugDescription)")
+            return false
+        }
+        return true
+    }
+
     func testYearAndMonthNavigationRemainsReachableAndUpdatesSelection() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -122,8 +238,13 @@ final class RecapNavigationUITests: XCTestCase {
         XCTAssertTrue(integrations.waitForExistence(timeout: 8))
         integrations.tap()
 
+        XCTAssertTrue(app.navigationBars["Siri & Shortcuts"].waitForExistence(timeout: 3))
         let diagnostics = app.buttons["Recap Diagnostics"]
-        XCTAssertTrue(diagnostics.waitForExistence(timeout: 3))
+        // The compact Duo display cannot show the entire settings list at once.
+        for _ in 0..<3 where !diagnostics.exists || !diagnostics.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 3), app.debugDescription)
         diagnostics.tap()
 
         XCTAssertTrue(app.navigationBars["Recap Diagnostics"].waitForExistence(timeout: 3))

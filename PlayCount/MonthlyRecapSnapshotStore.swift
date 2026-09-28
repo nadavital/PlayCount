@@ -839,7 +839,7 @@ final class MonthlyRecapSnapshotStore {
     private static let currentGapPolicyVersion = 1
     // Version 3 makes the CAS-protected Cloud manifest authoritative for recap
     // summaries. That lets corrected lower totals outrank stale v2 archives.
-    fileprivate static let currentCounterReliabilityPolicyVersion = 3
+    fileprivate static let currentCounterReliabilityPolicyVersion = 5
     fileprivate static let maxPrioritySyncedSongCount = 120
     fileprivate static let maxSyncedRecapRankedSongCount = 250
     fileprivate static let maxSyncedRecapRankedGroupCount = 100
@@ -921,6 +921,7 @@ final class MonthlyRecapSnapshotStore {
             let normalizedPlaybackStoreID = playbackStoreID?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             self.playbackStoreID = normalizedPlaybackStoreID?.isEmpty == false
+                && normalizedPlaybackStoreID != "0"
                 ? normalizedPlaybackStoreID
                 : nil
         }
@@ -1052,7 +1053,7 @@ final class MonthlyRecapSnapshotStore {
         }
 
         var hasRankingEvidence: Bool {
-            totalPlayDelta == 0 || !topSongs.isEmpty || !topArtists.isEmpty || !topAlbums.isEmpty
+            totalPlayDelta == 0 || (unattributedPlayDelta ?? 0) > 0 || !topSongs.isEmpty || !topArtists.isEmpty || !topAlbums.isEmpty
         }
 
         init(
@@ -1829,12 +1830,23 @@ final class MonthlyRecapSnapshotStore {
     private struct RecordingIdentityResolver {
         private let uniqueStoreIDByFingerprint: [String: String]
         private let ambiguousFingerprints: Set<String>
+        private let ambiguousStoreIDs: Set<String>
 
         init(snapshots: [LibrarySnapshot]) {
             var storeIDsByFingerprint: [String: Set<String>] = [:]
             var ambiguousFingerprints: Set<String> = []
+            var ambiguousStoreIDs: Set<String> = []
 
             for snapshot in snapshots {
+                var recordingsByStoreID: [String: Set<String>] = [:]
+                for song in snapshot.songs {
+                    guard let storeID = song.playbackStoreID else { continue }
+                    let recording = [normalizedRecapIdentityComponent(song.title), normalizedRecapIdentityComponent(song.artist)].joined(separator: "|")
+                    recordingsByStoreID[storeID, default: []].insert(recording)
+                }
+                for (storeID, recordings) in recordingsByStoreID where recordings.count > 1 {
+                    ambiguousStoreIDs.insert(storeID)
+                }
                 let IDsByFingerprint = Dictionary(grouping: snapshot.songs, by: \.recordingFingerprint)
                 for (fingerprint, songs) in IDsByFingerprint {
                     if Set(songs.map(\.id)).count > 1 {
@@ -1851,6 +1863,11 @@ final class MonthlyRecapSnapshotStore {
                 storeIDs.count == 1 ? storeIDs.first : nil
             }
             self.ambiguousFingerprints = ambiguousFingerprints
+            self.ambiguousStoreIDs = ambiguousStoreIDs
+        }
+
+        func canUseStoreID(_ storeID: String) -> Bool {
+            !storeID.isEmpty && storeID != "0" && !ambiguousStoreIDs.contains(storeID)
         }
 
         func identity(for song: SongSnapshot) -> String {
@@ -1859,7 +1876,7 @@ final class MonthlyRecapSnapshotStore {
                 return "duplicate:\(fingerprint):\(song.id)"
             }
             if let playbackStoreID = song.playbackStoreID
-                ?? uniqueStoreIDByFingerprint[fingerprint] {
+                ?? uniqueStoreIDByFingerprint[fingerprint], canUseStoreID(playbackStoreID) {
                 return "store:\(playbackStoreID)"
             }
             return "metadata:\(fingerprint)"
@@ -2867,8 +2884,9 @@ final class MonthlyRecapSnapshotStore {
         reason: RecapSnapshotReason,
         shouldCommit: @Sendable () -> Bool
     ) -> MonthlyRecap {
+        let songs = TopSong.deduplicatedByPersistentID(songs)
         var stored = loadLocked()
-        let snapshot = LibrarySnapshot(
+        var snapshot = LibrarySnapshot(
             capturedAt: capturedAt,
             reason: reason,
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
@@ -2934,7 +2952,7 @@ final class MonthlyRecapSnapshotStore {
                 )
             }
 
-
+            snapshot = preservingReliableCounters(in: snapshot, after: previous)
             if confirmsCoverageChange {
                 var updated = stored
                 updated.lastTrustedObservationAt = capturedAt
@@ -3004,6 +3022,54 @@ final class MonthlyRecapSnapshotStore {
             sourceSongs: songs,
             sourceAlbums: albums,
             sourceArtists: artists
+        )
+    }
+
+    /// Small regressions do not meet the whole-scan quarantine threshold. Keep
+    /// their counter floor in the stored snapshot so compaction and relaunch
+    /// cannot turn recovery into fresh listening. A supported re-add starts a
+    /// new epoch and must retain its lower counters.
+    private func preservingReliableCounters(in snapshot: LibrarySnapshot, after previous: LibrarySnapshot) -> LibrarySnapshot {
+        let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
+        if let currentCounters = snapshot.aggregateCounters, let priorCounters = previous.aggregateCounters {
+            let netIncrease = max(0, currentCounters.playCount - priorCounters.playCount)
+            let existingSongIncrease = snapshot.songs.reduce(0) { total, song in
+                guard let prior = previousByID[song.id] else { return total }
+                return total + max(0, song.playCount - prior.playCount)
+            }
+            // Keep the original aggregate evidence when rankingDeltas would
+            // classify these changes as counter redistribution. Raising the
+            // falling counters here would make the offsetting spike look real.
+            if netIncrease > 0, existingSongIncrease > netIncrease * 2 {
+                return snapshot
+            }
+        }
+        let month = calendar.recapMonthInterval(containing: snapshot.capturedAt)
+        var changed = false
+        let songs = snapshot.songs.map { song -> SongSnapshot in
+            guard let prior = previousByID[song.id],
+                  song.playCount < prior.playCount || song.skipCount < prior.skipCount else { return song }
+            let dateAddedAdvanced = song.dateAdded.map { added in
+                month.contains(added) && (prior.dateAdded.map { added.timeIntervalSince($0) > 60 } ?? true)
+            } ?? false
+            guard !dateAddedAdvanced else { return song }
+            changed = true
+            return SongSnapshot(
+                id: song.id, title: song.title, artist: song.artist,
+                albumTitle: song.albumTitle, albumArtist: song.albumArtist,
+                playCount: max(song.playCount, prior.playCount),
+                skipCount: max(song.skipCount, prior.skipCount),
+                playbackDuration: song.playbackDuration, lastPlayedDate: song.lastPlayedDate,
+                dateAdded: song.dateAdded, albumPersistentID: song.albumPersistentID,
+                artistPersistentID: song.artistPersistentID, playbackStoreID: song.playbackStoreID
+            )
+        }
+        guard changed else { return snapshot }
+        return LibrarySnapshot(
+            capturedAt: snapshot.capturedAt, reason: snapshot.reason, appVersion: snapshot.appVersion,
+            scannedSongCount: snapshot.scannedSongCount, deviceIdentifier: snapshot.deviceIdentifier,
+            aggregateCounters: Self.aggregateCounters(from: songs, capturedAt: snapshot.capturedAt, calendar: calendar),
+            songs: songs
         )
     }
 
@@ -3320,8 +3386,20 @@ final class MonthlyRecapSnapshotStore {
             }
         }
         let startingLedgers = stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers
-        let mergedLedgers = Self.mergedSyncedRecaps(startingLedgers + generatedLedgers)
-        let generatedRecaps = generatedLedgers.map { $0.compacted() }
+        // Retained snapshots are a rolling cache, not the complete history.
+        // Recomputing them during sync must not promote a partial result over a
+        // durable ledger merely because the current calculator has a newer policy.
+        // Explicit reliability migrations perform their own evidence-based repairs.
+        let durableByMonth = Dictionary(uniqueKeysWithValues:
+            Self.mergedSyncedRecaps(startingLedgers + stored.syncedRecaps).map { ($0.monthStart, $0) })
+        let nonDegradingLedgers = generatedLedgers.filter { generated in
+            guard let existing = durableByMonth[generated.monthStart] else { return true }
+            return generated.totalPlayDelta >= existing.totalPlayDelta &&
+                generated.totalSkipDelta >= existing.totalSkipDelta &&
+                generated.totalListeningDuration >= existing.totalListeningDuration
+        }
+        let mergedLedgers = Self.mergedSyncedRecaps(startingLedgers + nonDegradingLedgers)
+        let generatedRecaps = nonDegradingLedgers.map { $0.compacted() }
         let mergedRecaps = Self.mergedSyncedRecaps(stored.syncedRecaps + generatedRecaps)
         let generatedYearlyRecaps = yearlyRecaps(
             from: mergedLedgers,
@@ -3345,6 +3423,77 @@ final class MonthlyRecapSnapshotStore {
             // this device has no (or only partial) monthly ledgers for that year.
             stored.syncedYearlyRecaps = mergedYearlyRecaps
             didChange = true
+        }
+        return didChange
+    }
+
+    /// Repair only collided rankings whose retained counters cover the durable
+    /// recap. Historical compaction is not evidence that the missing plays vanished.
+    private func repairCollidingRecaps(in stored: inout StoredSnapshots) -> Bool {
+        let resolver = RecordingIdentityResolver(snapshots: stored.snapshots)
+        let ledgers = stored.monthlyLedgers.isEmpty ? stored.syncedRecaps : stored.monthlyLedgers
+        var didChange = false
+        for existing in ledgers {
+            guard existing.topSongs.contains(where: { song in
+                guard let storeID = song.playbackStoreID else { return false }
+                return song.recordingIdentity == "store:\(storeID)" && !resolver.canUseStoreID(storeID)
+            }) else { continue }
+            let rebuilt = snapshotRecap(for: existing.monthStart, snapshots: stored.snapshots)
+            let replacement: MonthlyRecap
+            if rebuilt.generatedAt >= existing.generatedAt,
+               rebuilt.totalPlayDelta >= existing.totalPlayDelta,
+               rebuilt.totalSkipDelta >= existing.totalSkipDelta {
+                replacement = rebuilt
+            } else {
+                // Compaction can remove the evidence needed to split a legacy
+                // pooled row. Keep its plays, but never label them as one song.
+                let prior = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
+                let ambiguous = prior.topSongs.filter { song in
+                    guard let storeID = song.playbackStoreID else { return false }
+                    return song.recordingIdentity == "store:\(storeID)" && !resolver.canUseStoreID(storeID)
+                }
+                let ambiguousIDs = Set(ambiguous.map(\.id))
+                let ambiguousAlbums = Set(ambiguous.map(\.albumTitle))
+                let ambiguousArtists = Set(ambiguous.map(\.artist))
+                replacement = MonthlyRecap(
+                    monthStart: prior.monthStart, generatedAt: prior.generatedAt,
+                    lastCaptureReason: prior.lastCaptureReason, trackingStart: prior.trackingStart,
+                    snapshotCount: prior.snapshotCount, totalPlayDelta: prior.totalPlayDelta,
+                    totalSkipDelta: prior.totalSkipDelta, totalListeningDuration: prior.totalListeningDuration,
+                    playedSongCount: max(0, prior.playedSongCount - ambiguous.filter { $0.playDelta > 0 }.count),
+                    listenedArtistCount: prior.listenedArtistCount, newSongCount: prior.newSongCount,
+                    topSongs: prior.topSongs.filter { !ambiguousIDs.contains($0.id) },
+                    topArtists: prior.topArtists.filter { !ambiguousArtists.contains($0.title) },
+                    topAlbums: prior.topAlbums.filter { !ambiguousAlbums.contains($0.title) },
+                    biggestGainers: prior.biggestGainers.filter { !ambiguousIDs.contains($0.id) },
+                    biggestAlbumGainers: prior.biggestAlbumGainers.filter { !ambiguousAlbums.contains($0.title) },
+                    biggestArtistGainers: prior.biggestArtistGainers.filter { !ambiguousArtists.contains($0.title) },
+                    topNewSongs: prior.topNewSongs.filter { !ambiguousIDs.contains($0.id) },
+                    unattributedPlayDelta: min(prior.totalPlayDelta, prior.unattributedPlayDelta + ambiguous.reduce(0) { $0 + $1.playDelta }),
+                    unattributedListeningDuration: min(prior.totalListeningDuration, prior.unattributedListeningDuration + ambiguous.reduce(0) { $0 + $1.listeningDuration })
+                )
+            }
+            let repaired = SyncedMonthlyRecap(
+                recap: replacement,
+                preservingAllRankings: true,
+                reliabilityPolicyVersion: max(Self.currentCounterReliabilityPolicyVersion,
+                                              (existing.reliabilityPolicyVersion ?? 0) + 1)
+            )
+            stored.monthlyLedgers.removeAll { $0.monthStart == existing.monthStart }
+            stored.monthlyLedgers.append(repaired)
+            stored.syncedRecaps.removeAll { $0.monthStart == existing.monthStart }
+            stored.syncedRecaps.append(repaired.compacted())
+            didChange = true
+        }
+        if didChange {
+            stored.monthlyLedgers.sort { $0.monthStart < $1.monthStart }
+            stored.syncedRecaps.sort { $0.monthStart < $1.monthStart }
+            let rebuiltYears = yearlyRecaps(from: stored.monthlyLedgers,
+                                           unattributedIntervals: stored.unattributedIntervals)
+            let years = Set(rebuiltYears.map(\.year))
+            stored.syncedYearlyRecaps.removeAll { years.contains($0.year) }
+            stored.syncedYearlyRecaps.append(contentsOf: rebuiltYears)
+            stored.syncedYearlyRecaps.sort { $0.year < $1.year }
         }
         return didChange
     }
@@ -3385,6 +3534,15 @@ final class MonthlyRecapSnapshotStore {
 
         let priorRecap = existing.monthlyRecap(artworkLookup: ArtworkLookup(sourceSongs: []))
         let resolver = RecordingIdentityResolver(snapshots: [previous, current])
+        if priorRecap.topSongs.contains(where: { song in
+            guard let storeID = song.playbackStoreID else { return false }
+            return song.recordingIdentity == "store:\(storeID)" && !resolver.canUseStoreID(storeID)
+        }) {
+            // An older ledger may have collapsed an album under a shared ID.
+            // Rebuild from surviving per-track counters before accumulating more.
+            _ = repairCollidingRecaps(in: &stored)
+            return
+        }
         let previousByID = Dictionary(uniqueKeysWithValues: previous.songs.map { ($0.id, $0) })
         let previousRecordingIdentities = Set(previous.songs.map { resolver.identity(for: $0) })
 
@@ -3407,7 +3565,7 @@ final class MonthlyRecapSnapshotStore {
         func accumulatedIdentity(for song: SongSnapshot) -> String {
             let resolved = resolver.identity(for: song)
             if existingSongsByIdentity[resolved] != nil { return resolved }
-            if let storeID = song.playbackStoreID {
+            if let storeID = song.playbackStoreID, resolver.canUseStoreID(storeID) {
                 let storeIdentity = "store:\(storeID)"
                 if existingSongsByIdentity[storeIdentity] != nil { return storeIdentity }
             }
@@ -4442,8 +4600,14 @@ final class MonthlyRecapSnapshotStore {
 
     private func canonicalSnapshots(_ snapshots: [LibrarySnapshot]) -> [LibrarySnapshot] {
         var canonical: [LibrarySnapshot] = []
+        var indicesByMoment: [String: [Int]] = [:]
         for snapshot in snapshots {
-            guard let existingIndex = canonical.firstIndex(where: { snapshot.isDuplicateRecapMoment(of: $0) }) else {
+            // Compute the expensive signature once per observation, rather than
+            // once per comparison with every previously seen snapshot.
+            let moment = snapshot.recapMomentKey
+            let existingIndex = indicesByMoment[moment]?.first { snapshot.isSameDevice(as: canonical[$0]) }
+            guard let existingIndex else {
+                indicesByMoment[moment, default: []].append(canonical.count)
                 canonical.append(snapshot)
                 continue
             }
@@ -4915,8 +5079,8 @@ final class MonthlyRecapSnapshotStore {
             return lhs.hasActivity
         }
 
-        let lhsHasRankingEvidence = lhs.totalPlayDelta == 0 || !lhs.topSongs.isEmpty || !lhs.topArtists.isEmpty || !lhs.topAlbums.isEmpty
-        let rhsHasRankingEvidence = rhs.totalPlayDelta == 0 || !rhs.topSongs.isEmpty || !rhs.topArtists.isEmpty || !rhs.topAlbums.isEmpty
+        let lhsHasRankingEvidence = lhs.totalPlayDelta == 0 || lhs.unattributedPlayDelta > 0 || !lhs.topSongs.isEmpty || !lhs.topArtists.isEmpty || !lhs.topAlbums.isEmpty
+        let rhsHasRankingEvidence = rhs.totalPlayDelta == 0 || rhs.unattributedPlayDelta > 0 || !rhs.topSongs.isEmpty || !rhs.topArtists.isEmpty || !rhs.topAlbums.isEmpty
         if lhsHasRankingEvidence != rhsHasRankingEvidence {
             return lhsHasRankingEvidence
         }
@@ -5584,6 +5748,9 @@ final class MonthlyRecapSnapshotStore {
                     didMigrate = true
                 }
                 if migrateListenedArtistCountsIfNeeded(in: &stored) {
+                    didMigrate = true
+                }
+                if repairCollidingRecaps(in: &stored) {
                     didMigrate = true
                 }
                 if didMigrate {
@@ -6558,6 +6725,7 @@ private extension MonthlyRecapSnapshotStore.LibrarySnapshot {
         guard (syncPayload.reliabilityPolicyVersion ?? 0) >=
                 MonthlyRecapSnapshotStore.currentCounterReliabilityPolicyVersion,
               let snapshot = try? JSONDecoder.playCount.decode(Self.self, from: syncPayload.encodedSnapshot),
+              Set(snapshot.songs.map(\.id)).count == snapshot.songs.count,
               snapshot.syncIdentifier == syncPayload.id,
               snapshot.counterSignature == syncPayload.counterSignature else {
             return nil

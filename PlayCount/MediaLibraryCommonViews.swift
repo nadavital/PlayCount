@@ -315,13 +315,16 @@ struct ArtistArtworkView: View {
 
 struct MediaListRow<Artwork: View>: View {
     let rank: Int?
+    let rankStyle: RankBadgeView.Style
     let title: String
     let subtitle: String?
     let detail: String
     let badgeText: String
+    let titleLineLimit: Int
     let subtitleProminent: Bool
     private let artwork: Artwork
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var usesNarrowLayout = false
 
     init(
         rank: Int? = nil,
@@ -330,22 +333,34 @@ struct MediaListRow<Artwork: View>: View {
         detail: String,
         badgeText: String,
         subtitleProminent: Bool = false,
+        titleLineLimit: Int = 1,
+        rankStyle: RankBadgeView.Style = .prominentTopThree,
         @ViewBuilder artwork: () -> Artwork
     ) {
         self.rank = rank
+        self.rankStyle = rankStyle
         self.title = title
         self.subtitle = subtitle
         self.detail = detail
         self.badgeText = badgeText
         self.subtitleProminent = subtitleProminent
+        self.titleLineLimit = titleLineLimit
         self.artwork = artwork()
     }
 
     var body: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            accessibilityLayout
-        } else {
-            standardLayout
+        Group {
+            if dynamicTypeSize.isAccessibilitySize || usesNarrowLayout {
+                accessibilityLayout
+            } else {
+                standardLayout
+            }
+        }
+        .contentShape(Rectangle())
+        .onGeometryChange(for: Bool.self) { geometry in
+            geometry.size.width < (rank == nil ? 280 : 340)
+        } action: {
+            usesNarrowLayout = $0
         }
     }
 
@@ -356,7 +371,7 @@ struct MediaListRow<Artwork: View>: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
-                    .lineLimit(1)
+                    .lineLimit(titleLineLimit)
 
                 subtitleLine
 
@@ -380,7 +395,7 @@ struct MediaListRow<Artwork: View>: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.headline)
-                    .lineLimit(2)
+                    .lineLimit(max(2, titleLineLimit))
 
                 subtitleLine
 
@@ -400,7 +415,7 @@ struct MediaListRow<Artwork: View>: View {
     @ViewBuilder
     private var leadingIdentity: some View {
         if let rank {
-            RankBadgeView(rank: rank)
+            RankBadgeView(rank: rank, style: rankStyle)
         }
 
         artwork

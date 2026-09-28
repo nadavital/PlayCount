@@ -53,11 +53,14 @@ struct TopSongsView: View {
                     }
                 }
 
-                ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                    NavigationLink {
-                        SongInfoView(song: song, manager: manager)
-                    } label: {
-                        SongRow(song: song, sortMetric: sortMetric, rank: index + 1)
+                AdaptiveLibraryRows {
+                    ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                        NavigationLink {
+                            SongInfoView(song: song, manager: manager)
+                        } label: {
+                            SongRow(song: song, sortMetric: sortMetric, rank: index + 1)
+                        }
+                        .modifier(AdaptiveLibraryRowSurface())
                     }
                 }
             }

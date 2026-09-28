@@ -75,11 +75,8 @@ struct iPadLibraryView: View {
 
             Tab("Search", systemImage: "magnifyingglass", value: LibraryTab.search, role: .search) {
                 activeContent(for: .search) {
-                    NavigationStack {
-                        LibrarySearchView(manager: manager)
-                            .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
-                            .toolbar { toolbarContent }
-                    }
+                    LibrarySearchView(manager: manager)
+                        .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
                 }
             }
         }

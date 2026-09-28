@@ -38,6 +38,7 @@ final class RecapCloudSyncService {
             return false
         }
 
+        var didMergeRemote = false
         do {
             let remotePayloads: [RecapSnapshotSyncPayload]
             do {
@@ -52,7 +53,7 @@ final class RecapCloudSyncService {
             #if DEBUG
             print("Recap CloudKit sync fetched \(remotePayloads.count) remote payloads")
             #endif
-            let didMergeRemote = snapshotStore.mergeSyncPayloads(
+            didMergeRemote = snapshotStore.mergeSyncPayloads(
                 remotePayloads,
                 shouldCommit: shouldCommit
             )
@@ -71,6 +72,7 @@ final class RecapCloudSyncService {
                 }
                 guard !Task.isCancelled, await shouldContinue() else { return false }
                 let uploadPayloads = snapshotStore.syncPayloads(shouldCommit: shouldCommit)
+                guard shouldCommit() else { return didMergeRemote }
                 // Payload generation may itself compact/backfill and persist.
                 // A failed save returns no payloads; never reinterpret that as
                 // an authoritative request to delete the remote archive.
@@ -93,7 +95,10 @@ final class RecapCloudSyncService {
                 try await client.saveSnapshotPayloads(
                     uploadPayloads,
                     deletingPayloadIDs: deletingPayloadIDs,
-                    shouldContinue: shouldContinue
+                    shouldContinue: {
+                        guard shouldCommit(), !Task.isCancelled else { return false }
+                        return await shouldContinue()
+                    }
                 )
             } else {
                 #if DEBUG
@@ -108,7 +113,9 @@ final class RecapCloudSyncService {
             #if DEBUG
             print("Recap CloudKit sync failed: \(error)")
             #endif
-            return false
+            // The download was durably committed before the upload began.
+            // Preserve that result so callers can refresh the displayed counts.
+            return didMergeRemote
         }
     }
 
@@ -143,6 +150,13 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
     private struct RecapEvidenceEnvelope: Codable {
         let yearlyRecapSummaries: Data?
         let unattributedIntervals: Data
+        let archiveReliabilityPolicyVersion: Int?
+        let containsUnattributedIntervals: Bool?
+        let reliabilityPolicyVersion: Int?
+
+        var decodedIntervals: Data? {
+            containsUnattributedIntervals == false ? nil : unattributedIntervals
+        }
     }
 
     private static let containerIdentifier = "iCloud.com.nadavavital.PlayCount"
@@ -260,7 +274,8 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         try await saveManifest(
             payloadIDs: Self.manifestPayloadIDs(for: uniquePayloads.filter { !$0.isManifestArchiveOnly }),
             excludingPayloadIDs: manifestExclusions,
-            archive: Self.localManifestArchive(from: uniquePayloads)
+            archive: Self.localManifestArchive(from: uniquePayloads),
+            shouldContinue: shouldContinue
         )
         missingManifestPayloadIDs.removeAll()
         // The manifest is authoritative. Physical deletion is intentionally
@@ -302,27 +317,43 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
                 recordZoneIDs: [zoneID],
                 configurationsByRecordZoneID: [zoneID: configuration]
             )
-            operation.recordChangedBlock = { record in
-                guard record.recordType == self.recordType,
-                      let payload = Self.payload(from: record) else {
-                    return
+            let recordErrors = CloudKitRecordErrors()
+            operation.recordWasChangedBlock = { recordID, result in
+                switch result {
+                case .success(let record):
+                    guard record.recordType == self.recordType else { return }
+                    if let payload = Self.payload(from: record) {
+                        payloads.append(payload)
+                    } else {
+                        recordErrors.append(recordID: recordID, error: CocoaError(.coderReadCorrupt))
+                    }
+                case .failure(let error):
+                    recordErrors.append(recordID: recordID, error: error)
                 }
-                payloads.append(payload)
             }
 
             var nextToken: CKServerChangeToken?
             var moreComing = false
             var zoneError: Error?
-            operation.recordZoneFetchCompletionBlock = { _, serverChangeToken, _, zoneMoreComing, error in
-                zoneError = error
-                nextToken = serverChangeToken
-                moreComing = zoneMoreComing
+            operation.recordZoneFetchResultBlock = { _, result in
+                switch result {
+                case .success(let changes):
+                    nextToken = changes.serverChangeToken
+                    moreComing = changes.moreComing
+                case .failure(let error):
+                    zoneError = error
+                }
             }
-            operation.fetchRecordZoneChangesCompletionBlock = { error in
-                if let error = zoneError ?? error {
+            operation.fetchRecordZoneChangesResultBlock = { result in
+                if let error = recordErrors.error ?? zoneError {
                     continuation.resume(throwing: error)
                 } else {
-                    continuation.resume(returning: (nextToken, moreComing))
+                    switch result {
+                    case .success:
+                        continuation.resume(returning: (nextToken, moreComing))
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
 
@@ -364,6 +395,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
     private func fetchPayloadRecords(recordIDs: [CKRecord.ID]) async throws -> [RecapSnapshotSyncPayload] {
         try await withCheckedThrowingContinuation { continuation in
             let payloads = PayloadAccumulator()
+            let recordErrors = CloudKitRecordErrors()
             let operation = CKFetchRecordsOperation(recordIDs: recordIDs)
             operation.desiredKeys = [
                 Field.capturedAt,
@@ -378,17 +410,24 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
                 switch result {
                 case .success(let record):
                     guard let payload = Self.payload(from: record) else {
+                        recordErrors.append(recordID: recordID, error: CocoaError(.coderReadCorrupt))
                         return
                     }
                     payloads.append(payload)
                 case .failure(let error):
                     if Self.isOnlyMissingRecordError(error) {
                         self.missingManifestPayloadIDs.insert(recordID.recordName)
+                    } else {
+                        recordErrors.append(recordID: recordID, error: error)
                     }
                     return
                 }
             }
             operation.fetchRecordsResultBlock = { result in
+                if let error = recordErrors.error {
+                    continuation.resume(throwing: error)
+                    return
+                }
                 switch result {
                 case .success:
                     continuation.resume(returning: payloads.values)
@@ -433,7 +472,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             operation.savePolicy = savePolicy
             operation.qualityOfService = .utility
-            let errors = CloudKitRecordSaveErrors()
+            let errors = CloudKitRecordErrors()
             operation.perRecordSaveBlock = { recordID, result in
                 if case .failure(let error) = result {
                     errors.append(recordID: recordID, error: error)
@@ -461,12 +500,14 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
     private func saveManifest(
         payloadIDs: [String],
         excludingPayloadIDs: Set<String>,
-        archive: ManifestArchive?
+        archive: ManifestArchive?,
+        shouldContinue: @escaping @Sendable () async -> Bool
     ) async throws {
         try await saveManifest(
             payloadIDs: payloadIDs,
             excludingPayloadIDs: excludingPayloadIDs,
             archive: archive,
+            shouldContinue: shouldContinue,
             attempt: 0
         )
     }
@@ -475,8 +516,10 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         payloadIDs: [String],
         excludingPayloadIDs: Set<String>,
         archive: ManifestArchive?,
+        shouldContinue: @escaping @Sendable () async -> Bool,
         attempt: Int
     ) async throws {
+        guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
         let recordID = CKRecord.ID(recordName: manifestRecordName, zoneID: Self.recordZoneID)
         let existingRecord: CKRecord?
         do {
@@ -502,6 +545,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         }
 
         do {
+            guard !Task.isCancelled, await shouldContinue() else { throw CancellationError() }
             try await modify(
                 recordsToSave: [record],
                 // A record without a change tag is a conditional create. If two
@@ -521,6 +565,7 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
                 payloadIDs: mergedPayloadIDs,
                 excludingPayloadIDs: excludingPayloadIDs,
                 archive: archive,
+                shouldContinue: shouldContinue,
                 attempt: attempt + 1
             )
             return
@@ -555,21 +600,20 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         let record = CKRecord(recordType: "RecapSnapshot", recordID: recordID)
         record[Field.capturedAt] = payload.capturedAt as NSDate
         record[Field.counterSignature] = payload.counterSignature as NSString
-        if let reliabilityPolicyVersion = payload.reliabilityPolicyVersion {
-            record[Field.reliabilityPolicyVersion] = reliabilityPolicyVersion as NSNumber
-        }
-        if let archiveReliabilityPolicyVersion = payload.archiveReliabilityPolicyVersion {
-            record[Field.archiveReliabilityPolicyVersion] = archiveReliabilityPolicyVersion as NSNumber
-        }
         record[Field.payload] = payload.encodedSnapshot as NSData
         if let encodedRecaps = payload.encodedRecaps {
             record[Field.recapSummaries] = encodedRecaps as NSData
         }
-        if let encodedUnattributedIntervals = payload.encodedUnattributedIntervals,
+        // Keep archive metadata in the existing binary field: production
+        // CloudKit schemas cannot create new fields during a client upload.
+        if payload.encodedUnattributedIntervals != nil || payload.archiveReliabilityPolicyVersion != nil || payload.reliabilityPolicyVersion != nil,
            let envelope = try? JSONEncoder().encode(
                RecapEvidenceEnvelope(
                    yearlyRecapSummaries: payload.encodedYearlyRecaps,
-                   unattributedIntervals: encodedUnattributedIntervals
+                   unattributedIntervals: payload.encodedUnattributedIntervals ?? Data("[]".utf8),
+                   archiveReliabilityPolicyVersion: payload.archiveReliabilityPolicyVersion,
+                   containsUnattributedIntervals: payload.encodedUnattributedIntervals != nil,
+                   reliabilityPolicyVersion: payload.reliabilityPolicyVersion
                )
            ) {
             record[Field.yearlyRecapSummaries] = envelope as NSData
@@ -588,10 +632,12 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         let evidenceEnvelope = storedYearlyRecapData.flatMap {
             try? JSONDecoder().decode(RecapEvidenceEnvelope.self, from: $0)
         }
-        let yearlyRecapData = evidenceEnvelope?.yearlyRecapSummaries ?? storedYearlyRecapData
-        let unattributedIntervalsData = evidenceEnvelope?.unattributedIntervals
-        let reliabilityPolicyVersion = (record[Field.reliabilityPolicyVersion] as? NSNumber)?.intValue
-        let archiveReliabilityPolicyVersion = (record[Field.archiveReliabilityPolicyVersion] as? NSNumber)?.intValue
+        let yearlyRecapData = evidenceEnvelope.map { $0.yearlyRecapSummaries } ?? storedYearlyRecapData
+        let unattributedIntervalsData = evidenceEnvelope?.decodedIntervals
+        let reliabilityPolicyVersion = evidenceEnvelope?.reliabilityPolicyVersion ??
+            (record[Field.reliabilityPolicyVersion] as? NSNumber)?.intValue
+        let archiveReliabilityPolicyVersion = evidenceEnvelope?.archiveReliabilityPolicyVersion ??
+            (record[Field.archiveReliabilityPolicyVersion] as? NSNumber)?.intValue
 
         guard let capturedAt,
               let counterSignature = record[Field.counterSignature] as? String,
@@ -791,13 +837,14 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
                 (record[Field.capturedAt] as? NSDate).map({ $0 as Date }) else {
             return nil
         }
-        let policy = (record[Field.archiveReliabilityPolicyVersion] as? NSNumber)?.intValue ??
-            (record[Field.reliabilityPolicyVersion] as? NSNumber)?.intValue ?? 0
         let storedYearlyData = data(Field.yearlyRecapSummaries, from: record)
         let envelope = storedYearlyData.flatMap { try? JSONDecoder().decode(RecapEvidenceEnvelope.self, from: $0) }
+        let policy = envelope?.archiveReliabilityPolicyVersion ??
+            (record[Field.archiveReliabilityPolicyVersion] as? NSNumber)?.intValue ??
+            (record[Field.reliabilityPolicyVersion] as? NSNumber)?.intValue ?? 0
         let encodedRecaps = data(Field.recapSummaries, from: record)
-        let encodedYearlyRecaps = envelope?.yearlyRecapSummaries ?? storedYearlyData
-        let encodedUnattributedIntervals = envelope?.unattributedIntervals
+        let encodedYearlyRecaps = envelope.map { $0.yearlyRecapSummaries } ?? storedYearlyData
+        let encodedUnattributedIntervals = envelope?.decodedIntervals
         let validRecaps = MonthlyRecapSnapshotStore.isValidMonthlyArchiveEvidence(encodedRecaps)
             ? encodedRecaps : nil
         let validYearlyRecaps = MonthlyRecapSnapshotStore.isValidYearlyArchiveEvidence(encodedYearlyRecaps)
@@ -816,19 +863,20 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         )
     }
 
-    private static func apply(_ archive: ManifestArchive, to record: CKRecord) {
+    static func apply(_ archive: ManifestArchive, to record: CKRecord) {
         record[Field.capturedAt] = archive.capturedAt as NSDate
-        record[Field.archiveReliabilityPolicyVersion] = archive.reliabilityPolicyVersion as NSNumber
         if let encodedRecaps = archive.encodedRecaps {
             record[Field.recapSummaries] = encodedRecaps as NSData
         } else {
             record[Field.recapSummaries] = nil
         }
-        if let encodedUnattributedIntervals = archive.encodedUnattributedIntervals,
-           let envelope = try? JSONEncoder().encode(
+        if let envelope = try? JSONEncoder().encode(
                RecapEvidenceEnvelope(
                    yearlyRecapSummaries: archive.encodedYearlyRecaps,
-                   unattributedIntervals: encodedUnattributedIntervals
+                   unattributedIntervals: archive.encodedUnattributedIntervals ?? Data("[]".utf8),
+                   archiveReliabilityPolicyVersion: archive.reliabilityPolicyVersion,
+                   containsUnattributedIntervals: archive.encodedUnattributedIntervals != nil,
+                   reliabilityPolicyVersion: nil
                )
            ) {
             record[Field.yearlyRecapSummaries] = envelope as NSData
@@ -845,20 +893,24 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         (record[key] as? Data) ?? (record[key] as? NSData).map { $0 as Data }
     }
 
-    private static func isMissingZoneError(_ error: Error) -> Bool {
+    static func isMissingZoneError(_ error: Error) -> Bool {
         guard let ckError = error as? CKError else { return false }
-        if ckError.code == .zoneNotFound || ckError.code == .unknownItem {
+        if ckError.code == .zoneNotFound {
             return true
         }
-        return ckError.partialErrorsByItemID?.values.contains { isMissingZoneError($0) } == true
+        guard ckError.code == .partialFailure,
+              let errors = ckError.partialErrorsByItemID, !errors.isEmpty else { return false }
+        return errors.values.allSatisfy(isMissingZoneError)
     }
 
-    private static func isServerRecordChangedError(_ error: Error) -> Bool {
+    static func isServerRecordChangedError(_ error: Error) -> Bool {
         guard let ckError = error as? CKError else { return false }
         if ckError.code == .serverRecordChanged {
             return true
         }
-        return ckError.partialErrorsByItemID?.values.contains { isServerRecordChangedError($0) } == true
+        guard ckError.code == .partialFailure,
+              let errors = ckError.partialErrorsByItemID, !errors.isEmpty else { return false }
+        return errors.values.allSatisfy(isServerRecordChangedError)
     }
 
     static func decodedManifestPayloadIDs(_ data: Data) throws -> [String] {
@@ -872,12 +924,8 @@ final class CloudKitRecapSyncClient: RecapCloudSyncClient {
         return try decodedManifestPayloadIDs(data)
     }
 
-    private static func isMissingManifestError(_ error: Error) -> Bool {
-        guard let ckError = error as? CKError else { return false }
-        if ckError.code == .unknownItem {
-            return true
-        }
-        return ckError.partialErrorsByItemID?.values.contains { isMissingManifestError($0) } == true
+    static func isMissingManifestError(_ error: Error) -> Bool {
+        isOnlyMissingRecordError(error)
     }
 
     static func isOnlyMissingRecordError(_ error: Error) -> Bool {
@@ -941,7 +989,7 @@ private final class LockedStringSet: @unchecked Sendable {
     }
 }
 
-private final class CloudKitRecordSaveErrors {
+final class CloudKitRecordErrors {
     private let lock = NSLock()
     private var failures: [(CKRecord.ID, Error)] = []
 
@@ -949,24 +997,17 @@ private final class CloudKitRecordSaveErrors {
         lock.lock()
         defer { lock.unlock() }
         guard !failures.isEmpty else { return nil }
-        return CloudKitPartialRecordSaveError(failures: failures)
+        // Preserve CloudKit's error structure so manifest CAS conflicts remain
+        // recognizable even when the operation only reports per-record errors.
+        return CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: Dictionary(failures, uniquingKeysWith: { _, latest in latest })
+        ])
     }
 
     func append(recordID: CKRecord.ID, error: Error) {
         lock.lock()
         failures.append((recordID, error))
         lock.unlock()
-    }
-}
-
-private struct CloudKitPartialRecordSaveError: LocalizedError {
-    let failures: [(CKRecord.ID, Error)]
-
-    var errorDescription: String? {
-        guard let first = failures.first else {
-            return "CloudKit record save failed."
-        }
-        return "CloudKit failed to save \(failures.count) recap snapshot record(s). First failure \(first.0.recordName): \(first.1)"
     }
 }
 

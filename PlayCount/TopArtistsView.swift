@@ -53,11 +53,14 @@ struct TopArtistsView: View {
                     }
                 }
 
-                ForEach(Array(artists.enumerated()), id: \.element.id) { index, artist in
-                    NavigationLink {
-                        ArtistInfoView(artist: artist, manager: manager)
-                    } label: {
-                        ArtistRow(artist: artist, sortMetric: sortMetric, rank: index + 1)
+                AdaptiveLibraryRows {
+                    ForEach(Array(artists.enumerated()), id: \.element.id) { index, artist in
+                        NavigationLink {
+                            ArtistInfoView(artist: artist, manager: manager)
+                        } label: {
+                            ArtistRow(artist: artist, sortMetric: sortMetric, rank: index + 1)
+                        }
+                        .modifier(AdaptiveLibraryRowSurface())
                     }
                 }
             }

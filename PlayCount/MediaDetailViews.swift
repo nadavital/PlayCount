@@ -169,11 +169,6 @@ struct SongInfoView: View {
         manager.artist(withPersistentID: song.artistPersistentID)
     }
 
-    private var relatedColumns: [GridItem] {
-        let count = isRegularWidth ? 2 : 1
-        return Array(repeating: GridItem(.flexible(minimum: 280), spacing: 16, alignment: .top), count: count)
-    }
-
     private static let relatedSongLimit = 6
 
     private var detailRecapContext: RecapDrilldownContext? {
@@ -194,46 +189,57 @@ struct SongInfoView: View {
         let albumSongs = album.map { manager.songs(for: $0) } ?? []
         let artistSongs = artist.map { manager.songs(for: $0) } ?? []
 
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 32) {
-                SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
-                    .frame(maxWidth: .infinity)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 32) {
+                    SongDetailHeader(song: song, album: album, artist: artist, manager: manager, recapContext: resolvedRecapContext)
+                        .frame(maxWidth: .infinity)
 
-                MediaDetailMilestonesSection(
-                    milestones: manager.milestones(for: song),
-                    subject: song.title,
-                    scopeLabel: "Song",
-                    artwork: song.artwork,
-                    artworkCornerRadius: 16
-                )
+                    if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
+                        MonthlyDetailSongSection(
+                            title: resolvedRecapContext?.songSectionTitle ?? "This Month",
+                            periodTitle: resolvedRecapContext?.monthTitle ?? "This Month",
+                            song: monthlySong
+                        )
+                    }
 
-                if let monthlySong = resolvedRecapContext?.rankedSong(for: song) {
-                    MonthlyDetailSongSection(
-                        title: resolvedRecapContext?.songSectionTitle ?? "This Month",
-                        periodTitle: resolvedRecapContext?.monthTitle ?? "This Month",
-                        song: monthlySong
+                    if let periodSummaries = resolvedRecapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
+                        RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
+                    }
+
+                    SongRelatedSections(
+                        song: song,
+                        albumSongs: albumSongs,
+                        artistSongs: artistSongs,
+                        manager: manager,
+                        recapContext: resolvedRecapContext,
+                        displayLimit: Self.relatedSongLimit
+                    )
+                    .id("song-related-sections")
+
+                    MediaDetailMilestonesSection(
+                        milestones: manager.milestones(for: song),
+                        subject: song.title,
+                        scopeLabel: "Song",
+                        artwork: song.artwork,
+                        artworkCornerRadius: 16
                     )
                 }
-
-                if let periodSummaries = resolvedRecapContext?.periodSummaries(for: song), !periodSummaries.isEmpty {
-                    RecapDetailPeriodBreakdownSection(title: "By Month", summaries: periodSummaries)
-                }
-
-                SongRelatedSections(
-                    song: song,
-                    albumSongs: albumSongs,
-                    artistSongs: artistSongs,
-                    columns: relatedColumns,
-                    manager: manager,
-                    recapContext: resolvedRecapContext,
-                    displayLimit: Self.relatedSongLimit
-                )
+                .padding(.horizontal, isRegularWidth ? 36 : 24)
+                .padding(.top, isRegularWidth ? 28 : 12)
+                .padding(.bottom, bottomPadding)
+                .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(.horizontal, isRegularWidth ? 36 : 24)
-            .padding(.top, isRegularWidth ? 28 : 12)
-            .padding(.bottom, bottomPadding)
-            .frame(maxWidth: isRegularWidth ? 1080 : .infinity, alignment: .topLeading)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .accessibilityIdentifier("song-detail")
+            .task {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotSongRelated") {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    proxy.scrollTo("song-related-sections", anchor: .top)
+                }
+                #endif
+            }
         }
         .scrollIndicators(.hidden)
         .playCountSoftTopScrollEdge()
@@ -269,7 +275,7 @@ struct SongInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
+        reservesBottomAccessorySpace ? 32 : 48
     }
 
 }
@@ -431,7 +437,7 @@ struct AlbumInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
+        reservesBottomAccessorySpace ? 32 : 48
     }
 }
 
@@ -664,7 +670,7 @@ struct ArtistInfoView: View {
     }
 
     private var bottomPadding: CGFloat {
-        reservesBottomAccessorySpace ? (isRegularWidth ? 132 : 148) : 48
+        reservesBottomAccessorySpace ? 32 : 48
     }
 }
 
@@ -1092,6 +1098,8 @@ private struct MediaDetailHero<Artwork: View, Identity: View>: View {
     private let artwork: (CGFloat) -> Artwork
     private let identity: Identity
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var divisionColumns: VerticalDivisionColumns?
 
     init(
         maximumArtworkSize: CGFloat,
@@ -1119,15 +1127,34 @@ private struct MediaDetailHero<Artwork: View, Identity: View>: View {
 
     var body: some View {
         MediaDetailHeaderGroup {
-            if horizontalSizeClass == .regular {
-                HStack(alignment: .center, spacing: 28) {
-                    heroArtwork
-                        .frame(width: maximumArtworkSize)
-                    details
+            if horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize {
+                Group {
+                    if let divisionColumns {
+                        HStack(spacing: divisionColumns.spacing) {
+                            heroArtwork
+                                .frame(width: min(220, divisionColumns.leading))
+                                .frame(width: divisionColumns.leading)
+                            details.frame(width: divisionColumns.trailing)
+                        }
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 28) {
+                                heroArtwork.frame(width: 220)
+                                details.frame(minWidth: 280, maxWidth: .infinity)
+                            }
+                            VStack(spacing: 14) {
+                                heroArtwork.frame(maxWidth: 160)
+                                details
+                            }
+                        }
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .modifier(VerticalDivisionObserver(columns: $divisionColumns))
             } else {
                 VStack(spacing: 14) {
                     heroArtwork
+                        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? 160 : 220)
                     details
                 }
             }
@@ -1581,8 +1608,8 @@ private struct MediaDetailResponsiveHero<Content: View>: View {
             content(resolvedSize)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .frame(maxWidth: maximumSize)
         .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: maximumSize)
     }
 }
 
@@ -1640,10 +1667,20 @@ private struct SongRelatedSections: View {
     let song: TopSong
     let albumSongs: [TopSong]
     let artistSongs: [TopSong]
-    let columns: [GridItem]
     let manager: MediaLibraryManager
     let recapContext: RecapDrilldownContext?
     let displayLimit: Int
+    @State private var divisionColumns: VerticalDivisionColumns?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var fitsTwoColumns = false
+
+    private var columns: [GridItem] {
+        if !dynamicTypeSize.isAccessibilitySize, let divisionColumns {
+            return divisionColumns.gridItems
+        }
+        let count = fitsTwoColumns && !dynamicTypeSize.isAccessibilitySize ? 2 : 1
+        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16, alignment: .top), count: count)
+    }
 
     var body: some View {
         if !albumSongs.isEmpty || !artistSongs.isEmpty {
@@ -1670,6 +1707,12 @@ private struct SongRelatedSections: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity)
+            .modifier(VerticalDivisionObserver(columns: $divisionColumns))
+            .onGeometryChange(for: Bool.self) { $0.size.width >= 656 } action: {
+                fitsTwoColumns = $0
+            }
+            .accessibilityIdentifier("song-related-sections")
         }
     }
 }
@@ -1705,11 +1748,8 @@ private struct AlbumSongsSection: View {
     let recapContext: RecapDrilldownContext?
     @State private var order: AlbumSongOrder = .tracklist
 
-    private var orderedSongs: [TopSong] {
-        order.sorted(songs)
-    }
-
     var body: some View {
+        let orderedSongs = order.sorted(songs)
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Songs")
@@ -2112,32 +2152,14 @@ private struct MonthlyDetailSongDeltaRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            ArtworkView(
-                artwork: song.artwork,
-                size: CGSize(width: 52, height: 52),
-                cornerRadius: 10
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(song.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Text(subtitle ?? song.artist)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                Text(song.listeningDuration.formattedListeningMinutes)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 12)
-
-            MetricBadge(text: "+\(song.playDelta)")
+        MediaListRow(
+            title: song.title,
+            subtitle: subtitle ?? song.artist,
+            detail: song.listeningDuration.formattedListeningMinutes,
+            badgeText: "+\(song.playDelta)",
+            titleLineLimit: 2
+        ) {
+            ArtworkView(artwork: song.artwork, size: CGSize(width: 52, height: 52), cornerRadius: 10)
         }
     }
 }
@@ -2225,6 +2247,7 @@ private struct MediaDetailBackground: View {
     let artwork: MPMediaItemArtwork?
     let cacheKey: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var artworkColorComponents: (Double, Double, Double)?
 
     init(artwork: MPMediaItemArtwork?, cacheKey: String) {
@@ -2245,6 +2268,7 @@ private struct MediaDetailBackground: View {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
+                .opacity(horizontalSizeClass == .regular ? 0.16 : 1)
                 .transition(.opacity)
             }
 

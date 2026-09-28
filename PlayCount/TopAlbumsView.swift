@@ -53,11 +53,14 @@ struct TopAlbumsView: View {
                     }
                 }
 
-                ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
-                    NavigationLink {
-                        AlbumInfoView(album: album, manager: manager)
-                    } label: {
-                        AlbumRow(album: album, sortMetric: sortMetric, rank: index + 1)
+                AdaptiveLibraryRows {
+                    ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
+                        NavigationLink {
+                            AlbumInfoView(album: album, manager: manager)
+                        } label: {
+                            AlbumRow(album: album, sortMetric: sortMetric, rank: index + 1)
+                        }
+                        .modifier(AdaptiveLibraryRowSurface())
                     }
                 }
             }

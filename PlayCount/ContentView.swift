@@ -98,6 +98,20 @@ private struct AuthorizedLibraryView: View {
             false
             #endif
         }
+
+        static func screenshotItemIndex(for argument: String) -> Int {
+            #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            guard let index = arguments.firstIndex(of: argument),
+                  arguments.indices.contains(index + 1),
+                  let value = Int(arguments[index + 1]) else {
+                return 0
+            }
+            return max(0, value)
+            #else
+            return 0
+            #endif
+        }
     }
 
     @ObservedObject var manager: MediaLibraryManager
@@ -163,13 +177,11 @@ private struct AuthorizedLibraryView: View {
             }
 
             Tab("Search", systemImage: "magnifyingglass", value: LibraryTab.search, role: .search) {
-                NavigationStack {
-                    LibrarySearchView(manager: manager)
-                        .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
-                        .toolbar { toolbarContent }
-                }
+                LibrarySearchView(manager: manager)
+                    .libraryStatusOverlay(isLoading: manager.isLoading, message: manager.errorMessage)
             }
         }
+        .tabViewStyle(.tabBarOnly)
         .tabBarMinimizeBehavior(.onScrollDown)
         .modifier(
             NowPlayingAccessoryModifier(
@@ -213,12 +225,18 @@ private struct AuthorizedLibraryView: View {
         .task {
             guard LibraryTab.screenshotPresentsArtistDetail else { return }
             try? await Task.sleep(for: .milliseconds(350))
-            presentedScreenshotArtist = manager.topArtists.first
+            let index = LibraryTab.screenshotItemIndex(for: "-PlayCountScreenshotArtistIndex")
+            if manager.topArtists.indices.contains(index) {
+                presentedScreenshotArtist = manager.topArtists[index]
+            }
         }
         .task {
             guard LibraryTab.screenshotPresentsAlbumDetail else { return }
             try? await Task.sleep(for: .milliseconds(350))
-            presentedScreenshotAlbum = manager.topAlbums.first
+            let index = LibraryTab.screenshotItemIndex(for: "-PlayCountScreenshotAlbumIndex")
+            if manager.topAlbums.indices.contains(index) {
+                presentedScreenshotAlbum = manager.topAlbums[index]
+            }
         }
         .onChange(of: manager.nowPlayingState) { _, state in
             guard let state else {
@@ -404,4 +422,97 @@ private struct AccessDeniedView: View {
 
 #Preview {
     ContentView()
+}
+
+
+/// Use available width for rankings while keeping large text in one readable column.
+struct AdaptiveLibraryRows<Content: View>: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ViewBuilder var content: Content
+    @State private var divisionColumns: VerticalDivisionColumns?
+
+    private var columns: [GridItem] {
+        if let divisionColumns {
+            return divisionColumns.gridItems
+        }
+        return [GridItem(.adaptive(minimum: 340), spacing: 12)]
+    }
+
+    var body: some View {
+        if horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize {
+            LazyVGrid(columns: columns, spacing: 12) {
+                content
+            }
+            .frame(maxWidth: .infinity)
+            .modifier(VerticalDivisionObserver(columns: $divisionColumns))
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        } else {
+            content
+        }
+    }
+}
+
+struct VerticalDivisionColumns: Equatable {
+    let leading: CGFloat
+    let trailing: CGFloat
+    let spacing: CGFloat
+
+    var gridItems: [GridItem] {
+        [
+            GridItem(.fixed(leading), spacing: spacing, alignment: .top),
+            GridItem(.fixed(trailing), spacing: 0, alignment: .top)
+        ]
+    }
+}
+
+struct VerticalDivisionObserver: ViewModifier {
+    @Binding var columns: VerticalDivisionColumns?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if canImport(SwiftUI, _version: 8.0.85)
+        if #available(iOS 27.1, *) {
+            content.onGeometryChange(for: VerticalDivisionColumns?.self) { geometry in
+                // Keep each card on one side of an active book fold. Horizontal
+                // divisions retain the grid's continuous vertical scrolling.
+                guard let division = geometry.reservedRegions(kind: .division).first(where: {
+                    $0.isActive && $0.frame.height > $0.frame.width &&
+                    $0.frame.minX > 0 && $0.frame.maxX < geometry.size.width
+                }) else { return nil }
+                let leading = division.frame.minX - division.margins.leading
+                let trailing = geometry.size.width - division.frame.maxX - division.margins.trailing
+                guard leading > 0, trailing > 0 else { return nil }
+                return VerticalDivisionColumns(
+                    leading: leading,
+                    trailing: trailing,
+                    spacing: geometry.size.width - leading - trailing
+                )
+            } action: { columns = $0 }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+struct AdaptiveLibraryRowSurface: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        if horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize {
+            content
+                .buttonStyle(.plain)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.background, in: .rect(cornerRadius: 18))
+        } else {
+            content
+        }
+    }
 }

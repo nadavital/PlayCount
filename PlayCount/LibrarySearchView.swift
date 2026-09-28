@@ -2,9 +2,23 @@ import SwiftUI
 
 struct LibrarySearchView: View {
     @ObservedObject var manager: MediaLibraryManager
+    @ObservedObject private var libraryUpdates: MediaLibraryManager.DetailPresentationUpdates
     @State private var searchText: String = ""
     @State private var settledSearchText: String = ""
     @State private var selectedDomain: SearchDomain = .all
+    @State private var selectedResult: SearchResult?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var preferredCompactColumn: NavigationSplitViewColumn = .sidebar
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #if DEBUG
+    @State private var hasAppliedScreenshotSelection = false
+    #endif
+
+    private enum SearchResult: Hashable {
+        case song(UInt64)
+        case album(UInt64)
+        case artist(UInt64, String)
+    }
 
     private enum SearchDomain: String, CaseIterable, Identifiable {
         case all
@@ -35,6 +49,7 @@ struct LibrarySearchView: View {
 
     init(manager: MediaLibraryManager) {
         self.manager = manager
+        _libraryUpdates = ObservedObject(wrappedValue: manager.detailPresentationUpdates)
 
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -52,6 +67,88 @@ struct LibrarySearchView: View {
     }
 
     var body: some View {
+        let _ = libraryUpdates.revision
+        NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $preferredCompactColumn) {
+            resultsList
+                .environment(\.horizontalSizeClass, .compact)
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: Text(selectedDomain.searchPrompt))
+                .searchScopes($selectedDomain) {
+                    ForEach(SearchDomain.allCases) { domain in
+                        Text(domain.title).tag(domain)
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        LibraryMetricPicker(selection: $manager.sortMetric)
+                    }
+                }
+                .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 480)
+        } detail: {
+            NavigationStack {
+                resultDetail
+                    .navigationBarBackButtonHidden(horizontalSizeClass == .compact)
+                    .toolbar {
+                        if horizontalSizeClass == .compact {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Search", systemImage: "chevron.backward") {
+                                    preferredCompactColumn = .sidebar
+                                }
+                                .accessibilityLabel("Back to Search")
+                                .accessibilityIdentifier("search-back")
+                            }
+                        }
+                    }
+            }
+            .id(selectedResult)
+        }
+        .navigationSplitViewStyle(.balanced)
+            .task {
+                #if DEBUG
+                if !hasAppliedScreenshotSelection,
+                   ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotSearchSelection"),
+                   let song = manager.topSongs.first {
+                    hasAppliedScreenshotSelection = true
+                    select(.song(song.id))
+                }
+                #endif
+            }
+            .task(id: searchText) {
+                let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(180))
+                }
+                guard !Task.isCancelled else { return }
+                settledSearchText = trimmed
+            }
+    }
+
+    private var library: MediaLibraryManager.SearchPresentation { manager.searchPresentation }
+
+    @ViewBuilder
+    private var resultDetail: some View {
+        switch selectedResult {
+        case .song(let id):
+            if let song = library.songs.first(where: { id != 0 && $0.id == id }) {
+                SongInfoView(song: song, manager: manager)
+            } else { unavailableResult }
+        case .album(let id):
+            if let album = library.albums.first(where: { id != 0 && $0.id == id }) {
+                AlbumInfoView(album: album, manager: manager)
+            } else { unavailableResult }
+        case .artist(let id, let name):
+            if let artist = library.artists.first(where: { id != 0 && $0.id == id }) ?? library.artists.first(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) {
+                ArtistInfoView(artist: artist, manager: manager)
+            } else { unavailableResult }
+        case nil:
+            ContentUnavailableView("Explore Your Library", systemImage: "music.note.magnifyingglass", description: Text("Select a song, album, or artist to see its listening history."))
+        }
+    }
+
+    private var unavailableResult: some View {
+        ContentUnavailableView("No Longer in Your Library", systemImage: "music.note", description: Text("Select another search result."))
+    }
+
+    private var resultsList: some View {
         List {
             if manager.isLoading && !manager.hasLoadedInitialSnapshot {
                 LoadingListSection(title: manager.loadingStage.message ?? "Indexing your media library…")
@@ -67,20 +164,6 @@ struct LibrarySearchView: View {
         .playCountSoftTopScrollEdge()
         .navigationTitle("Search")
         .playCountPrimaryTitleDisplayMode()
-        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(selectedDomain.searchPrompt))
-        .searchScopes($selectedDomain) {
-            ForEach(SearchDomain.allCases) { domain in
-                Text(domain.title).tag(domain)
-            }
-        }
-        .task(id: searchText) {
-            let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                try? await Task.sleep(for: .milliseconds(180))
-            }
-            guard !Task.isCancelled else { return }
-            settledSearchText = trimmed
-        }
     }
 
     private var trimmedQuery: String {
@@ -104,7 +187,7 @@ struct LibrarySearchView: View {
     private var filteredSongs: [TopSong] {
         let query = trimmedQuery
         guard !query.isEmpty else { return [] }
-        return boundedMatches(in: manager.librarySongs) {
+        return boundedMatches(in: library.songs) {
                 $0.title.localizedCaseInsensitiveContains(query) ||
                 $0.artist.localizedCaseInsensitiveContains(query) ||
                 $0.albumTitle.localizedCaseInsensitiveContains(query)
@@ -115,7 +198,7 @@ struct LibrarySearchView: View {
 
     @ViewBuilder
     private var suggestionsContent: some View {
-        if manager.topSongs.isEmpty && manager.topAlbums.isEmpty && manager.topArtists.isEmpty {
+        if library.songs.isEmpty && library.topAlbums.isEmpty && library.topArtists.isEmpty {
             EmptyLibrarySection(
                 systemImage: "magnifyingglass",
                 title: "Search Your Library",
@@ -134,12 +217,15 @@ struct LibrarySearchView: View {
 
             if selectedDomain == .all || selectedDomain == .songs {
                 Section("Recently Played") {
-                    if manager.recentlyPlayedSongs.isEmpty {
+                    if library.recentlyPlayedSongs.isEmpty {
                         Label("No recent library plays yet", systemImage: "clock.arrow.circlepath")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(manager.recentlyPlayedSongs.prefix(5)) { song in
-                            recentSongLink(song)
+                        AdaptiveLibraryRows {
+                            ForEach(library.recentlyPlayedSongs.prefix(5)) { song in
+                                recentSongLink(song)
+                                    .modifier(AdaptiveLibraryRowSurface())
+                            }
                         }
                     }
                 }
@@ -147,16 +233,22 @@ struct LibrarySearchView: View {
 
             if selectedDomain == .all || selectedDomain == .albums {
                 Section("Top Albums") {
-                    ForEach(manager.topAlbums.prefix(3)) { album in
-                        albumLink(album)
+                    AdaptiveLibraryRows {
+                        ForEach(library.topAlbums.prefix(3)) { album in
+                            albumLink(album)
+                                .modifier(AdaptiveLibraryRowSurface())
+                        }
                     }
                 }
             }
 
             if selectedDomain == .all || selectedDomain == .artists {
                 Section("Top Artists") {
-                    ForEach(manager.topArtists.prefix(3)) { artist in
-                        artistLink(artist)
+                    AdaptiveLibraryRows {
+                        ForEach(library.topArtists.prefix(3)) { artist in
+                            artistLink(artist)
+                                .modifier(AdaptiveLibraryRowSurface())
+                        }
                     }
                 }
             }
@@ -179,24 +271,33 @@ struct LibrarySearchView: View {
         } else {
             if !songs.isEmpty {
                 Section("Songs") {
-                    ForEach(songs.prefix(8)) { song in
-                        songLink(song)
+                    AdaptiveLibraryRows {
+                        ForEach(songs.prefix(8)) { song in
+                            songLink(song)
+                                .modifier(AdaptiveLibraryRowSurface())
+                        }
                     }
                 }
             }
 
             if !albums.isEmpty {
                 Section("Albums") {
-                    ForEach(albums.prefix(8)) { album in
-                        albumLink(album)
+                    AdaptiveLibraryRows {
+                        ForEach(albums.prefix(8)) { album in
+                            albumLink(album)
+                                .modifier(AdaptiveLibraryRowSurface())
+                        }
                     }
                 }
             }
 
             if !artists.isEmpty {
                 Section("Artists") {
-                    ForEach(artists.prefix(8)) { artist in
-                        artistLink(artist)
+                    AdaptiveLibraryRows {
+                        ForEach(artists.prefix(8)) { artist in
+                            artistLink(artist)
+                                .modifier(AdaptiveLibraryRowSurface())
+                        }
                     }
                 }
             }
@@ -206,7 +307,7 @@ struct LibrarySearchView: View {
     private var filteredAlbums: [TopAlbum] {
         let query = trimmedQuery
         guard !query.isEmpty else { return [] }
-        return boundedMatches(in: manager.libraryAlbums) {
+        return boundedMatches(in: library.albums) {
                 $0.title.localizedCaseInsensitiveContains(query) ||
                 $0.artist.localizedCaseInsensitiveContains(query)
             } areInIncreasingOrder: { lhs, rhs in
@@ -217,7 +318,7 @@ struct LibrarySearchView: View {
     private var filteredArtists: [TopArtist] {
         let query = trimmedQuery
         guard !query.isEmpty else { return [] }
-        return boundedMatches(in: manager.libraryArtists) {
+        return boundedMatches(in: library.artists) {
                 $0.name.localizedCaseInsensitiveContains(query)
             } areInIncreasingOrder: { lhs, rhs in
                 lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
@@ -256,11 +357,10 @@ struct LibrarySearchView: View {
                 message: "Try a different title or artist."
             )
         } else {
-            ForEach(songs) { song in
-                NavigationLink {
-                    SongInfoView(song: song, manager: manager)
-                } label: {
-                    SongRow(song: song, sortMetric: manager.sortMetric)
+            AdaptiveLibraryRows {
+                ForEach(songs) { song in
+                    songLink(song)
+                        .modifier(AdaptiveLibraryRowSurface())
                 }
             }
         }
@@ -276,11 +376,10 @@ struct LibrarySearchView: View {
                 message: "We couldn't find albums that match your search."
             )
         } else {
-            ForEach(albums) { album in
-                NavigationLink {
-                    AlbumInfoView(album: album, manager: manager)
-                } label: {
-                    AlbumRow(album: album, sortMetric: manager.sortMetric)
+            AdaptiveLibraryRows {
+                ForEach(albums) { album in
+                    albumLink(album)
+                        .modifier(AdaptiveLibraryRowSurface())
                 }
             }
         }
@@ -296,27 +395,35 @@ struct LibrarySearchView: View {
                 message: "Adjust your spelling or search for another artist."
             )
         } else {
-            ForEach(artists) { artist in
-                NavigationLink {
-                    ArtistInfoView(artist: artist, manager: manager)
-                } label: {
-                    ArtistRow(artist: artist, sortMetric: manager.sortMetric)
+            AdaptiveLibraryRows {
+                ForEach(artists) { artist in
+                    artistLink(artist)
+                        .modifier(AdaptiveLibraryRowSurface())
                 }
             }
         }
     }
 
+    private func select(_ result: SearchResult) {
+        selectedResult = result
+        preferredCompactColumn = .detail
+    }
+
     private func songLink(_ song: TopSong) -> some View {
-        NavigationLink {
-            SongInfoView(song: song, manager: manager)
+        Button {
+            select(.song(song.id))
         } label: {
             SongRow(song: song, sortMetric: manager.sortMetric)
         }
+        .buttonStyle(.plain)
+        .listRowBackground(selectedResult == .song(song.id) ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityAddTraits(selectedResult == .song(song.id) ? .isSelected : [])
+        .playCountSongEntityIdentifier(song)
     }
 
     private func recentSongLink(_ song: TopSong) -> some View {
-        NavigationLink {
-            SongInfoView(song: song, manager: manager)
+        Button {
+            select(.song(song.id))
         } label: {
             HStack(spacing: 12) {
                 ArtworkView(
@@ -345,29 +452,40 @@ struct LibrarySearchView: View {
                         .lineLimit(1)
                 }
             }
+            .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
         }
+        .buttonStyle(.plain)
+        .listRowBackground(selectedResult == .song(song.id) ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityAddTraits(selectedResult == .song(song.id) ? .isSelected : [])
+        .playCountSongEntityIdentifier(song)
     }
 
     private func albumLink(_ album: TopAlbum) -> some View {
-        NavigationLink {
-            AlbumInfoView(album: album, manager: manager)
+        Button {
+            select(.album(album.id))
         } label: {
             AlbumRow(album: album, sortMetric: manager.sortMetric)
         }
+        .buttonStyle(.plain)
+        .listRowBackground(selectedResult == .album(album.id) ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityAddTraits(selectedResult == .album(album.id) ? .isSelected : [])
+        .playCountAlbumEntityIdentifier(album)
     }
 
     private func artistLink(_ artist: TopArtist) -> some View {
-        NavigationLink {
-            ArtistInfoView(artist: artist, manager: manager)
+        Button {
+            select(.artist(artist.id, artist.name))
         } label: {
             ArtistRow(artist: artist, sortMetric: manager.sortMetric)
         }
+        .buttonStyle(.plain)
+        .listRowBackground(selectedResult == .artist(artist.id, artist.name) ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityAddTraits(selectedResult == .artist(artist.id, artist.name) ? .isSelected : [])
+        .playCountArtistEntityIdentifier(artist)
     }
 }
 
 #Preview {
-    NavigationStack {
-        LibrarySearchView(manager: MediaLibraryManager())
-    }
+    LibrarySearchView(manager: MediaLibraryManager())
 }

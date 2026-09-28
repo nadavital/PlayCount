@@ -3,6 +3,57 @@ import CloudKit
 @testable import PlayCount
 
 final class RecapCloudSyncServiceTests: XCTestCase {
+    func testUploadFailurePreservesDownloadedCountsAndRetryDoesNotDoubleCount() async {
+        let remote = makeStore(named: "upload-failure-remote")
+        let local = makeStore(named: "upload-failure-local")
+        let start = date(year: 2026, month: 9, day: 1)
+        let end = start.addingTimeInterval(3600)
+        _ = remote.record(songs: [song(id: 1, title: "Track", playCount: 100)], at: start, reason: .foreground)
+        _ = remote.record(songs: [song(id: 1, title: "Track", playCount: 104)], at: end, reason: .foreground)
+        let payloads = remote.syncPayloads()
+        let failing = FakeRecapCloudSyncClient(remotePayloads: payloads, saveError: CKError(.networkFailure))
+        let changed = await RecapCloudSyncService(client: failing).sync(snapshotStore: local)
+        XCTAssertTrue(changed, "A failed upload must still report the committed download")
+        XCTAssertEqual(local.recap(forMonthContaining: end).totalPlayDelta, 4)
+
+        let retry = FakeRecapCloudSyncClient(remotePayloads: payloads)
+        _ = await RecapCloudSyncService(client: retry).sync(snapshotStore: local)
+        XCTAssertFalse(retry.savedPayloads.isEmpty)
+        XCTAssertEqual(local.recap(forMonthContaining: end).totalPlayDelta, 4)
+        XCTAssertTrue(local.recapDiagnosticsReport(at: end).yearlyTotalsMatchMonthlyLedgers)
+    }
+
+    func testPerRecordManifestConflictRemainsRetryable() throws {
+        let errors = CloudKitRecordErrors()
+        errors.append(recordID: CKRecord.ID(recordName: "current"), error: CKError(.serverRecordChanged))
+        XCTAssertTrue(CloudKitRecapSyncClient.isServerRecordChangedError(try XCTUnwrap(errors.error)))
+    }
+
+    func testMixedFetchFailureIsNotAnEmptyCloudStore() {
+        let mixed = CKError(.partialFailure, userInfo: [CKPartialErrorsByItemIDKey: [
+            CKRecord.ID(recordName: "missing"): CKError(.unknownItem),
+            CKRecord.ID(recordName: "unavailable"): CKError(.networkFailure)
+        ]])
+        XCTAssertFalse(CloudKitRecapSyncClient.isMissingZoneError(mixed))
+        XCTAssertFalse(CloudKitRecapSyncClient.isMissingManifestError(mixed))
+        XCTAssertFalse(CloudKitRecapSyncClient.isMissingZoneError(CKError(.unknownItem)),
+                       "A missing record does not mean the entire zone is empty")
+        XCTAssertTrue(CloudKitRecapSyncClient.isMissingZoneError(CKError(.zoneNotFound)))
+        XCTAssertTrue(CloudKitRecapSyncClient.isMissingManifestError(CKError(.unknownItem)))
+    }
+
+    func testSyncRechecksCommitGateBeforePublishingPreparedPayloads() async {
+        let store = makeStore(named: "late-commit-gate")
+        let client = FakeRecapCloudSyncClient(remotePayloads: [payload(id: "remote-only")])
+        let gate = LateCloudCommitGate()
+        _ = await RecapCloudSyncService(client: client).sync(
+            snapshotStore: store,
+            shouldCommit: { gate.shouldCommit() }
+        )
+        XCTAssertTrue(client.savedPayloadCalls.isEmpty)
+        XCTAssertTrue(client.deletedPayloadIDs.isEmpty)
+    }
+
     func testSyncNeverUploadsOrDeletesWhenLocalLedgerIsUnreadable() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlayCountCloudCorruptLedger-\(UUID().uuidString)", isDirectory: true)
@@ -588,7 +639,7 @@ final class RecapCloudSyncServiceTests: XCTestCase {
             CloudKitRecapSyncClient.applyingManifestArchive(manifest, to: [payload]).first
         )
         XCTAssertEqual(resolved.reliabilityPolicyVersion, 2)
-        XCTAssertEqual(resolved.archiveReliabilityPolicyVersion, 3)
+        XCTAssertEqual(resolved.archiveReliabilityPolicyVersion, 5)
         XCTAssertNotNil(resolved.encodedRecaps)
         XCTAssertNotNil(resolved.encodedYearlyRecaps)
     }
@@ -818,6 +869,32 @@ final class RecapCloudSyncServiceTests: XCTestCase {
         XCTAssertEqual(roundTripped.encodedUnattributedIntervals, intervalData)
     }
 
+    func testArchivePolicyUsesExistingCloudFieldsAndPreservesOptionalEvidence() throws {
+        for intervals in [nil, Data("[]".utf8)] as [Data?] {
+            let original = RecapSnapshotSyncPayload(
+                id: "production-schema", capturedAt: date(year: 2026, month: 9, day: 27),
+                counterSignature: "schema", reliabilityPolicyVersion: 5,
+                archiveReliabilityPolicyVersion: 5, encodedSnapshot: Data("snapshot".utf8),
+                encodedRecaps: Data("monthly".utf8), encodedYearlyRecaps: nil,
+                encodedUnattributedIntervals: intervals
+            )
+            let record = CloudKitRecapSyncClient.record(from: original, recordID: CKRecord.ID(recordName: original.id))
+            XCTAssertFalse(record.allKeys().contains("archiveReliabilityPolicyVersion"))
+            XCTAssertFalse(record.allKeys().contains("reliabilityPolicyVersion"))
+            XCTAssertEqual(CloudKitRecapSyncClient.payload(from: record), original)
+            let manifest = CKRecord(recordType: "RecapManifest", recordID: CKRecord.ID(recordName: "manifest"))
+            CloudKitRecapSyncClient.apply(.init(
+                capturedAt: original.capturedAt, reliabilityPolicyVersion: 5,
+                encodedRecaps: original.encodedRecaps, encodedYearlyRecaps: nil,
+                encodedUnattributedIntervals: intervals
+            ), to: manifest)
+            XCTAssertFalse(manifest.allKeys().contains("archiveReliabilityPolicyVersion"))
+            let data = try XCTUnwrap(manifest["yearlyRecapSummaries"] as? Data)
+            let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(envelope["archiveReliabilityPolicyVersion"] as? Int, 5)
+        }
+    }
+
     private func makeStore(named name: String) -> MonthlyRecapSnapshotStore {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("PlayCountCloudTests-\(UUID().uuidString)-\(name)", isDirectory: true)
@@ -873,6 +950,7 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
     private let available: Bool
     private let remotePayloads: [RecapSnapshotSyncPayload]
     private let fetchError: Error?
+    private let saveError: Error?
     private(set) var savedPayloads: [RecapSnapshotSyncPayload] = []
     private(set) var savedPayloadCalls: [[RecapSnapshotSyncPayload]] = []
     private(set) var deletedPayloadIDs: [String] = []
@@ -880,11 +958,13 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
     init(
         isAvailable: Bool = true,
         remotePayloads: [RecapSnapshotSyncPayload],
-        fetchError: Error? = nil
+        fetchError: Error? = nil,
+        saveError: Error? = nil
     ) {
         available = isAvailable
         self.remotePayloads = remotePayloads
         self.fetchError = fetchError
+        self.saveError = saveError
     }
 
     func isAvailable() async -> Bool {
@@ -904,6 +984,7 @@ private final class FakeRecapCloudSyncClient: RecapCloudSyncClient {
         shouldContinue: @escaping @Sendable () async -> Bool
     ) async throws {
         guard await shouldContinue() else { throw CancellationError() }
+        if let saveError { throw saveError }
         savedPayloads = payloads
         savedPayloadCalls.append(payloads)
         deletedPayloadIDs = deletingPayloadIDs
@@ -952,5 +1033,18 @@ private final class CloudPersistenceGate: @unchecked Sendable {
             storage = newValue
             lock.unlock()
         }
+    }
+}
+
+private final class LateCloudCommitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checks = 0
+
+    func shouldCommit() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        checks += 1
+        // Permit merge and the initial upload check, then revoke the commit.
+        return checks <= 2
     }
 }

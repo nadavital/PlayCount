@@ -5,6 +5,57 @@ import MediaPlayer
 
 final class MediaLibraryManagerIndexTests: XCTestCase {
     @MainActor
+    func testSearchReceivesChangedAddedAndRemovedItemsWhileDetailStaysOpen() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        let initial = song(id: 1, title: "Before", artist: "Artist", playCount: 1)
+        let removed = song(id: 2, title: "Removed", artist: "Artist", playCount: 2)
+        manager.debugLoadLibraryFixture(songs: [initial, removed], albums: [], artists: [])
+        let owner = UUID()
+        manager.setDetailPresentationActive(true, owner: owner)
+        let revision = manager.detailPresentationUpdates.revision
+        let changed = song(id: 1, title: "Updated", artist: "Artist", playCount: 9)
+        let added = song(id: 3, title: "Added", artist: "Artist", playCount: 4)
+        let refreshedAlbum = album(id: 20, title: "Album", artist: "Artist", playCount: 13, artistPersistentID: 30)
+        let refreshedArtist = artist(id: 30, name: "Artist", playCount: 13)
+
+        manager.debugLoadLibraryFixture(songs: [changed, added], albums: [refreshedAlbum], artists: [refreshedArtist])
+
+        let search = manager.searchPresentation
+        XCTAssertEqual(search.songs.map(\.id), [1, 3])
+        XCTAssertEqual(search.songs.first?.title, "Updated")
+        XCTAssertEqual(search.songs.first?.playCount, 9)
+        XCTAssertEqual(search.albums.map(\.id), [20])
+        XCTAssertEqual(search.artists.map(\.id), [30])
+        XCTAssertEqual(search.topAlbums.first?.playCount, 13)
+        XCTAssertEqual(search.topArtists.first?.playCount, 13)
+        XCTAssertEqual(manager.detailPresentationUpdates.revision, revision + 1)
+        // Search reads fresh data without disrupting other detail presentations.
+        XCTAssertEqual(manager.librarySongs.map(\.id), [1, 2])
+        XCTAssertEqual(manager.librarySongs.first?.playCount, 1)
+
+        manager.debugLoadLibraryFixture(songs: [], albums: [], artists: [])
+        XCTAssertTrue(manager.searchPresentation.songs.isEmpty)
+        XCTAssertTrue(manager.searchPresentation.albums.isEmpty)
+        XCTAssertTrue(manager.searchPresentation.artists.isEmpty)
+        XCTAssertTrue(manager.searchPresentation.recentlyPlayedSongs.isEmpty)
+        XCTAssertTrue(manager.searchPresentation.topAlbums.isEmpty)
+        XCTAssertTrue(manager.searchPresentation.topArtists.isEmpty)
+    }
+
+    @MainActor
+    func testSearchSuggestionsUseNewMetricWhileDetailStaysOpen() {
+        let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
+        manager.setDetailPresentationActive(true, owner: UUID())
+        let playLeader = album(id: 10, title: "Play leader", artist: "A", playCount: 10, totalPlayDuration: 100, artistPersistentID: 1)
+        let timeLeader = album(id: 20, title: "Time leader", artist: "B", playCount: 2, totalPlayDuration: 900, artistPersistentID: 2)
+        manager.debugLoadLibraryFixture(songs: [], albums: [playLeader, timeLeader], artists: [])
+        XCTAssertEqual(manager.searchPresentation.topAlbums.map(\.id), [10, 20])
+        manager.sortMetric = .listenTime
+        XCTAssertEqual(manager.searchPresentation.topAlbums.map(\.id), [20, 10])
+        XCTAssertTrue(manager.topAlbums.isEmpty)
+    }
+
+    @MainActor
     func testDetailUpdatesPublishForImmediateLibraryAndMetricChanges() {
         let manager = MediaLibraryManager(recapCloudSyncService: nil, startsAutomatically: false)
         let initialRevision = manager.detailPresentationUpdates.revision
@@ -797,7 +848,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             albumPersistentID: 84,
             artistPersistentID: 126,
             discNumber: 2,
-            trackNumber: 7
+            trackNumber: 7,
+            playbackStoreID: "123456789"
         )
 
         cache.save(songs: [source], capturedAt: capturedAt)
@@ -810,9 +862,19 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         XCTAssertEqual(loaded.songs.first?.totalPlayDuration, 4_320)
         XCTAssertEqual(loaded.songs.first?.discNumber, 2)
         XCTAssertEqual(loaded.songs.first?.trackNumber, 7)
+        XCTAssertEqual(loaded.songs.first?.playbackStoreID, "123456789")
         XCTAssertNil(loaded.songs.first?.artwork)
         XCTAssertNotNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(59)))
         XCTAssertNil(cache.load(maximumAge: 60, now: capturedAt.addingTimeInterval(61)))
+
+        // Existing cache files predate recording IDs and must remain readable.
+        let file = directory.appendingPathComponent("library-presentation.json")
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacySongs = try XCTUnwrap(legacy["songs"] as? [[String: Any]])
+        legacySongs[0].removeValue(forKey: "playbackStoreID")
+        legacy["songs"] = legacySongs
+        try JSONSerialization.data(withJSONObject: legacy).write(to: file, options: .atomic)
+        XCTAssertEqual(cache.load()?.songs.first?.playbackStoreID, "")
 
         let replacement = song(id: 43, title: "Rejected Song", artist: "Nova Lane", playCount: 20)
         cache.save(songs: [replacement], shouldCommit: { false })
@@ -1074,7 +1136,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
         albumPersistentID: UInt64 = 1,
         artistPersistentID: UInt64 = 0,
         discNumber: Int = 0,
-        trackNumber: Int = 1
+        trackNumber: Int = 1,
+        playbackStoreID: String = ""
     ) -> TopSong {
         TopSong(
             id: id,
@@ -1092,7 +1155,8 @@ final class MediaLibraryManagerIndexTests: XCTestCase {
             albumPersistentID: albumPersistentID,
             artistPersistentID: artistPersistentID,
             discNumber: discNumber,
-            trackNumber: trackNumber
+            trackNumber: trackNumber,
+            playbackStoreID: playbackStoreID
         )
     }
 

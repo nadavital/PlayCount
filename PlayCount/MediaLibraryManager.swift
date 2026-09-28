@@ -5,6 +5,27 @@ import AppIntents
 import UIKit
 
 struct TopSong: Identifiable {
+    /// Repeated query rows describe the same counters, not additional plays.
+    /// Keep distinct persistent IDs even when their display metadata matches.
+    static func deduplicatedByPersistentID(_ songs: [TopSong]) -> [TopSong] {
+        var indices: [UInt64: Int] = [:]
+        var unique: [TopSong] = []
+        unique.reserveCapacity(songs.count)
+        for song in songs {
+            if let index = indices[song.id] {
+                let existing = unique[index]
+                if song.playCount > existing.playCount ||
+                    (song.playCount == existing.playCount && song.skipCount > existing.skipCount) {
+                    unique[index] = song
+                }
+            } else {
+                indices[song.id] = unique.count
+                unique.append(song)
+            }
+        }
+        return unique
+    }
+
     let id: UInt64
     let title: String
     let artist: String
@@ -207,6 +228,35 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
         let topArtists: [TopArtist]
         let indexes: LibraryIndexes
         let sortMetric: SortMetric
+    }
+
+    /// A coherent read of the latest library, including a refresh held for a
+    /// temporary detail presentation. Search can remain visible beside detail.
+    struct SearchPresentation {
+        let songs: [TopSong]
+        let albums: [TopAlbum]
+        let artists: [TopArtist]
+        let recentlyPlayedSongs: [TopSong]
+        let topAlbums: [TopAlbum]
+        let topArtists: [TopArtist]
+    }
+
+    var searchPresentation: SearchPresentation {
+        if let prepared = deferredLibraryPresentation?.preparedSnapshot {
+            return SearchPresentation(
+                songs: prepared.snapshot.songs,
+                albums: prepared.snapshot.albums,
+                artists: prepared.snapshot.artists,
+                recentlyPlayedSongs: prepared.recentlyPlayedSongs,
+                topAlbums: prepared.topAlbums,
+                topArtists: prepared.topArtists
+            )
+        }
+        return SearchPresentation(
+            songs: librarySongs, albums: libraryAlbums, artists: libraryArtists,
+            recentlyPlayedSongs: recentlyPlayedSongs,
+            topAlbums: topAlbums, topArtists: topArtists
+        )
     }
 
     private struct DeferredLibraryPresentation {
@@ -561,6 +611,14 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     func refreshForRecapSequence(reason: RecapSnapshotReason) {
+        #if DEBUG
+        if Self.isScreenshotModeEnabled {
+            // Keep synthetic UI fixtures independent of the simulator's Music
+            // permission and avoid clearing them during the root scene's task.
+            loadScreenshotFixture()
+            return
+        }
+        #endif
         guard revalidateAuthorizationStatus() else { return }
 
         switch reason {
@@ -1840,39 +1898,8 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     private func resortDeferredGroupedIndexes() {
         guard let deferredLibraryPresentation else { return }
         let prepared = deferredLibraryPresentation.preparedSnapshot
-        let indexes = prepared.indexes
-        let resortedIndexes = LibraryIndexes(
-            songsByPersistentID: indexes.songsByPersistentID,
-            albumsByPersistentID: indexes.albumsByPersistentID,
-            artistsByPersistentID: indexes.artistsByPersistentID,
-            songsByTitleArtistKey: indexes.songsByTitleArtistKey,
-            albumsByTitleArtistKey: indexes.albumsByTitleArtistKey,
-            artistsByNameKey: indexes.artistsByNameKey,
-            songsByAlbumID: indexes.songsByAlbumID.mapValues(sortSongs),
-            songsByAlbumKey: indexes.songsByAlbumKey.mapValues(sortSongs),
-            songsByArtistID: indexes.songsByArtistID.mapValues(sortSongs),
-            songsByArtistKey: indexes.songsByArtistKey.mapValues(sortSongs),
-            albumsByArtistID: indexes.albumsByArtistID.mapValues(sortAlbums),
-            albumsByArtistKey: indexes.albumsByArtistKey.mapValues(sortAlbums),
-            songPlayCountRanks: indexes.songPlayCountRanks,
-            songListenTimeRanks: indexes.songListenTimeRanks,
-            albumPlayCountRanks: indexes.albumPlayCountRanks,
-            albumListenTimeRanks: indexes.albumListenTimeRanks,
-            artistPlayCountRanks: indexes.artistPlayCountRanks,
-            artistListenTimeRanks: indexes.artistListenTimeRanks
-        )
-        let resortedPreparedSnapshot = PreparedLibrarySnapshot(
-            snapshot: prepared.snapshot,
-            summary: prepared.summary,
-            recentlyPlayedSongs: prepared.recentlyPlayedSongs,
-            sortedSongs: prepared.sortedSongs,
-            sortedAlbums: prepared.sortedAlbums,
-            sortedArtists: prepared.sortedArtists,
-            topSongs: prepared.topSongs,
-            topAlbums: prepared.topAlbums,
-            topArtists: prepared.topArtists,
-            indexes: resortedIndexes,
-            sortMetric: prepared.sortMetric
+        let resortedPreparedSnapshot = Self.prepareLibrarySnapshot(
+            prepared.snapshot, sortMetric: sortMetric, fetchLimit: fetchLimit
         )
         self.deferredLibraryPresentation = DeferredLibraryPresentation(
             preparedSnapshot: resortedPreparedSnapshot,
@@ -2686,6 +2713,7 @@ final class MediaLibraryManager: ObservableObject, @unchecked Sendable {
     }
 
     private static func librarySnapshot(from songs: [TopSong]) -> MediaLibrarySnapshot {
+        let songs = TopSong.deduplicatedByPersistentID(songs)
         return MediaLibrarySnapshot(
             songs: songs,
             albums: albums(from: songs),
@@ -3055,6 +3083,13 @@ extension MediaLibraryManager {
         ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotLoadingState")
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    static var screenshotIntentSnapshot: PlayCountIntentLibrarySnapshot {
+        let songs = screenshotSongs
+        return PlayCountIntentLibrarySnapshot(songs: songs, albums: screenshotAlbums(from: songs), artists: screenshotArtists(from: songs))
+    }
+    #endif
+
     private func loadScreenshotFixture() {
         if Self.screenshotShowsLoadingState {
             topSongs = []
@@ -3087,16 +3122,28 @@ extension MediaLibraryManager {
         hasLoadedInitialSnapshot = true
         isLoading = false
         loadingStage = .idle
+        let requestedNowPlayingIndex = Self.screenshotArgumentInteger("-PlayCountScreenshotNowPlayingIndex")
+        let nowPlayingSong = songs.indices.contains(requestedNowPlayingIndex) ? songs[requestedNowPlayingIndex] : songs[0]
         nowPlayingState = NowPlayingState(
-            title: songs[0].title,
-            subtitle: "\(songs[0].artist) — \(songs[0].albumTitle)",
-            artwork: songs[0].artwork,
-            duration: songs[0].playbackDuration,
+            title: nowPlayingSong.title,
+            subtitle: "\(nowPlayingSong.artist) — \(nowPlayingSong.albumTitle)",
+            artwork: nowPlayingSong.artwork,
+            duration: nowPlayingSong.playbackDuration,
             isPlaying: true,
-            playCount: songs[0].playCount,
-            song: songs[0]
+            playCount: nowPlayingSong.playCount,
+            song: nowPlayingSong
         )
-        nowPlayingProgress.update(currentTime: 68, duration: songs[0].playbackDuration)
+        nowPlayingProgress.update(currentTime: 68, duration: nowPlayingSong.playbackDuration)
+    }
+
+    private static func screenshotArgumentInteger(_ argument: String) -> Int {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: argument),
+              arguments.indices.contains(index + 1),
+              let value = Int(arguments[index + 1]) else {
+            return 0
+        }
+        return max(0, value)
     }
 
     private static var screenshotSongs: [TopSong] {
@@ -3107,11 +3154,11 @@ extension MediaLibraryManager {
             screenshotSong(id: 104, title: "North Star", artist: "Nova Lane", album: "Quiet Motion", plays: 132, delta: 14, duration: 221, initials: "NS", colors: [.systemIndigo, .systemMint], coverIndex: 4, artistID: 1_101),
             screenshotSong(id: 105, title: "Soft Focus", artist: "Vera June", album: "Dayglow Static", plays: 118, delta: 13, duration: 205, initials: "SF", colors: [.systemPurple, .systemBlue], coverIndex: 5),
             screenshotSong(id: 106, title: "City Lights", artist: "Juniper Park", album: "Late Checkout", plays: 104, delta: 12, duration: 187, initials: "CL", colors: [.systemRed, .systemBrown], coverIndex: 6),
-            screenshotSong(id: 107, title: "Clear Water", artist: "Eli North", album: "Blue Room", plays: 93, delta: 11, duration: 203, initials: "CW", colors: [.systemCyan, .systemBlue], coverIndex: 7),
+            screenshotSong(id: 107, title: "Clear Water", artist: "Mira Vale", album: "Blue Room", plays: 93, delta: 11, duration: 203, initials: "CW", colors: [.systemCyan, .systemBlue], coverIndex: 7, artistID: 1_102),
             screenshotSong(id: 108, title: "Paper Moon", artist: "Nova Lane", album: "Soft Geometry", plays: 88, delta: 10, duration: 192, initials: "PM", colors: [.systemOrange, .systemTeal], coverIndex: 8, artistID: 1_101),
             screenshotSong(id: 109, title: "Glass Rain", artist: "The Meridian", album: "Prism House", plays: 82, delta: 9, duration: 225, initials: "GR", colors: [.systemPink, .systemCyan], coverIndex: 9),
             screenshotSong(id: 110, title: "Low Tide", artist: "Cassia Row", album: "Silver Dunes", plays: 76, delta: 8, duration: 218, initials: "LT", colors: [.systemGray, .systemOrange], coverIndex: 10),
-            screenshotSong(id: 111, title: "Electric Blue", artist: "Ocean Avenue", album: "Deep Signal", plays: 69, delta: 7, duration: 207, initials: "EB", colors: [.systemBlue, .systemMint], coverIndex: 11),
+            screenshotSong(id: 111, title: "Electric Blue", artist: "Mira Vale", album: "Deep Signal", plays: 69, delta: 7, duration: 207, initials: "EB", colors: [.systemBlue, .systemMint], coverIndex: 11, artistID: 1_102),
             screenshotSong(id: 112, title: "Red Planet", artist: "Noah Sol", album: "Painted Weather", plays: 61, delta: 6, duration: 201, initials: "RP", colors: [.systemRed, .systemOrange], coverIndex: 12)
         ]
     }

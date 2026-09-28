@@ -197,6 +197,7 @@ struct RecapShareStudio: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTemplate: RecapShareTemplate
     @State private var selectedGainerCategory: RecapShareGainerCategory = .songs
+    @State private var templateControlsHeight: CGFloat = 0
 
     init(
         recap: MonthlyRecap,
@@ -237,35 +238,30 @@ struct RecapShareStudio: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    RecapShareTemplatePicker(
-                        templates: availableTemplates,
-                        selection: $selectedTemplate
-                    )
+            GeometryReader { viewport in
+                ScrollView {
+                    VStack(spacing: 18) {
+                        templateControls
+                            .onGeometryChange(for: CGFloat.self) { geometry in
+                                geometry.size.height.rounded(.up)
+                            } action: { templateControlsHeight = $0 }
 
-                    if selectedTemplate == .biggestGainers {
-                        Picker("Gainer category", selection: $selectedGainerCategory) {
-                            ForEach(availableGainerCategories) { category in
-                                Text(category.rawValue).tag(category)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        RecapShareCardPreview(
+                            recap: recap,
+                            periodTitle: periodTitle,
+                            palette: palette,
+                            template: selectedTemplate,
+                            gainerCategory: selectedGainerCategory,
+                            trendPoints: trendPoints
+                        )
+                        .frame(maxWidth: previewWidth(in: viewport.size))
+                        .frame(maxWidth: .infinity)
                     }
-
-                    RecapShareCardPreview(
-                        recap: recap,
-                        periodTitle: periodTitle,
-                        palette: palette,
-                        template: selectedTemplate,
-                        gainerCategory: selectedGainerCategory,
-                        trendPoints: trendPoints
-                    )
+                    .padding(18)
                 }
-                .padding(18)
+                .scrollIndicators(.hidden)
+                .playCountSoftTopScrollEdge()
             }
-            .scrollIndicators(.hidden)
-            .playCountSoftTopScrollEdge()
             .safeAreaInset(edge: .bottom) {
                 ShareLink(
                     item: payload,
@@ -291,6 +287,32 @@ struct RecapShareStudio: View {
             .onAppear { normalizeSelections() }
             .onChange(of: availableGainerCategories) { _, _ in normalizeSelections() }
         }
+    }
+
+    private var templateControls: some View {
+        VStack(spacing: 18) {
+            RecapShareTemplatePicker(
+                templates: availableTemplates,
+                selection: $selectedTemplate
+            )
+
+            if selectedTemplate == .biggestGainers {
+                Picker("Gainer category", selection: $selectedGainerCategory) {
+                    ForEach(availableGainerCategories) { category in
+                        Text(category.rawValue).tag(category)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+        }
+    }
+
+    private func previewWidth(in viewport: CGSize) -> CGFloat {
+        let availableWidth = max(1, viewport.width - 36)
+        let availableHeight = max(0, viewport.height - templateControlsHeight - 54)
+        let aspectRatio = RecapShareRenderer.canvasSize.width / RecapShareRenderer.canvasSize.height
+        // Keep the complete card visible when it fits, retaining scrolling in very short windows.
+        return min(availableWidth, max(144, availableHeight * aspectRatio))
     }
 
     private var payload: RecapSharePayload {

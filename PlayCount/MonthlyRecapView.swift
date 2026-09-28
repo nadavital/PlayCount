@@ -50,7 +50,9 @@ private enum YearlyRecapSection: String, CaseIterable, Identifiable {
 struct MonthlyRecapView: View {
     @ObservedObject var manager: MediaLibraryManager
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectedMonthStart: Date?
+    @State private var rankingDivisionColumns: VerticalDivisionColumns?
     @State private var isShowingYearAggregate = false
     @State private var selectedRecapDestination: RecapNavigationDestination?
     @State private var cachedArtworkHighlights: [MPMediaItemArtwork] = []
@@ -169,6 +171,7 @@ struct MonthlyRecapView: View {
 
     private enum ScrollAnchor {
         static let recapTop = "recap-top"
+        static let milestones = "milestones"
         static let weeklyActivity = "weekly-activity"
     }
 
@@ -484,7 +487,7 @@ struct MonthlyRecapView: View {
                     )
                     .padding(.horizontal, 18)
                     .padding(.top, 18)
-                    .padding(.bottom, isRegularWidth ? 132 : 154)
+                    .padding(.bottom, 32)
                     .frame(maxWidth: 1120, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
                 } else {
@@ -514,24 +517,6 @@ struct MonthlyRecapView: View {
                             )
                         }
 
-                        if isShowingYearAggregate, recap.unattributedPlayDelta > 0 {
-                            RecapTrackingCoverageNotice(
-                                playCount: recap.unattributedPlayDelta,
-                                listeningDuration: recap.unattributedListeningDuration
-                            )
-                        }
-
-                        if shouldShowMilestonesInSelectedSection, !displayedRecapMilestones.isEmpty {
-                            RecapMilestonesSection(
-                                displayedMilestones: displayedRecapMilestones,
-                                allMilestones: recapMilestones,
-                                mediaContexts: milestoneMediaContexts,
-                                periodLabel: milestonePeriodLabel,
-                                showsFullCollection: isShowingYearAggregate,
-                                showsUpcomingMilestones: isShowingYearAggregate || isCurrentCalendarMonth
-                            )
-                        }
-
                         if recap.hasActivity {
                             recapSections
                         } else {
@@ -546,13 +531,27 @@ struct MonthlyRecapView: View {
                             .id(ScrollAnchor.weeklyActivity)
                         }
 
+                        if shouldShowMilestonesInSelectedSection, !displayedRecapMilestones.isEmpty {
+                            RecapMilestonesSection(
+                                displayedMilestones: displayedRecapMilestones,
+                                allMilestones: recapMilestones,
+                                mediaContexts: milestoneMediaContexts,
+                                periodLabel: milestonePeriodLabel,
+                                showsFullCollection: isShowingYearAggregate,
+                                showsUpcomingMilestones: isShowingYearAggregate || isCurrentCalendarMonth
+                            )
+                            .id(ScrollAnchor.milestones)
+                        }
+
                         #if DEBUG
-                        debugSection
+                        if !ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotMode") {
+                            debugSection
+                        }
                         #endif
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 14)
-                    .padding(.bottom, isRegularWidth ? 132 : 154)
+                    .padding(.bottom, 32)
                     .frame(maxWidth: 1120, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
@@ -564,19 +563,21 @@ struct MonthlyRecapView: View {
             }
             .task {
                 #if DEBUG
-                guard ProcessInfo.processInfo.arguments.contains("-PlayCountScreenshotWeeklyActivity") else { return }
+                let arguments = ProcessInfo.processInfo.arguments
+                let target: String?
+                if arguments.contains("-PlayCountScreenshotMilestones") {
+                    target = ScrollAnchor.milestones
+                } else if arguments.contains("-PlayCountScreenshotWeeklyActivity") {
+                    target = ScrollAnchor.weeklyActivity
+                } else {
+                    target = nil
+                }
+                guard let target else { return }
                 try? await Task.sleep(for: .milliseconds(450))
                 withAnimation(.none) {
-                    scrollProxy.scrollTo(ScrollAnchor.weeklyActivity, anchor: .center)
+                    scrollProxy.scrollTo(target, anchor: .center)
                 }
                 #endif
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if isRegularWidth {
-                Color.clear
-                    .frame(height: 84)
-                    .allowsHitTesting(false)
             }
         }
         .refreshable {
@@ -635,6 +636,16 @@ struct MonthlyRecapView: View {
     private func applyScreenshotPresentationIfNeeded() {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-PlayCountScreenshotMonthOffset"),
+           arguments.indices.contains(index + 1),
+           let offset = Int(arguments[index + 1]),
+           let month = Calendar.current.date(
+               byAdding: .month,
+               value: -max(0, offset),
+               to: manager.monthlyRecap.monthStart
+           ) {
+            selectMonth(month)
+        }
         if arguments.contains("-PlayCountScreenshotYearlyRecap") {
             selectYearAggregate()
         }
@@ -689,25 +700,33 @@ struct MonthlyRecapView: View {
             if isShowingYearAggregate {
                 switch selectedYearlySection {
                 case .overview:
-                    LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
+                    LazyVGrid(columns: rankingColumns, alignment: .leading, spacing: 18) {
                         yearlyRankingSections
                     }
+                    .frame(maxWidth: .infinity)
+                    .modifier(VerticalDivisionObserver(columns: $rankingDivisionColumns))
                 case .trends:
-                    if !yearlyTrendPoints.isEmpty {
-                        RecapYearTrendSection(points: yearlyTrendPoints)
+                    LazyVGrid(columns: rankingColumns, alignment: .leading, spacing: 18) {
+                        if !yearlyTrendPoints.isEmpty {
+                            RecapYearTrendSection(points: yearlyTrendPoints)
+                        }
+                        if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
+                            biggestGainersSection
+                        }
                     }
-                    if !recap.biggestGainers.isEmpty || !recap.biggestAlbumGainers.isEmpty || !recap.biggestArtistGainers.isEmpty {
-                        biggestGainersSection
-                    }
+                    .frame(maxWidth: .infinity)
+                    .modifier(VerticalDivisionObserver(columns: $rankingDivisionColumns))
                 case .byMonth:
                     if hasYearlyMonthlyHighlights {
                         yearlyMonthlyBreakdownSection
                     }
                 }
             } else {
-                LazyVGrid(columns: Self.rankingColumns, alignment: .leading, spacing: 18) {
+                LazyVGrid(columns: rankingColumns, alignment: .leading, spacing: 18) {
                     monthlyRankingSections
                 }
+                .frame(maxWidth: .infinity)
+                .modifier(VerticalDivisionObserver(columns: $rankingDivisionColumns))
             }
         }
     }
@@ -744,9 +763,14 @@ struct MonthlyRecapView: View {
         }
     }
 
-    private static let rankingColumns: [GridItem] = [
-        GridItem(.adaptive(minimum: 320, maximum: 540), spacing: 18, alignment: .top)
-    ]
+    private var rankingColumns: [GridItem] {
+        if dynamicTypeSize.isAccessibilitySize {
+            return [GridItem(.flexible(minimum: 0), alignment: .top)]
+        }
+        return rankingDivisionColumns?.gridItems ?? [
+            GridItem(.adaptive(minimum: 320), spacing: 18, alignment: .top)
+        ]
+    }
 
     private var baselineSection: some View {
         RecapSurface {
@@ -779,6 +803,7 @@ struct MonthlyRecapView: View {
                     } label: {
                         RecapSongRow(song: song, artwork: resolvedArtwork(for: song))
                             .contentShape(.rect)
+                            .playCountSongEntityIdentifier(topSong)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -808,6 +833,7 @@ struct MonthlyRecapView: View {
                     } label: {
                         RecapSongRow(song: song, artwork: resolvedArtwork(for: song))
                             .contentShape(.rect)
+                            .playCountSongEntityIdentifier(topSong)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -832,6 +858,7 @@ struct MonthlyRecapView: View {
                     } label: {
                         RecapGroupRow(group: album, systemImage: "rectangle.stack.fill", artwork: resolvedArtwork(for: album, systemImage: "rectangle.stack.fill"))
                             .contentShape(.rect)
+                            .playCountAlbumEntityIdentifier(topAlbum)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -856,6 +883,7 @@ struct MonthlyRecapView: View {
                     } label: {
                         RecapGroupRow(group: artist, systemImage: "person.fill", artwork: resolvedArtwork(for: artist, systemImage: "person.fill"))
                             .contentShape(.rect)
+                            .playCountArtistEntityIdentifier(topArtist)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -889,7 +917,7 @@ struct MonthlyRecapView: View {
     }
 
     private var yearlyMonthlyBreakdownSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        LazyVGrid(columns: rankingColumns, alignment: .leading, spacing: 18) {
             if !yearlyMilestoneMoments.isEmpty {
                 RecapMonthlyMilestoneStrip(
                     moments: yearlyMilestoneMoments,
@@ -945,6 +973,8 @@ struct MonthlyRecapView: View {
                 destination: breakdownDestination(for:)
             )
         }
+        .frame(maxWidth: .infinity)
+        .modifier(VerticalDivisionObserver(columns: $rankingDivisionColumns))
     }
 
     private var yearlyMilestoneMoments: [RecapMonthlyMilestoneMoment] {
@@ -1606,6 +1636,8 @@ private struct RecapHeroPoster: View {
     let onSelectRecapYear: (Int) -> Void
     let onSelectMonth: (Date) -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var divisionColumns: VerticalDivisionColumns?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
@@ -1629,15 +1661,55 @@ private struct RecapHeroPoster: View {
             }
 
             if !isYearSelected || selectedYearlySection == .overview {
-                RecapArtworkCollage(artworks: artworks, layout: isRegularWidth ? .regular : .compact)
-                RecapSummaryBar(recap: recap)
-
-                if let leadingSong {
-                    RecapHeroSpotlight(song: leadingSong, artwork: leadingSongArtwork)
+                if isRegularWidth && !dynamicTypeSize.isAccessibilitySize {
+                    Group {
+                        if let divisionColumns {
+                            HStack(spacing: divisionColumns.spacing) {
+                                wideArtwork
+                                    .frame(width: min(340, divisionColumns.leading))
+                                    .scaleEffect(min(1, divisionColumns.leading / 340))
+                                    .frame(width: divisionColumns.leading)
+                                heroSummary
+                                    .frame(width: divisionColumns.trailing)
+                            }
+                        } else {
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 24) {
+                                    wideArtwork.frame(width: 340)
+                                    heroSummary.frame(minWidth: 300, maxWidth: .infinity)
+                                }
+                                VStack(spacing: 16) {
+                                    wideArtwork
+                                    heroSummary
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .modifier(VerticalDivisionObserver(columns: $divisionColumns))
+                } else {
+                    RecapArtworkCollage(artworks: artworks, layout: .compact)
+                    heroSummary
                 }
             }
         }
         .padding(.top, 4)
+    }
+
+    private var wideArtwork: some View {
+        RecapArtworkCollage(artworks: artworks, layout: .compact)
+            .scaleEffect(0.86)
+            .frame(height: 204)
+            .accessibilityHidden(true)
+    }
+
+    private var heroSummary: some View {
+        VStack(spacing: 14) {
+            RecapSummaryBar(recap: recap)
+            if let leadingSong {
+                RecapHeroSpotlight(song: leadingSong, artwork: leadingSongArtwork)
+            }
+        }
     }
 }
 
@@ -2140,15 +2212,21 @@ private struct RecapFullSongsView: View {
 
     var body: some View {
         List {
-            ForEach(songs.enumerated(), id: \.element.id) { index, song in
-                if let topSong = resolvedTopSong(for: song) {
-                    NavigationLink {
-                        SongInfoView(song: topSong, manager: manager, recapContext: recapContext)
-                    } label: {
-                        RecapSongRow(rank: index + 1, song: song, rankStyle: .prominentTopThree)
+            AdaptiveLibraryRows {
+                ForEach(songs.enumerated(), id: \.element.id) { index, song in
+                    Group {
+                        if let topSong = resolvedTopSong(for: song) {
+                            NavigationLink {
+                                SongInfoView(song: topSong, manager: manager, recapContext: recapContext)
+                            } label: {
+                                RecapSongRow(rank: index + 1, song: song, rankStyle: .prominentTopThree)
+                                    .playCountSongEntityIdentifier(topSong)
+                            }
+                        } else {
+                            RecapSongRow(rank: index + 1, song: song, rankStyle: .prominentTopThree)
+                        }
                     }
-                } else {
-                    RecapSongRow(rank: index + 1, song: song, rankStyle: .prominentTopThree)
+                    .modifier(AdaptiveLibraryRowSurface())
                 }
             }
         }
@@ -2166,6 +2244,7 @@ private struct RecapFullSongsView: View {
     }
 }
 
+
 private struct RecapFullGroupsView: View {
     let title: String
     let groups: [MonthlyRecap.RankedGroup]
@@ -2175,22 +2254,29 @@ private struct RecapFullGroupsView: View {
 
     var body: some View {
         List {
-            ForEach(groups.enumerated(), id: \.element.id) { index, group in
-                if systemImage == "person.fill",
-                   let artist = resolvedTopArtist(for: group) {
-                    NavigationLink {
-                        ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
-                    } label: {
-                        RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
+            AdaptiveLibraryRows {
+                ForEach(groups.enumerated(), id: \.element.id) { index, group in
+                    Group {
+                        if systemImage == "person.fill",
+                           let artist = resolvedTopArtist(for: group) {
+                            NavigationLink {
+                                ArtistInfoView(artist: artist, manager: manager, recapContext: recapContext)
+                            } label: {
+                                RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
+                                    .playCountArtistEntityIdentifier(artist)
+                            }
+                        } else if systemImage != "person.fill", let album = resolvedTopAlbum(for: group) {
+                            NavigationLink {
+                                AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
+                            } label: {
+                                RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
+                                    .playCountAlbumEntityIdentifier(album)
+                            }
+                        } else {
+                            RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
+                        }
                     }
-                } else if let album = resolvedTopAlbum(for: group) {
-                    NavigationLink {
-                        AlbumInfoView(album: album, manager: manager, recapContext: recapContext)
-                    } label: {
-                        RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
-                    }
-                } else {
-                    RecapGroupRow(rank: index + 1, group: group, systemImage: systemImage, rankStyle: .prominentTopThree)
+                    .modifier(AdaptiveLibraryRowSurface())
                 }
             }
         }
@@ -2220,6 +2306,7 @@ private struct RecapFullGroupsView: View {
         return manager.artist(matchingName: group.title)
     }
 }
+
 
 private struct RecapFullGainersView: View {
     let category: RecapGainerCategory
@@ -2251,6 +2338,7 @@ private struct RecapFullGainersView: View {
                             SongInfoView(song: item, manager: manager, recapContext: recapContext)
                         } label: {
                             RecapMovementRow(song: song)
+                                .playCountSongEntityIdentifier(item)
                         }
                     } else {
                         RecapMovementRow(song: song)
@@ -2263,6 +2351,7 @@ private struct RecapFullGainersView: View {
                             AlbumInfoView(album: item, manager: manager, recapContext: recapContext)
                         } label: {
                             RecapGroupMovementRow(group: group, systemImage: "rectangle.stack.fill")
+                                .playCountAlbumEntityIdentifier(item)
                         }
                     } else {
                         RecapGroupMovementRow(group: group, systemImage: "rectangle.stack.fill")
@@ -2275,6 +2364,7 @@ private struct RecapFullGainersView: View {
                             ArtistInfoView(artist: item, manager: manager, recapContext: recapContext)
                         } label: {
                             RecapGroupMovementRow(group: group, systemImage: "person.fill")
+                                .playCountArtistEntityIdentifier(item)
                         }
                     } else {
                         RecapGroupMovementRow(group: group, systemImage: "person.fill")
@@ -2391,6 +2481,7 @@ private struct RecapFullMovementView: View {
                         SongInfoView(song: topSong, manager: manager, recapContext: recapContext)
                     } label: {
                         RecapMovementRow(song: song)
+                            .playCountSongEntityIdentifier(topSong)
                     }
                 } else {
                     RecapMovementRow(song: song)
@@ -2688,34 +2779,17 @@ private struct RecapSongRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let rank {
-                RankBadgeView(rank: rank, style: rankStyle)
-            }
-            ArtworkView(
-                artwork: artwork ?? song.artwork,
-                size: CGSize(width: 58, height: 58),
-                cornerRadius: 10
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(song.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(song.artist)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(song.listeningDuration.formattedListeningMinutes)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer(minLength: 12)
-
-            MetricBadge(text: "+\(song.playDelta)")
+        MediaListRow(
+            rank: rank,
+            title: song.title,
+            subtitle: song.artist,
+            detail: song.listeningDuration.formattedListeningMinutes,
+            badgeText: "+\(song.playDelta)",
+            titleLineLimit: 2,
+            rankStyle: rankStyle
+        ) {
+            ArtworkView(artwork: artwork ?? song.artwork, size: CGSize(width: 58, height: 58), cornerRadius: 10)
         }
-        .padding(.vertical, 9)
     }
 }
 
@@ -2735,39 +2809,21 @@ private struct RecapGroupRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            if let rank {
-                RankBadgeView(rank: rank, style: rankStyle)
-            }
-
+        MediaListRow(
+            rank: rank,
+            title: group.title,
+            subtitle: group.subtitle,
+            detail: group.listeningDuration.formattedListeningMinutes,
+            badgeText: "+\(group.playDelta)",
+            titleLineLimit: 2,
+            rankStyle: rankStyle
+        ) {
             if systemImage == "person.fill" {
                 ArtistArtworkView(artwork: artwork ?? group.artwork, name: group.title, diameter: 58)
             } else {
-                ArtworkView(
-                    artwork: artwork ?? group.artwork,
-                    size: CGSize(width: 58, height: 58),
-                    cornerRadius: 10
-                )
+                ArtworkView(artwork: artwork ?? group.artwork, size: CGSize(width: 58, height: 58), cornerRadius: 10)
             }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(group.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(group.subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(group.listeningDuration.formattedListeningMinutes)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Spacer(minLength: 12)
-
-            MetricBadge(text: "+\(group.playDelta)")
         }
-        .padding(.vertical, 9)
     }
 }
 
@@ -2965,6 +3021,18 @@ private struct RecapMilestonesSection: View {
     let showsFullCollection: Bool
     let showsUpcomingMilestones: Bool
     @State private var isShowingAllMilestones = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var usesCompactShelf: Bool {
+        horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var shelfLayout: AnyLayout {
+        usesCompactShelf
+            ? AnyLayout(HStackLayout(alignment: .center, spacing: 18))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+    }
 
     private var visibleMilestones: [RecapMilestone] {
         showsFullCollection
@@ -2979,7 +3047,7 @@ private struct RecapMilestonesSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        shelfLayout {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Your Milestones")
@@ -3007,13 +3075,15 @@ private struct RecapMilestonesSection: View {
                 }
             }
 
+            .frame(width: usesCompactShelf ? 170 : nil)
+
             MilestoneShelf {
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 14) {
                         ForEach(featuredMilestones) { milestone in
                             MilestoneBadgeTile(
                                 milestone: milestone,
-                                badgeSize: 88,
+                                badgeSize: usesCompactShelf ? 48 : 88,
                                 mediaContext: mediaContexts[milestone.kind],
                                 series: MilestoneCollectionPresentation.pathMilestones(
                                     kind: milestone.kind,
@@ -3022,7 +3092,7 @@ private struct RecapMilestonesSection: View {
                                     includesUpcoming: showsUpcomingMilestones
                                 )
                             )
-                            .frame(width: 138)
+                            .frame(width: usesCompactShelf ? 118 : 138)
                         }
                     }
                     .padding(.horizontal, 4)
@@ -3030,7 +3100,9 @@ private struct RecapMilestonesSection: View {
                 .scrollIndicators(.hidden)
                 .padding(.vertical, 4)
             }
+            .frame(maxWidth: usesCompactShelf ? CGFloat(featuredMilestones.count) * 132 + 28 : .infinity)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: $isShowingAllMilestones) {
             RecapMilestonesGallery(milestones: allMilestones, mediaContexts: mediaContexts)
         }
@@ -3880,29 +3952,6 @@ private struct RecapReliabilityNotice: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .background(.thinMaterial, in: .rect(cornerRadius: 16))
-    }
-}
-
-private struct RecapTrackingCoverageNotice: View {
-    let playCount: Int
-    let listeningDuration: TimeInterval
-
-    var body: some View {
-        RecapSurface {
-            Label {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Includes activity from an untracked interval")
-                        .font(.callout.weight(.semibold))
-                    Text("\(playCount.formatted()) plays · \(listeningDuration.formattedListeningMinutes) couldn't be assigned to a specific month.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } icon: {
-                Image(systemName: "calendar.badge.exclamationmark")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
     }
 }
 
